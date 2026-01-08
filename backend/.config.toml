@@ -1,0 +1,16 @@
+# Backend config for stardust-protocol
+BUN_PORT = 3005
+
+# Solana RPC endpoint
+SOLANA_RPC = "https://api.devnet.solana.com"
+
+# Main token mint address (token holders earn stardust based on their holdings)
+# This should be the SPL token whose holders earn stardust
+MAIN_TOKEN_MINT = "So11111111111111111111111111111111111111112"
+
+# CoinGecko or similar price API
+PRICE_API = "https://api.coingecko.com/api/v3"
+
+# Backend authority keypair (base58 secret key)
+# IMPORTANT: Replace with actual keypair for production
+AUTHORITY_SECRET_KEY = ""

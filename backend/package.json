@@ -1,0 +1,16 @@
+{
+    "name": "stardust-backend",
+    "version": "0.1.0",
+    "private": true,
+    "scripts": {
+        "dev": "bun run server.ts",
+        "start": "bun run server.ts"
+    },
+    "dependencies": {
+        "@ments/web": "*",
+        "@ments/utils": "*",
+        "@solana/web3.js": "^1.87.6",
+        "tweetnacl": "^1.0.3",
+        "bs58": "^5.0.0"
+    }
+}
