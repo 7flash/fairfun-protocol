@@ -13,7 +13,7 @@ use errors::StardustError;
 use introspection::verify_ed25519_ix_integrity;
 use state::{ProtocolState, UserClaim};
 
-declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
+declare_id!("GYQP75VdPpCU1xPsJS7CUkcBqzL718j7ihNmgJ3VESd7");
 
 /// Stardust Protocol: Secure claim of stardust tokens via backend-signed lifetime earnings
 #[program]

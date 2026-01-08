@@ -6,10 +6,10 @@ seeds = false
 skip-lint = false
 
 [programs.localnet]
-stardust = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+stardust = "GYQP75VdPpCU1xPsJS7CUkcBqzL718j7ihNmgJ3VESd7"
 
 [programs.devnet]
-stardust = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+stardust = "GYQP75VdPpCU1xPsJS7CUkcBqzL718j7ihNmgJ3VESd7"
 
 [registry]
 url = "https://api.apr.dev"
