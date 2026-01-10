@@ -8,8 +8,8 @@ let scriptPath: string;
 let stylePath: string;
 
 async function init() {
-    scriptPath = await buildScript("./App.client.tsx", true);
-    stylePath = await buildStyle("./App.css");
+  scriptPath = await buildScript("./App.client.tsx", true);
+  stylePath = await buildStyle("./App.css");
 }
 
 // HTML template with links to cached assets
@@ -25,6 +25,7 @@ const html = () => `<!DOCTYPE html>
       "react": "https://esm.sh/react@18.2.0",
       "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
       "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+      "react/jsx-dev-runtime": "https://esm.sh/react@18.2.0/jsx-dev-runtime",
       "@solana/web3.js": "https://esm.sh/@solana/web3.js@1.87.6",
       "bs58": "https://esm.sh/bs58@5.0.0",
       "tweetnacl": "https://esm.sh/tweetnacl@1.0.3"
@@ -40,30 +41,30 @@ const html = () => `<!DOCTYPE html>
 </html>`;
 
 async function handler(req: Request): Promise<Response | null> {
-    const url = new URL(req.url);
+  const url = new URL(req.url);
 
-    // Serve the app
-    if (url.pathname === "/" || url.pathname === "/index.html") {
-        return new Response(html(), {
-            headers: { "Content-Type": "text/html" },
-        });
-    }
+  // Serve the app
+  if (url.pathname === "/" || url.pathname === "/index.html") {
+    return new Response(html(), {
+      headers: { "Content-Type": "text/html" },
+    });
+  }
 
-    // Proxy API calls to backend
-    if (url.pathname.startsWith("/api/")) {
-        const backendUrl = BACKEND_URL + url.pathname + url.search;
-        const resp = await fetch(backendUrl, {
-            method: req.method,
-            headers: req.headers,
-            body: req.method !== "GET" ? await req.text() : undefined,
-        });
-        return new Response(resp.body, {
-            status: resp.status,
-            headers: resp.headers,
-        });
-    }
+  // Proxy API calls to backend
+  if (url.pathname.startsWith("/api/")) {
+    const backendUrl = BACKEND_URL + url.pathname + url.search;
+    const resp = await fetch(backendUrl, {
+      method: req.method,
+      headers: req.headers,
+      body: req.method !== "GET" ? await req.text() : undefined,
+    });
+    return new Response(resp.body, {
+      status: resp.status,
+      headers: resp.headers,
+    });
+  }
 
-    return null;
+  return null;
 }
 
 // Initialize and serve
