@@ -2,7 +2,7 @@
 BUN_PORT = 3005
 
 # Solana RPC endpoint
-SOLANA_RPC = "https://api.devnet.solana.com"
+SOLANA_RPC = "http://localhost:8899"
 
 # Main token mint address (token holders earn stardust based on their holdings)
 # This should be the SPL token whose holders earn stardust

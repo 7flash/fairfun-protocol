@@ -1,6 +1,6 @@
 Streaming transaction logs mentioning GYQP75VdPpCU1xPsJS7CUkcBqzL718j7ihNmgJ3VESd7. Confirmed commitment
-Transaction executed in slot 258:
-  Signature: 5e5fv6WFCmjapTq5eKwSniMNzaSc1rzW4YLPwrp9PkJJifdnPpDWWTSs4q5j9s5ezzyrUM2STrCRe73EoD6pNM9Q
+Transaction executed in slot 84:
+  Signature: 3EMEwJpE51jirXFyVuz6b9SzupGTBrtUKSWxfmd6QdDo5QtvJWWZVJH3keCV2gn9QiRqwBbzHnhFMWvKokkoqmka
   Status: Ok
   Log Messages:
     Program GYQP75VdPpCU1xPsJS7CUkcBqzL718j7ihNmgJ3VESd7 invoke [1]
@@ -14,12 +14,12 @@ Transaction executed in slot 258:
     Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA consumed 2780 of 169433 compute units
     Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA success
     Program log: Stardust Protocol Initialized
-    Program log: Authority: FJuHvBQ7fLk2EvRj8zBoecJQ2KJgDmGxh6R62hVJQwXe
+    Program log: Authority: 2MT37rZGKAGSA2mSbQWJ8k6Km66KVH7HA8NRPiVPZFVu
     Program log: Stardust Mint: 4sySws8b3GEsNZf9bGMfNYpW92LfbqHWme5sLpPPVJH9
-    Program GYQP75VdPpCU1xPsJS7CUkcBqzL718j7ihNmgJ3VESd7 consumed 61376 of 200000 compute units
+    Program GYQP75VdPpCU1xPsJS7CUkcBqzL718j7ihNmgJ3VESd7 consumed 61142 of 200000 compute units
     Program GYQP75VdPpCU1xPsJS7CUkcBqzL718j7ihNmgJ3VESd7 success
-Transaction executed in slot 259:
-  Signature: 3KNgUWYbcdXKdCbP6HtgJt4jh42eX5yFDdHmojr85wYF8BPUKGpN7TCySQ1Q3uLNAsQDjU7BwrhNGtWeDfXAW5YU
+Transaction executed in slot 85:
+  Signature: CP6P6BzKF2yQns1VJnRE62CF3WvE6JjSXv2P5SYceh21LzbrBcX3wwUxsZkLySipbPjF2zzZZ4fnFkNewF5Y9mS
   Status: Ok
   Log Messages:
     Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL invoke [1]
@@ -55,11 +55,11 @@ Transaction executed in slot 259:
     Program log: User: 2JCugwMvqjCa56Y7ysLQia15cuv9DwAkLgcu1WBRZd6M
     Program log: Claimed Amount: 1000000000000
     Program log: Total Lifetime Claimed: 1000000000000
-    Program data: 4wHCLU7uXvMTRAaMSyFNKBL6ftVH81xKFd1lzppZMLgKZCQ5uVrsRgAQpdToAAAAABCl1OgAAAAFXF9pAAAAAA==
+    Program data: 4wHCLU7uXvMTRAaMSyFNKBL6ftVH81xKFd1lzppZMLgKZCQ5uVrsRgAQpdToAAAAABCl1OgAAAD8QmJpAAAAAA==
     Program GYQP75VdPpCU1xPsJS7CUkcBqzL718j7ihNmgJ3VESd7 consumed 45988 of 579644 compute units
     Program GYQP75VdPpCU1xPsJS7CUkcBqzL718j7ihNmgJ3VESd7 success
-Transaction executed in slot 260:
-  Signature: 4mKyguieRVvvDzFoSJ4HZS3imgsCDqefgBvLKe8pYJiAnk4Vt6iHQR1CbVyLxn3CM7VCNmDFE2Bu5GY5Xh31WNQP
+Transaction executed in slot 86:
+  Signature: 1fuFNsWdBLe81rgMHYK3VsfFRFK1ofGKYSnbUZHeNDj13CrujRFt1ZX9gNEWiMLKzVLaabLkZ3E1ubsgkgwcpgY
   Status: Ok
   Log Messages:
     Program GYQP75VdPpCU1xPsJS7CUkcBqzL718j7ihNmgJ3VESd7 invoke [1]
@@ -72,6 +72,6 @@ Transaction executed in slot 260:
     Program log: User: 2JCugwMvqjCa56Y7ysLQia15cuv9DwAkLgcu1WBRZd6M
     Program log: Claimed Amount: 1500000000000
     Program log: Total Lifetime Claimed: 2500000000000
-    Program data: 4wHCLU7uXvMTRAaMSyFNKBL6ftVH81xKFd1lzppZMLgKZCQ5uVrsRgCY9z5dAQAAAKicE0YCAAAGXF9pAAAAAA==
+    Program data: 4wHCLU7uXvMTRAaMSyFNKBL6ftVH81xKFd1lzppZMLgKZCQ5uVrsRgCY9z5dAQAAAKicE0YCAAD8QmJpAAAAAA==
     Program GYQP75VdPpCU1xPsJS7CUkcBqzL718j7ihNmgJ3VESd7 consumed 42621 of 400000 compute units
     Program GYQP75VdPpCU1xPsJS7CUkcBqzL718j7ihNmgJ3VESd7 success

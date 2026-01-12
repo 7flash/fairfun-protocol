@@ -27,10 +27,18 @@ const html = () => `<!DOCTYPE html>
       "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
       "react/jsx-dev-runtime": "https://esm.sh/react@18.2.0/jsx-dev-runtime",
       "@solana/web3.js": "https://esm.sh/@solana/web3.js@1.87.6",
+      "@solana/spl-token": "https://esm.sh/@solana/spl-token@0.4.5",
+      "@coral-xyz/anchor": "https://esm.sh/@coral-xyz/anchor@0.29.0",
       "bs58": "https://esm.sh/bs58@5.0.0",
-      "tweetnacl": "https://esm.sh/tweetnacl@1.0.3"
+      "tweetnacl": "https://esm.sh/tweetnacl@1.0.3",
+      "buffer": "https://esm.sh/buffer@6.0.3"
     }
   }
+  </script>
+  <script type="module">
+    // Buffer polyfill for browser
+    import { Buffer } from 'buffer';
+    window.Buffer = Buffer;
   </script>
   <link rel="stylesheet" href="${stylePath}">
 </head>

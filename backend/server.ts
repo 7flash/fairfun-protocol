@@ -1,172 +1,347 @@
 import { serve } from "@ments/web";
 import { measure } from "@ments/utils";
-import { Keypair, PublicKey, Connection } from "@solana/web3.js";
+import {
+    Keypair,
+    PublicKey,
+    Connection,
+    Ed25519Program,
+} from "@solana/web3.js";
+import {
+    getAccount,
+    getAssociatedTokenAddress,
+} from "@solana/spl-token";
 import * as nacl from "tweetnacl";
 import bs58 from "bs58";
+import * as fs from "fs";
 
 // Types
+interface LocalConfig {
+    programId: string;
+    authority: {
+        publicKey: string;
+        secretKey: string;
+    };
+    stardustMint: string;
+    statePda: string;
+    starTokenMint: string;
+    testUsers: TestUser[];
+}
+
+interface TestUser {
+    id: number;
+    publicKey: string;
+    secretKey: string;
+    starTokenAccount: string;
+    stardustTokenAccount: string;
+    starBalance: number;
+}
+
 interface HolderEarnings {
     wallet: string;
     lifetimeEarned: bigint;
+    claimed: bigint;
+    starBalance: bigint; // Real STAR token balance
     lastUpdated: number;
 }
 
 // In-memory store for earnings
 const earningsStore = new Map<string, HolderEarnings>();
 
-// Authority keypair for signing
+// Loaded config
+let config: LocalConfig;
 let authority: Keypair;
-
-// Solana connection
 let connection: Connection;
 
-// Config
-const config = {
-    solanaRpc: process.env.SOLANA_RPC || "https://api.devnet.solana.com",
-    mainTokenMint: process.env.MAIN_TOKEN_MINT || "So11111111111111111111111111111111111111112",
-    authoritySecretKey: process.env.AUTHORITY_SECRET_KEY || "",
-};
-
 /**
- * Initialize the authority keypair
+ * Load local config from setup script
  */
-function initAuthority(): Keypair {
-    if (config.authoritySecretKey) {
-        const secretKey = bs58.decode(config.authoritySecretKey);
-        return Keypair.fromSecretKey(secretKey);
-    }
-    const kp = Keypair.generate();
-    console.log("Generated new authority keypair:", kp.publicKey.toBase58());
-    console.log("Secret key:", bs58.encode(kp.secretKey));
-    return kp;
-}
-
-/**
- * Fetch current USD price for the main token
- */
-async function fetchTokenPrice(): Promise<number> {
-    try {
-        const resp = await fetch(
-            "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd"
-        );
-        const data = await resp.json();
-        return data.solana?.usd || 0;
-    } catch (e) {
-        console.error("Failed to fetch price:", e);
-        return 0;
-    }
-}
-
-/**
- * Fetch token holders and their balances
- */
-async function fetchTokenHolders(): Promise<Map<string, number>> {
-    const holders = new Map<string, number>();
-
-    try {
-        const mintPubkey = new PublicKey(config.mainTokenMint);
-        const accounts = await connection.getTokenLargestAccounts(mintPubkey);
-
-        for (const acc of accounts.value) {
-            const accountInfo = await connection.getParsedAccountInfo(acc.address);
-            if (accountInfo.value?.data && "parsed" in accountInfo.value.data) {
-                const owner = accountInfo.value.data.parsed.info.owner;
-                const amount = Number(acc.uiAmount || 0);
-                holders.set(owner, (holders.get(owner) || 0) + amount);
-            }
+function loadConfig(): LocalConfig {
+    // Check both possible locations
+    const paths = ["./local-config.json", "../local-config.json"];
+    for (const configPath of paths) {
+        if (fs.existsSync(configPath)) {
+            console.log(`Loading config from ${configPath}`);
+            return JSON.parse(fs.readFileSync(configPath, "utf-8"));
         }
-    } catch (e) {
-        console.error("Failed to fetch holders:", e);
     }
-
-    return holders;
+    throw new Error(
+        "local-config.json not found. Run 'bun run scripts/setup-local.ts' first!"
+    );
 }
 
 /**
- * Calculate and update earnings for all holders (called every minute)
+ * Get real token balance from Solana
+ */
+async function getTokenBalance(
+    tokenAccountAddress: string
+): Promise<bigint> {
+    try {
+        const account = await getAccount(
+            connection,
+            new PublicKey(tokenAccountAddress)
+        );
+        return account.amount;
+    } catch (e) {
+        console.error(`Failed to get balance for ${tokenAccountAddress}:`, e);
+        return 0n;
+    }
+}
+
+/**
+ * Fetch real STAR token balance for a user
+ */
+async function fetchUserStarBalance(walletPubkey: string): Promise<bigint> {
+    const starMint = new PublicKey(config.starTokenMint);
+    const wallet = new PublicKey(walletPubkey);
+
+    try {
+        const ata = await getAssociatedTokenAddress(starMint, wallet);
+        return await getTokenBalance(ata.toBase58());
+    } catch (e) {
+        // User might not have a token account
+        return 0n;
+    }
+}
+
+/**
+ * Calculate stardust earnings based on STAR token holdings
+ * 1 STAR = 136 stardust per period (represents $136 price * 1 token)
+ */
+const STARDUST_RATE = 136n * BigInt(1e9); // Per STAR token per period
+
+/**
+ * Update earnings based on real STAR token balances
  */
 async function updateEarnings() {
     return measure(async (m) => {
-        const price = await m(() => fetchTokenPrice(), "fetch_price");
-        const holders = await m(() => fetchTokenHolders(), "fetch_holders");
-
         const now = Date.now();
 
-        for (const [wallet, balance] of holders) {
-            const usdValue = balance * price;
-            const stardustThisMinute = BigInt(Math.floor(usdValue * 1e9));
+        // Update test users from config
+        for (const user of config.testUsers) {
+            // Fetch real STAR balance from chain
+            const starBalance = await m(
+                () => getTokenBalance(user.starTokenAccount),
+                `fetch_balance_${user.id}`
+            );
 
-            const existing = earningsStore.get(wallet);
-            const newLifetime = (existing?.lifetimeEarned || 0n) + stardustThisMinute;
+            // Calculate earnings: (STAR balance / 1e9) * STARDUST_RATE
+            const starTokens = starBalance / BigInt(1e9);
+            const stardustThisPeriod = starTokens * STARDUST_RATE;
+
+            const existing = earningsStore.get(user.publicKey);
+            const newLifetime = (existing?.lifetimeEarned || 0n) + stardustThisPeriod;
+
+            earningsStore.set(user.publicKey, {
+                wallet: user.publicKey,
+                lifetimeEarned: newLifetime,
+                claimed: existing?.claimed || 0n,
+                starBalance: starBalance,
+                lastUpdated: now,
+            });
+
+            console.log(
+                `  User ${user.id}: ${Number(starBalance) / 1e9} STAR -> +${Number(stardustThisPeriod) / 1e9} ✨`
+            );
+        }
+
+        // Also update any registered wallets
+        for (const [wallet, earnings] of earningsStore.entries()) {
+            // Skip test users (already updated)
+            if (config.testUsers.find((u) => u.publicKey === wallet)) continue;
+
+            const starBalance = await fetchUserStarBalance(wallet);
+            const starTokens = starBalance / BigInt(1e9);
+            const stardustThisPeriod = starTokens * STARDUST_RATE;
 
             earningsStore.set(wallet, {
-                wallet,
-                lifetimeEarned: newLifetime,
+                ...earnings,
+                lifetimeEarned: earnings.lifetimeEarned + stardustThisPeriod,
+                starBalance,
                 lastUpdated: now,
             });
         }
 
-        console.log(`Updated earnings for ${holders.size} holders at price $${price}`);
+        console.log(
+            `Updated earnings for ${earningsStore.size} holders (real balances)`
+        );
     }, "update_earnings");
 }
 
 /**
- * Create Ed25519 instruction data for user claim
+ * Create Ed25519 signature data for claim verification
+ * 
+ * The message format is: [UserPubkey(32) | LifetimeEarned(8)]
+ * This matches what the on-chain program expects
  */
 function createSignatureData(
     userPubkey: PublicKey,
     lifetimeEarned: bigint
-): { signature: string; message: string; publicKey: string; lifetimeEarned: string } {
+): {
+    signature: string;
+    message: string;
+    publicKey: string;
+    lifetimeEarned: string;
+    ed25519Instruction: {
+        programId: string;
+        data: string; // base64
+    };
+} {
+    // Message = [UserPubkey(32) | LifetimeEarned(8)]
     const message = Buffer.alloc(40);
     message.set(userPubkey.toBuffer(), 0);
     message.writeBigUInt64LE(lifetimeEarned, 32);
 
+    // Sign the message
     const signature = nacl.sign.detached(message, authority.secretKey);
+
+    // Create Ed25519 instruction data (Stardust Standard Layout)
+    // Using Ed25519Program.createInstructionWithPublicKey format
+    const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
+        publicKey: authority.publicKey.toBytes(),
+        message: message,
+        signature: signature,
+    });
 
     return {
         signature: bs58.encode(signature),
         message: bs58.encode(message),
         publicKey: authority.publicKey.toBase58(),
         lifetimeEarned: lifetimeEarned.toString(),
+        ed25519Instruction: {
+            programId: ed25519Ix.programId.toBase58(),
+            data: Buffer.from(ed25519Ix.data).toString("base64"),
+        },
     };
 }
 
 // Initialize
-authority = initAuthority();
-connection = new Connection(config.solanaRpc, "confirmed");
+try {
+    config = loadConfig();
+    const secretKeyBytes = Buffer.from(config.authority.secretKey, "base64");
+    authority = Keypair.fromSecretKey(new Uint8Array(secretKeyBytes));
+    connection = new Connection(
+        process.env.SOLANA_RPC || "http://localhost:8899",
+        "confirmed"
+    );
 
-// Start earnings update interval (every minute)
-setInterval(updateEarnings, 60 * 1000);
+    console.log("✅ Loaded config from local-config.json");
+    console.log(`   Authority: ${authority.publicKey.toBase58()}`);
+    console.log(`   Star Token: ${config.starTokenMint}`);
+    console.log(`   Stardust Mint: ${config.stardustMint}`);
+    console.log(`   Test Users: ${config.testUsers.length}`);
+} catch (e: any) {
+    console.error("❌ Failed to load config:", e.message);
+    console.error("   Run: bun run scripts/setup-local.ts");
+    process.exit(1);
+}
+
+// Start earnings update (every 10 seconds)
+setInterval(updateEarnings, 10 * 1000);
 updateEarnings();
 
-// JSON response helper
+// JSON helper
 const json = (data: any, status = 200) =>
     new Response(JSON.stringify(data), {
         status,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+        },
     });
 
-// Request handler
+// Handler
 async function handler(req: Request): Promise<Response | null> {
     const url = new URL(req.url);
     const path = url.pathname;
     const method = req.method;
 
-    // GET /api/authority - get backend authority pubkey
-    if (method === "GET" && path === "/api/authority") {
-        return json({ authority: authority.publicKey.toBase58() });
+    // CORS
+    if (method === "OPTIONS") {
+        return new Response(null, {
+            headers: {
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            },
+        });
     }
 
-    // GET /api/health - health check
+    // GET /api/config - full config for frontend
+    if (method === "GET" && path === "/api/config") {
+        return json({
+            programId: config.programId,
+            authority: config.authority.publicKey,
+            stardustMint: config.stardustMint,
+            statePda: config.statePda,
+            starTokenMint: config.starTokenMint,
+        });
+    }
+
+    // GET /api/authority
+    if (method === "GET" && path === "/api/authority") {
+        return json({
+            authority: authority.publicKey.toBase58(),
+            programId: config.programId,
+        });
+    }
+
+    // GET /api/health
     if (method === "GET" && path === "/api/health") {
         return json({
             status: "ok",
             authority: authority.publicKey.toBase58(),
+            programId: config.programId,
+            starTokenMint: config.starTokenMint,
             holders: earningsStore.size,
         });
     }
 
-    // GET /api/earnings/:wallet - get earnings for wallet
+    // GET /api/leaderboard
+    if (method === "GET" && path === "/api/leaderboard") {
+        const limit = parseInt(url.searchParams.get("limit") || "10");
+        const entries = Array.from(earningsStore.values())
+            .sort((a, b) => Number(b.lifetimeEarned - a.lifetimeEarned))
+            .slice(0, limit)
+            .map((e, rank) => ({
+                rank: rank + 1,
+                wallet: e.wallet,
+                lifetimeEarned: e.lifetimeEarned.toString(),
+                claimed: e.claimed.toString(),
+                unclaimed: (e.lifetimeEarned - e.claimed).toString(),
+                starBalance: e.starBalance.toString(),
+                lastUpdated: e.lastUpdated,
+            }));
+
+        return json({
+            leaderboard: entries,
+            totalHolders: earningsStore.size,
+            timestamp: Date.now(),
+        });
+    }
+
+    // GET /api/stats
+    if (method === "GET" && path === "/api/stats") {
+        let totalEarned = 0n;
+        let totalClaimed = 0n;
+        let totalStarBalance = 0n;
+
+        for (const e of earningsStore.values()) {
+            totalEarned += e.lifetimeEarned;
+            totalClaimed += e.claimed;
+            totalStarBalance += e.starBalance;
+        }
+
+        return json({
+            totalHolders: earningsStore.size,
+            totalEarned: totalEarned.toString(),
+            totalClaimed: totalClaimed.toString(),
+            totalUnclaimed: (totalEarned - totalClaimed).toString(),
+            totalStarBalance: totalStarBalance.toString(),
+            timestamp: Date.now(),
+        });
+    }
+
+    // GET /api/earnings/:wallet
     if (method === "GET" && path.startsWith("/api/earnings/")) {
         const wallet = path.replace("/api/earnings/", "");
         const earnings = earningsStore.get(wallet);
@@ -174,11 +349,31 @@ async function handler(req: Request): Promise<Response | null> {
         return json({
             wallet,
             lifetimeEarned: earnings?.lifetimeEarned.toString() || "0",
+            claimed: earnings?.claimed.toString() || "0",
+            unclaimed: earnings
+                ? (earnings.lifetimeEarned - earnings.claimed).toString()
+                : "0",
+            starBalance: earnings?.starBalance.toString() || "0",
             lastUpdated: earnings?.lastUpdated || null,
         });
     }
 
-    // POST /api/signature - request claim signature
+    // GET /api/test-users - get test user data for frontend
+    if (method === "GET" && path === "/api/test-users") {
+        // Include full config for frontend
+        return json({
+            users: config.testUsers,
+            config: {
+                programId: config.programId,
+                statePda: config.statePda,
+                stardustMint: config.stardustMint,
+                starTokenMint: config.starTokenMint,
+                authority: config.authority.publicKey,
+            },
+        });
+    }
+
+    // POST /api/signature - get signature for claim
     if (method === "POST" && path === "/api/signature") {
         try {
             const body = await req.json();
@@ -193,39 +388,106 @@ async function handler(req: Request): Promise<Response | null> {
                 return json({ error: "no earnings found" }, 404);
             }
 
+            const unclaimed = earnings.lifetimeEarned - earnings.claimed;
+            if (unclaimed === 0n) {
+                return json({ error: "nothing to claim" }, 400);
+            }
+
             const userPubkey = new PublicKey(wallet);
             const data = createSignatureData(userPubkey, earnings.lifetimeEarned);
 
-            return json({ ...data, wallet });
+            return json({
+                ...data,
+                wallet,
+                unclaimed: unclaimed.toString(),
+            });
+        } catch (e) {
+            console.error("Signature error:", e);
+            return json({ error: "invalid request" }, 400);
+        }
+    }
+
+    // POST /api/claim-confirmed - record a successful on-chain claim
+    if (method === "POST" && path === "/api/claim-confirmed") {
+        try {
+            const body = await req.json();
+            const wallet = body.wallet as string;
+            const txSignature = body.signature as string;
+
+            const earnings = earningsStore.get(wallet);
+            if (earnings) {
+                // Verify the transaction on-chain (optional but recommended)
+                try {
+                    const tx = await connection.getTransaction(txSignature, {
+                        commitment: "confirmed",
+                    });
+                    if (!tx) {
+                        return json({ error: "transaction not found" }, 404);
+                    }
+                    if (tx.meta?.err) {
+                        return json({ error: "transaction failed" }, 400);
+                    }
+                } catch (e) {
+                    console.log("Could not verify tx, proceeding anyway");
+                }
+
+                earnings.claimed = earnings.lifetimeEarned;
+                earningsStore.set(wallet, earnings);
+            }
+
+            return json({
+                success: true,
+                wallet,
+                claimed: earnings?.claimed.toString() || "0",
+                txSignature,
+            });
         } catch (e) {
             return json({ error: "invalid request" }, 400);
         }
     }
 
-    // GET /api/debug/earnings - list all earnings (debug)
-    if (method === "GET" && path === "/api/debug/earnings") {
-        const all: any[] = [];
-        for (const [wallet, data] of earningsStore) {
-            all.push({
+    // POST /api/register - register a new wallet
+    if (method === "POST" && path === "/api/register") {
+        try {
+            const body = await req.json();
+            const wallet = body.wallet as string;
+
+            if (!wallet) {
+                return json({ error: "wallet required" }, 400);
+            }
+
+            // Fetch real balance if exists
+            const starBalance = await fetchUserStarBalance(wallet);
+            const starTokens = starBalance / BigInt(1e9);
+            const stardustAmount = starTokens * STARDUST_RATE;
+
+            earningsStore.set(wallet, {
                 wallet,
-                lifetimeEarned: data.lifetimeEarned.toString(),
-                lastUpdated: data.lastUpdated,
+                lifetimeEarned: stardustAmount,
+                claimed: 0n,
+                starBalance,
+                lastUpdated: Date.now(),
             });
+
+            return json({
+                success: true,
+                wallet,
+                lifetimeEarned: stardustAmount.toString(),
+                starBalance: starBalance.toString(),
+            });
+        } catch (e) {
+            return json({ error: "invalid request" }, 400);
         }
-        return json({ earnings: all });
     }
 
-    // POST /api/debug/update - trigger earnings update
-    if (method === "POST" && path === "/api/debug/update") {
-        await updateEarnings();
-        return json({ status: "updated", holders: earningsStore.size });
-    }
-
-    return null; // Let serve handle 404
+    return null;
 }
 
-// Start server
 serve(handler);
 
-console.log(`Stardust Backend running on port ${process.env.BUN_PORT}`);
-console.log(`Authority: ${authority.publicKey.toBase58()}`);
+console.log(`\n✨ Stardust Backend running on port ${process.env.BUN_PORT}`);
+console.log(`   Authority: ${authority.publicKey.toBase58()}`);
+console.log(`   Program: ${config.programId}`);
+console.log(`   STAR Token: ${config.starTokenMint}`);
+console.log(`   Stardust Mint: ${config.stardustMint}`);
+console.log(`\n   Real token balances enabled! No more Math.random() 🎉\n`);
