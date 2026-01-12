@@ -1,36 +1,36 @@
 {
   "programId": "GYQP75VdPpCU1xPsJS7CUkcBqzL718j7ihNmgJ3VESd7",
   "authority": {
-    "publicKey": "DgBdYSxMwsDavt5TazKhwntN3YR4gMRnPSjGPqUjgxRP",
-    "secretKey": "yljhaL1NQuN1aqVQ+RYAYO/0/M7cjX2xRINYG9fIxdy8VeoB9GS+tZIXK4iMb8DV23lvqW9zG96Kcbuu0BYK2g=="
+    "publicKey": "8AahypuHcL52rpnncAjjmh7SRCDHncrD1GC5TunVpL3m",
+    "secretKey": "pzplEfqQpLuOIzEn/cJLS337rFWl9yLA9JlULwxyMaFqdiXbhmoG/IH9g19xytxEjtsxP6tIDXS8DBT0Pc9WhA=="
   },
   "stardustMint": "4sySws8b3GEsNZf9bGMfNYpW92LfbqHWme5sLpPPVJH9",
   "statePda": "3RBcahxVstT9AZP7RG59Wsmpteee3gzoavnTe6338Dd9",
-  "starTokenMint": "3PQi4aoGc8E6p8tGVWb3ut6bpgSGm9AirtJe2PJBwwMg",
+  "starTokenMint": "AiCYFMkxmZZpd1NdiKRJ81gsGko2w66FSf4Fsyjynk4T",
   "testUsers": [
     {
       "id": 1,
-      "publicKey": "HYnks8nzLo6R47TVomJBZ2pxXY9FFwyBwjTCRYYtRSEu",
-      "secretKey": "W6mZiYRKyBfnpehF63gboNmZUUgsp7yUyhX2heqSFMD137uSAA/GJ7LrNyHb1XkeJ0r0EkI0SkI0wcFCExocug==",
-      "starTokenAccount": "9xEb6EGRL9DguPDonabxQw3qMBiYomRAVxUvRKHxoaBh",
-      "stardustTokenAccount": "DcQTqSt92DzHGeje5Pg4A5HDG3hioWQFDcgNM3n47sKU",
-      "starBalance": 116
+      "publicKey": "AbGmYsiz7TjgTZn11yko894wQuE5VRWYex7eCF1FJ9ZN",
+      "secretKey": "+0j4ZEH+Ck40l+FYM7NXp4Zj9jHNBBXr/xD8U0qV6BCOgMJGhZTduoWQIQgmUy/EBJqOctNqqKGoXQRIIJ8j/Q==",
+      "starTokenAccount": "4R7egcLAr79C8XgrrzwiaKGjSkqkjvy25991ApE6JnKR",
+      "stardustTokenAccount": "8krczQU6AkKFoFjFbmqQCFaDf6s5ArbQjM2WWq2RYaES",
+      "starBalance": 110
     },
     {
       "id": 2,
-      "publicKey": "7CrX2szLA2LHGHg5ZwcBskmaj55SofrnvGPqp1mM22w4",
-      "secretKey": "lOQUali+JhhfQfDYCyN0CJN+MfD08m+yv69vcVz1SAZcL4AbDsnjmFlUfQM4Rj0q6C2qaFZS940ilm3u8jadyw==",
-      "starTokenAccount": "37vJhfjuzS4efga9w1yj6Y9rJ7nehmC5iQ1aTi9abZfy",
-      "stardustTokenAccount": "9aH5Zo6xh8v1kAwSAfVKC3qF2F8p2TQynv1AjF5wJL6",
-      "starBalance": 201
+      "publicKey": "2ePvLmMzBo9a7a6E5xs1DjfUXwRD9e66SPi6zHXGRp8e",
+      "secretKey": "xVrGtaN+/3QFW2oG0UoNoG6DSrxiDf+0QmWOktjvnIkYcBebVQSWJbJ8jxAPYSfZOaT1eGK94ZNuXFglqUsFRw==",
+      "starTokenAccount": "79ztYtpZ4AHvjaApKMwqL5koftiuSbHY3xEfGnsoSBTH",
+      "stardustTokenAccount": "5RfTGKmpiYFHtsBgMgnBn5za1EvgsTuJDMKPfr1pFZzm",
+      "starBalance": 241
     },
     {
       "id": 3,
-      "publicKey": "EAYAxkjCKcpaLHZCurdpDQycCp5gVBrgx2CxF5VvpHMe",
-      "secretKey": "jIDthLSK+cGwQquYZFuv0frec8Dr7rLrfHwPuVNzV3vDmWdAobhbDnfa+FdWqSb9wJI3nJW+G4In42mQHzYDFQ==",
-      "starTokenAccount": "CvLzqhvPTaXwTu3eGPhFJcAwrEq3BY8hCvx31EeahwfX",
-      "stardustTokenAccount": "5cSgTLcQMGxBcCMTnAXcWdRH9kr6Fn6mLvHPGcu2V4mY",
-      "starBalance": 330
+      "publicKey": "EjLhkLSDLKibqVJteyV1scoCKiJLPwUP9wTGamnfXa6k",
+      "secretKey": "EzFrkgaYzMDwiHTNJ/E9ZUvoASQ+8Wts1OW2IxPZW/XMAJoMhT0rL1sdPFN2ZAvIizU2FpTNqf1xv1/y41gZoQ==",
+      "starTokenAccount": "7bhXCKYPqJ6X1yYpJFkF7aaWSYFSiLeupbmS3UzoP6R1",
+      "stardustTokenAccount": "2ds4UMQ4Xq61cgsspAhk2iXGEPLABxhLQmt9RKMhxt5E",
+      "starBalance": 339
     }
   ]
 }

@@ -58,6 +58,19 @@ interface ChartDataPoint {
     label?: string;
 }
 
+interface SignatureData {
+    signature: string;
+    message: string;
+    publicKey: string;
+    lifetimeEarned: string;
+    unclaimed: string;
+    wallet: string;
+    ed25519Instruction: {
+        programId: string;
+        data: string;
+    };
+}
+
 // ==================== UTILITIES ====================
 const formatStardust = (amount: string) => {
     const n = BigInt(amount || "0");
@@ -716,13 +729,136 @@ function App() {
         }
     }, [connected, fetchEarnings]);
 
-    // Claim handler (mock for now)
+    // Real claim handler - sends actual Solana transaction
     const handleClaim = async () => {
+        if (!publicKey || !userKeypair || !config) {
+            console.error("No user connected or config missing");
+            return;
+        }
+
         setClaiming(true);
-        // Simulate claim
-        await new Promise((r) => setTimeout(r, 2000));
-        setClaiming(false);
-        fetchEarnings();
+        try {
+            // 1. Get signature data from backend
+            const sigResponse = await fetch("/api/signature", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ wallet: publicKey }),
+            });
+
+            if (!sigResponse.ok) {
+                const err = await sigResponse.json() as { error?: string };
+                throw new Error(err.error || "Failed to get signature");
+            }
+
+            const sigData = await sigResponse.json() as SignatureData;
+            console.log("Got signature data:", sigData);
+
+            // 2. Import necessary modules dynamically
+            const { Connection, Transaction, TransactionInstruction, PublicKey: PK, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } = await import("@solana/web3.js");
+            const bs58 = await import("bs58");
+
+            // 3. Create connection and build transaction
+            const connection = new Connection("http://localhost:8899", "confirmed");
+
+            // Create Ed25519 verification instruction from backend data
+            const ed25519Ix = new TransactionInstruction({
+                programId: new PK(sigData.ed25519Instruction.programId),
+                keys: [],
+                data: Buffer.from(sigData.ed25519Instruction.data, "base64"),
+            });
+
+            // Program constants
+            const programId = new PK(config.programId);
+            const statePda = new PK(config.statePda);
+            const stardustMint = new PK(config.stardustMint);
+            const userPubkey = new PK(publicKey);
+
+            // Derive user claim PDA
+            const [userClaimPda] = PK.findProgramAddressSync(
+                [Buffer.from("user_claim"), userPubkey.toBuffer()],
+                programId
+            );
+
+            // Find user's stardust token account (ATA)
+            const { getAssociatedTokenAddress, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = await import("@solana/spl-token");
+            const userTokenAccount = await getAssociatedTokenAddress(stardustMint, userPubkey);
+
+            // Build claim instruction data: [discriminator(8) | lifetime_earned(8)]
+            // Anchor discriminator for "claim_stardust" = first 8 bytes of sha256("global:claim_stardust")
+            // Computed: 70 a0 47 a3 6a fd 33 b3
+            const discriminator = Buffer.from([0x70, 0xa0, 0x47, 0xa3, 0x6a, 0xfd, 0x33, 0xb3]);
+            const lifetimeEarned = BigInt(sigData.lifetimeEarned);
+            const lifetimeEarnedBuffer = Buffer.alloc(8);
+            lifetimeEarnedBuffer.writeBigUInt64LE(lifetimeEarned, 0);
+
+            const claimIxData = Buffer.concat([discriminator, lifetimeEarnedBuffer]);
+
+            // Create claim instruction
+            const claimIx = new TransactionInstruction({
+                programId,
+                keys: [
+                    { pubkey: userPubkey, isSigner: true, isWritable: true },
+                    { pubkey: userClaimPda, isSigner: false, isWritable: true },
+                    { pubkey: statePda, isSigner: false, isWritable: false },
+                    { pubkey: stardustMint, isSigner: false, isWritable: true },
+                    { pubkey: userTokenAccount, isSigner: false, isWritable: true },
+                    { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
+                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+                ],
+                data: claimIxData,
+            });
+
+            // 4. Build and send transaction
+            const tx = new Transaction();
+            tx.add(ed25519Ix);
+            tx.add(claimIx);
+
+            const { blockhash } = await connection.getLatestBlockhash();
+            tx.recentBlockhash = blockhash;
+            tx.feePayer = userPubkey;
+
+            // Sign with user keypair
+            tx.sign(userKeypair);
+
+            // Send transaction
+            const txSignature = await connection.sendRawTransaction(tx.serialize(), {
+                skipPreflight: false,
+                preflightCommitment: "confirmed",
+            });
+
+            console.log("Transaction sent:", txSignature);
+
+            // Wait for confirmation with blockhash strategy and longer timeout
+            const latestBlockHash = await connection.getLatestBlockhash();
+            const result = await connection.confirmTransaction({
+                blockhash: latestBlockHash.blockhash,
+                lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
+                signature: txSignature,
+            }, "confirmed");
+
+            if (result.value.err) {
+                throw new Error(`Transaction failed: ${JSON.stringify(result.value.err)}`);
+            }
+            console.log("Transaction confirmed!");
+
+            // 5. Notify backend of successful claim
+            await fetch("/api/claim-confirmed", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ wallet: publicKey, signature: txSignature }),
+            });
+
+            // Show success
+            alert(`🎉 Successfully claimed ${Number(sigData.unclaimed) / 1e9} STARDUST!\n\nTx: ${txSignature.slice(0, 20)}...`);
+
+        } catch (error: any) {
+            console.error("Claim failed:", error);
+            alert(`Claim failed: ${error.message}`);
+        } finally {
+            setClaiming(false);
+            fetchEarnings();
+        }
     };
 
     // Global stats for display
