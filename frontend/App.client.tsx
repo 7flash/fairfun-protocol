@@ -1,43 +1,9 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
-import { createRoot } from "react-dom/client";
-import { Keypair, PublicKey } from "@solana/web3.js";
+import React, { useState, useEffect, useCallback } from "react";
+import { Keypair, PublicKey, Connection, Transaction, TransactionInstruction, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 
-// ==================== TYPES ====================
-interface EarningsData {
-    wallet: string;
-    lifetimeEarned: string;
-    claimed: string;
-    unclaimed: string;
-    starBalance: string;
-    lastUpdated: number | null;
-}
-
-interface LeaderboardEntry {
-    rank: number;
-    wallet: string;
-    lifetimeEarned: string;
-    claimed: string;
-    unclaimed: string;
-    starBalance: string;
-}
-
-interface Stats {
-    totalHolders: number;
-    totalEarned: string;
-    totalClaimed: string;
-    totalUnclaimed: string;
-    totalStarBalance: string;
-}
-
-interface TestUser {
-    id: number;
-    publicKey: string;
-    secretKey: string;
-    starTokenAccount: string;
-    stardustTokenAccount: string;
-    starBalance: number;
-}
-
+// ============================================
+// TYPES
+// ============================================
 interface Config {
     programId: string;
     statePda: string;
@@ -46,601 +12,582 @@ interface Config {
     authority: string;
 }
 
+interface TestUser {
+    id: number;
+    publicKey: string;
+    secretKey: string;
+    starTokenAccount: string;
+    starBalance: number;
+}
+
+interface Stats {
+    totalHolders: number;
+    totalEarned: string;
+    totalClaimed: string;
+    totalUnclaimed: string;
+    totalStarBalance: string;
+    timestamp: number;
+}
+
+interface EarningsData {
+    wallet: string;
+    lifetimeEarned: string;
+    claimed: string;
+    unclaimed: string;
+    starBalance: string;
+}
+
+interface LeaderboardEntry {
+    wallet: string;
+    lifetimeEarned: string;
+    claimed: string;
+    starBalance: string;
+    rank: number;
+}
+
 interface TreasuryData {
     totalValue: number;
-    history: { timestamp: number; value: number }[];
-    tokens: { symbol: string; amount: number; value: number }[];
-}
-
-interface ChartDataPoint {
-    timestamp: number;
-    value: number;
-    label?: string;
-}
-
-interface SignatureData {
-    signature: string;
-    message: string;
-    publicKey: string;
-    lifetimeEarned: string;
-    unclaimed: string;
-    wallet: string;
-    ed25519Instruction: {
-        programId: string;
-        data: string;
+    tokens: { symbol: string; amount: number; value: number; priceUsd?: number }[];
+    targetApy: number;
+    currentApy: number;
+    apyHistory?: { timestamp: number; apy: number }[];
+    revenue?: {
+        monthly: number;
+        weekly: number;
+        totalDistributed: number;
     };
+    redemptionPool?: number;
+    history?: { timestamp: number; value: number }[];
 }
 
-// ==================== UTILITIES ====================
-const formatStardust = (amount: string) => {
-    const n = BigInt(amount || "0");
-    const whole = n / BigInt(1e9);
-    return whole.toLocaleString();
+interface WinnerEntry {
+    wallet: string;
+    amount: number;
+    timestamp: number;
+}
+
+// ============================================
+// CONSTANTS
+// ============================================
+const TOKEN_NAME = "$GXY";
+const TOKEN_SYMBOL = "GXY";
+const TOTAL_SUPPLY = 1_000_000_000; // 1 billion
+const SITE_NAME = "gx402.xyz";
+const TOKEN_PRICE_USD = 0.136; // Example price
+
+// ============================================
+// COMPONENTS
+// ============================================
+
+// Tooltip Component
+const Tooltip: React.FC<{ text: string; children: React.ReactNode }> = ({ text, children }) => (
+    <span className="tooltip-trigger">
+        {children}
+        <span className="tooltip-icon">?</span>
+        <span className="tooltip-content">{text}</span>
+    </span>
+);
+
+// Network Badge
+const NetworkBadge: React.FC<{ network: "localnet" | "devnet" | "mainnet" }> = ({ network }) => (
+    <div className={`network-badge ${network === "mainnet" ? "mainnet" : ""}`}>
+        <span className="network-dot" />
+        {network.toUpperCase()}
+    </div>
+);
+
+// Token Info Bar
+const TokenInfoBar: React.FC<{ config: Config | null; stats: Stats | null }> = ({ config, stats }) => {
+    const marketCap = (stats ? Number(BigInt(stats.totalStarBalance || "0")) / 1e9 : 0) * TOKEN_PRICE_USD;
+
+    return (
+        <div className="token-info">
+            <div className="token-info-item">
+                <span className="token-info-label">Token</span>
+                <span className="token-info-value">{TOKEN_NAME}</span>
+            </div>
+            <div className="token-info-item">
+                <span className="token-info-label">Total Supply</span>
+                <span className="token-info-value">{TOTAL_SUPPLY.toLocaleString()}</span>
+            </div>
+            <div className="token-info-item">
+                <span className="token-info-label">Market Cap</span>
+                <span className="token-info-value">${marketCap.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+            </div>
+            <div className="token-info-item">
+                <span className="token-info-label">Token Mint</span>
+                <span className="token-info-value mono">{config?.starTokenMint?.slice(0, 8)}...{config?.starTokenMint?.slice(-4)}</span>
+            </div>
+        </div>
+    );
 };
 
-const formatShort = (wallet: string) =>
-    wallet ? `${wallet.slice(0, 6)}...${wallet.slice(-4)}` : "";
-
-const formatTime = (ts: number) => new Date(ts).toLocaleTimeString();
-
-// ==================== CHART COMPONENT ====================
-function LineChart({
-    data,
-    width = 400,
-    height = 200,
-    color = "#00d4ff",
-    gradientColor = "rgba(0, 212, 255, 0.15)",
-    title,
-    formatValue = (v: number) => v.toLocaleString(),
-    showGrid = true,
-}: {
-    data: ChartDataPoint[];
-    width?: number;
-    height?: number;
-    color?: string;
-    gradientColor?: string;
-    title?: string;
-    formatValue?: (v: number) => string;
-    showGrid?: boolean;
-}) {
-    const canvasRef = useRef<HTMLCanvasElement>(null);
-    const [hoveredPoint, setHoveredPoint] = useState<ChartDataPoint | null>(null);
-    const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
-
-    useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas || data.length < 2) return;
-
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-
-        const dpr = window.devicePixelRatio || 1;
-        canvas.width = width * dpr;
-        canvas.height = height * dpr;
-        ctx.scale(dpr, dpr);
-
-        const padding = { top: 30, right: 20, bottom: 30, left: 60 };
-        const chartWidth = width - padding.left - padding.right;
-        const chartHeight = height - padding.top - padding.bottom;
-
-        // Clear
-        ctx.clearRect(0, 0, width, height);
-
-        // Get data range
-        const values = data.map((d) => d.value);
-        const minVal = Math.min(...values) * 0.95;
-        const maxVal = Math.max(...values) * 1.05;
-        const range = maxVal - minVal || 1;
-
-        // Scale functions
-        const scaleX = (i: number) => padding.left + (i / (data.length - 1)) * chartWidth;
-        const scaleY = (v: number) =>
-            padding.top + chartHeight - ((v - minVal) / range) * chartHeight;
-
-        // Draw grid
-        if (showGrid) {
-            ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
-            ctx.lineWidth = 1;
-            for (let i = 0; i <= 4; i++) {
-                const y = padding.top + (i / 4) * chartHeight;
-                ctx.beginPath();
-                ctx.moveTo(padding.left, y);
-                ctx.lineTo(width - padding.right, y);
-                ctx.stroke();
-            }
-        }
-
-        // Draw gradient fill
-        const gradient = ctx.createLinearGradient(0, padding.top, 0, height - padding.bottom);
-        gradient.addColorStop(0, gradientColor);
-        gradient.addColorStop(1, "transparent");
-
-        ctx.beginPath();
-        ctx.moveTo(scaleX(0), scaleY(data[0].value));
-        for (let i = 1; i < data.length; i++) {
-            ctx.lineTo(scaleX(i), scaleY(data[i].value));
-        }
-        ctx.lineTo(scaleX(data.length - 1), height - padding.bottom);
-        ctx.lineTo(scaleX(0), height - padding.bottom);
-        ctx.closePath();
-        ctx.fillStyle = gradient;
-        ctx.fill();
-
-        // Draw line
-        ctx.beginPath();
-        ctx.moveTo(scaleX(0), scaleY(data[0].value));
-        for (let i = 1; i < data.length; i++) {
-            ctx.lineTo(scaleX(i), scaleY(data[i].value));
-        }
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.lineCap = "round";
-        ctx.lineJoin = "round";
-        ctx.stroke();
-
-        // Draw glow
-        ctx.shadowColor = color;
-        ctx.shadowBlur = 10;
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-
-        // Draw points
-        data.forEach((point, i) => {
-            ctx.beginPath();
-            ctx.arc(scaleX(i), scaleY(point.value), 3, 0, Math.PI * 2);
-            ctx.fillStyle = color;
-            ctx.fill();
-        });
-
-        // Y-axis labels
-        ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
-        ctx.font = "10px Inter, sans-serif";
-        ctx.textAlign = "right";
-        for (let i = 0; i <= 4; i++) {
-            const val = minVal + ((4 - i) / 4) * range;
-            const y = padding.top + (i / 4) * chartHeight;
-            ctx.fillText(formatValue(val), padding.left - 8, y + 4);
-        }
-
-        // Title
-        if (title) {
-            ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
-            ctx.font = "12px Inter, sans-serif";
-            ctx.textAlign = "left";
-            ctx.fillText(title, padding.left, 16);
-        }
-    }, [data, width, height, color, gradientColor, title, formatValue, showGrid]);
-
-    const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-        const canvas = canvasRef.current;
-        if (!canvas || data.length < 2) return;
-
-        const rect = canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const padding = { left: 60, right: 20 };
-        const chartWidth = width - padding.left - padding.right;
-
-        const index = Math.round(((x - padding.left) / chartWidth) * (data.length - 1));
-        if (index >= 0 && index < data.length) {
-            setHoveredPoint(data[index]);
-            setMousePos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
-        }
-    };
+// Stardust Info Bar
+const StardustInfoBar: React.FC<{ config: Config | null; stats: Stats | null; onShowLeaderboard: () => void }> = ({
+    config, stats, onShowLeaderboard
+}) => {
+    const totalEarned = stats ? Number(BigInt(stats.totalEarned || "0")) / 1e9 : 0;
+    const totalClaimed = stats ? Number(BigInt(stats.totalClaimed || "0")) / 1e9 : 0;
 
     return (
-        <div className="chart-container" style={{ position: "relative", width, height }}>
-            <canvas
-                ref={canvasRef}
-                style={{ width, height }}
-                onMouseMove={handleMouseMove}
-                onMouseLeave={() => setHoveredPoint(null)}
-            />
-            {hoveredPoint && (
-                <div
-                    className="chart-tooltip"
-                    style={{
-                        position: "absolute",
-                        left: Math.min(mousePos.x + 10, width - 120),
-                        top: Math.max(mousePos.y - 40, 0),
-                    }}
-                >
-                    <div>{formatValue(hoveredPoint.value)}</div>
-                    <div className="tooltip-time">{formatTime(hoveredPoint.timestamp)}</div>
+        <div className="card stardust-card">
+            <div className="card-header">
+                <span className="card-title">✨ Stardust Protocol</span>
+                <span className="card-badge">
+                    <span className="network-dot" style={{ background: "#22c55e" }} />
+                    LIVE
+                </span>
+            </div>
+            <div className="stardust-stats">
+                <div className="stardust-stat">
+                    <div className="stardust-value">{totalEarned.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                    <div className="stardust-label">Total Earned</div>
                 </div>
-            )}
+                <div className="stardust-stat">
+                    <div className="stardust-value">{totalClaimed.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                    <div className="stardust-label">Total Claimed</div>
+                </div>
+                <div className="stardust-stat">
+                    <div className="stardust-value">{stats?.totalHolders || 0}</div>
+                    <div className="stardust-label">Holders</div>
+                </div>
+            </div>
+            <div className="stardust-actions">
+                <button className="btn btn-secondary" onClick={onShowLeaderboard}>
+                    🏆 View Leaderboard
+                </button>
+                <span className="token-info-value mono" style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                    Mint: {config?.stardustMint?.slice(0, 8)}...{config?.stardustMint?.slice(-4)}
+                </span>
+            </div>
         </div>
     );
-}
+};
 
-// ==================== DONUT CHART ====================
-function DonutChart({
-    data,
-    size = 150,
-    colors = ["#00d4ff", "#a855f7", "#f59e0b", "#10b981"],
-}: {
-    data: { label: string; value: number }[];
-    size?: number;
-    colors?: string[];
-}) {
-    const canvasRef = useRef<HTMLCanvasElement>(null);
-    const total = data.reduce((sum, d) => sum + d.value, 0);
-
-    useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas || total === 0) return;
-
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-
-        const dpr = window.devicePixelRatio || 1;
-        canvas.width = size * dpr;
-        canvas.height = size * dpr;
-        ctx.scale(dpr, dpr);
-
-        const centerX = size / 2;
-        const centerY = size / 2;
-        const outerRadius = size / 2 - 10;
-        const innerRadius = outerRadius * 0.6;
-
-        let startAngle = -Math.PI / 2;
-
-        data.forEach((item, i) => {
-            const sliceAngle = (item.value / total) * 2 * Math.PI;
-
-            ctx.beginPath();
-            ctx.arc(centerX, centerY, outerRadius, startAngle, startAngle + sliceAngle);
-            ctx.arc(centerX, centerY, innerRadius, startAngle + sliceAngle, startAngle, true);
-            ctx.closePath();
-
-            ctx.fillStyle = colors[i % colors.length];
-            ctx.fill();
-
-            // Glow effect
-            ctx.shadowColor = colors[i % colors.length];
-            ctx.shadowBlur = 8;
-            ctx.fill();
-            ctx.shadowBlur = 0;
-
-            startAngle += sliceAngle;
-        });
-
-        // Center text
-        ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
-        ctx.font = "bold 18px Inter, sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(total.toLocaleString(), centerX, centerY - 8);
-        ctx.font = "10px Inter, sans-serif";
-        ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
-        ctx.fillText("TOTAL", centerX, centerY + 12);
-    }, [data, size, colors, total]);
+// User Balance Card
+const UserBalanceCard: React.FC<{ earnings: EarningsData | null; claiming: boolean; onClaim: () => void }> = ({
+    earnings, claiming, onClaim
+}) => {
+    const balance = earnings ? Number(BigInt(earnings.starBalance || "0")) / 1e9 : 0;
+    const balanceUsd = balance * TOKEN_PRICE_USD;
+    const earned = earnings ? Number(BigInt(earnings.lifetimeEarned || "0")) / 1e9 : 0;
+    const claimed = earnings ? Number(BigInt(earnings.claimed || "0")) / 1e9 : 0;
+    const unclaimed = earnings ? Number(BigInt(earnings.unclaimed || "0")) / 1e9 : 0;
 
     return (
-        <div className="donut-chart">
-            <canvas ref={canvasRef} style={{ width: size, height: size }} />
-            <div className="donut-legend">
-                {data.map((item, i) => (
-                    <div key={item.label} className="legend-item">
-                        <span
-                            className="legend-dot"
-                            style={{ background: colors[i % colors.length] }}
-                        />
-                        <span className="legend-label">{item.label}</span>
-                        <span className="legend-value">{item.value.toLocaleString()}</span>
+        <div className="dashboard-grid">
+            {/* GXY Balance */}
+            <div className="card balance-card">
+                <div className="card-header">
+                    <Tooltip text={`Your ${TOKEN_NAME} token balance. This determines your stardust earning rate.`}>
+                        <span className="card-title">Your {TOKEN_NAME} Balance</span>
+                    </Tooltip>
+                </div>
+                <div className="balance-amount">{balance.toLocaleString()}</div>
+                <div className="balance-label">
+                    <span className="token-icon">⭐</span>
+                    {TOKEN_NAME} Tokens
+                </div>
+                <div className="balance-usd">≈ ${balanceUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+            </div>
+
+            {/* Stardust Earnings */}
+            <div className="card stardust-card" style={{ gridColumn: "span 2" }}>
+                <div className="card-header">
+                    <Tooltip text="Stardust is earned based on the USD value of your token holdings. 1 USD worth = 1 stardust per second.">
+                        <span className="card-title">Your Stardust</span>
+                    </Tooltip>
+                </div>
+                <div className="stardust-stats">
+                    <div className="stardust-stat">
+                        <div className="stardust-value text-gradient">{earned.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                        <div className="stardust-label">Total Earned</div>
+                    </div>
+                    <div className="stardust-stat">
+                        <div className="stardust-value" style={{ color: "var(--success)" }}>{claimed.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                        <div className="stardust-label">Claimed</div>
+                    </div>
+                    <div className="stardust-stat">
+                        <div className="stardust-value text-gold">{unclaimed.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                        <div className="stardust-label">Available</div>
+                    </div>
+                </div>
+                <div className="stardust-actions">
+                    <button
+                        className="btn btn-primary"
+                        onClick={onClaim}
+                        disabled={claiming || unclaimed <= 0}
+                    >
+                        {claiming ? "Processing..." : `Claim ${unclaimed.toLocaleString(undefined, { maximumFractionDigits: 0 })} ✨`}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// Leaderboard Modal
+const LeaderboardModal: React.FC<{
+    open: boolean;
+    onClose: () => void;
+    leaderboard: LeaderboardEntry[];
+    currentWallet: string | null;
+}> = ({ open, onClose, leaderboard, currentWallet }) => {
+    const userRank = leaderboard.findIndex(e => e.wallet === currentWallet) + 1;
+
+    return (
+        <div className={`modal-overlay ${open ? "open" : ""}`} onClick={onClose}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+                <div className="modal-header">
+                    <h2 className="modal-title">🏆 Stardust Leaderboard</h2>
+                    <button className="modal-close" onClick={onClose}>✕</button>
+                </div>
+                <div className="modal-body">
+                    {currentWallet && userRank > 0 && (
+                        <div className="card mb-16" style={{ background: "var(--accent-glow)" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                                <div className="leaderboard-rank" style={{ background: "var(--accent-gradient)", color: "#fff" }}>
+                                    #{userRank}
+                                </div>
+                                <span>Your Position</span>
+                            </div>
+                        </div>
+                    )}
+                    <div className="leaderboard">
+                        {leaderboard.map((entry, i) => {
+                            const earned = Number(BigInt(entry.lifetimeEarned || "0")) / 1e9;
+                            const balance = Number(BigInt(entry.starBalance || "0")) / 1e9;
+                            const isCurrentUser = entry.wallet === currentWallet;
+
+                            return (
+                                <div key={entry.wallet} className={`leaderboard-item ${isCurrentUser ? "current-user" : ""}`}>
+                                    <div className={`leaderboard-rank ${i === 0 ? "gold" : i === 1 ? "silver" : i === 2 ? "bronze" : ""}`}>
+                                        {i + 1}
+                                    </div>
+                                    <div className="leaderboard-wallet">
+                                        {entry.wallet.slice(0, 4)}...{entry.wallet.slice(-4)}
+                                    </div>
+                                    <div style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>
+                                        {balance.toLocaleString()} {TOKEN_NAME}
+                                    </div>
+                                    <div className="leaderboard-earned">
+                                        <div className="leaderboard-earned-value">{earned.toLocaleString(undefined, { maximumFractionDigits: 0 })} ✨</div>
+                                        <div className="leaderboard-earned-label">earned</div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// Treasury Section
+const TreasurySection: React.FC<{ treasury: TreasuryData | null }> = ({ treasury }) => {
+    return (
+        <>
+            <div className="card mt-32">
+                <div className="card-header">
+                    <span className="card-title">💰 Protocol Treasury</span>
+                </div>
+                <div className="treasury-grid">
+                    <div className="treasury-card">
+                        <div className="treasury-value">${treasury?.totalValue.toLocaleString() || 0}</div>
+                        <div className="treasury-label">Total Value</div>
+                    </div>
+                    <div className="apy-display">
+                        <div className="apy-label">Current APY</div>
+                        <div className="apy-value">{(treasury?.currentApy || 0).toFixed(1)}%</div>
+                        <div className="apy-target">Target: {(treasury?.targetApy || 20)}%</div>
+                    </div>
+                    <div className="treasury-card">
+                        <div className="treasury-value positive">+${(treasury?.revenue?.monthly || 0).toLocaleString()}</div>
+                        <div className="treasury-label">Monthly Revenue</div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Token Holdings */}
+            <div className="card mt-24">
+                <div className="card-header">
+                    <span className="card-title">📊 Token Holdings</span>
+                </div>
+                <div className="token-info">
+                    {treasury?.tokens?.map(t => (
+                        <div key={t.symbol} className="token-info-item">
+                            <span className="token-info-label">{t.symbol}</span>
+                            <span className="token-info-value">
+                                {t.amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                            </span>
+                            <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                                ${t.value.toLocaleString()} @ ${t.priceUsd || 0}
+                            </span>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {/* Revenue Breakdown */}
+            <div className="card mt-24">
+                <div className="card-header">
+                    <span className="card-title">📈 Revenue & Distribution</span>
+                </div>
+                <div className="treasury-grid">
+                    <div className="treasury-card">
+                        <div className="treasury-value">${(treasury?.revenue?.weekly || 0).toLocaleString()}</div>
+                        <div className="treasury-label">Weekly Revenue</div>
+                    </div>
+                    <div className="treasury-card">
+                        <div className="treasury-value">${(treasury?.revenue?.monthly || 0).toLocaleString()}</div>
+                        <div className="treasury-label">Monthly Revenue</div>
+                    </div>
+                    <div className="treasury-card">
+                        <div className="treasury-value">${(treasury?.revenue?.totalDistributed || 0).toLocaleString()}</div>
+                        <div className="treasury-label">Total Distributed</div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Redemption Pool */}
+            <div className="card mt-24" style={{ background: "linear-gradient(135deg, rgba(251, 191, 36, 0.1), rgba(245, 158, 11, 0.05))" }}>
+                <div className="card-header">
+                    <span className="card-title">🎰 Redemption Pool</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
+                    <div>
+                        <div className="treasury-value text-gold">${(treasury?.redemptionPool || 0).toLocaleString()}</div>
+                        <div className="treasury-label">Available for Rewards</div>
+                    </div>
+                    <div style={{ flex: 1, color: "var(--text-muted)", fontSize: "0.875rem" }}>
+                        10% of treasury value is allocated to the stardust redemption pool,
+                        which backs the random SOL rewards when users spin.
+                    </div>
+                </div>
+            </div>
+        </>
+    );
+};
+
+// Redemption Section
+const RedemptionSection: React.FC<{
+    unclaimedStardust: number;
+    onRedeem: () => void;
+    winners: WinnerEntry[];
+}> = ({ unclaimedStardust, onRedeem, winners }) => {
+    const probabilities = [
+        { amount: "0.001 SOL", chance: "50%" },
+        { amount: "0.01 SOL", chance: "30%" },
+        { amount: "0.1 SOL", chance: "15%" },
+        { amount: "1 SOL", chance: "4.5%" },
+        { amount: "10 SOL", chance: "0.5%" },
+    ];
+
+    return (
+        <div className="redemption-section">
+            <div className="redemption-title">🎰 Stardust Redemption</div>
+            <div className="redemption-desc">
+                Exchange your stardust for a chance to win SOL rewards! 1000 stardust per spin.
+            </div>
+
+            <div className="probability-table">
+                {probabilities.map(p => (
+                    <div key={p.amount} className="probability-item">
+                        <div className="probability-amount">{p.amount}</div>
+                        <div className="probability-chance">{p.chance}</div>
                     </div>
                 ))}
-            </div>
-        </div>
-    );
-}
-
-// ==================== BAR CHART ====================
-function BarChart({
-    data,
-    width = 300,
-    height = 150,
-    color = "#a855f7",
-}: {
-    data: { label: string; value: number }[];
-    width?: number;
-    height?: number;
-    color?: string;
-}) {
-    const maxValue = Math.max(...data.map((d) => d.value), 1);
-
-    return (
-        <div className="bar-chart" style={{ width, height }}>
-            {data.map((item, i) => (
-                <div key={item.label} className="bar-row">
-                    <span className="bar-label">{item.label}</span>
-                    <div className="bar-container">
-                        <div
-                            className="bar-fill"
-                            style={{
-                                width: `${(item.value / maxValue) * 100}%`,
-                                background: `linear-gradient(90deg, ${color}44, ${color})`,
-                                boxShadow: `0 0 10px ${color}55`,
-                            }}
-                        />
-                    </div>
-                    <span className="bar-value">{item.value.toLocaleString()}</span>
-                </div>
-            ))}
-        </div>
-    );
-}
-
-// ==================== STATS CARD ====================
-function StatsCard({
-    label,
-    value,
-    icon,
-    trend,
-    subValue,
-}: {
-    label: string;
-    value: string;
-    icon: string;
-    trend?: "up" | "down" | "neutral";
-    subValue?: string;
-}) {
-    return (
-        <div className="stat-card">
-            <span className="stat-icon">{icon}</span>
-            <div className="stat-content">
-                <span className="stat-value">
-                    {value}
-                    {trend && (
-                        <span className={`trend ${trend}`}>
-                            {trend === "up" ? "↑" : trend === "down" ? "↓" : "→"}
-                        </span>
-                    )}
-                </span>
-                <span className="stat-label">{label}</span>
-                {subValue && <span className="stat-sub">{subValue}</span>}
-            </div>
-        </div>
-    );
-}
-
-// ==================== LEADERBOARD ====================
-function Leaderboard({
-    entries,
-    currentWallet,
-}: {
-    entries: LeaderboardEntry[];
-    currentWallet: string | null;
-}) {
-    return (
-        <div className="leaderboard">
-            <div className="leaderboard-header">
-                <span>Rank</span>
-                <span>Wallet</span>
-                <span>STAR</span>
-                <span>Earned ✨</span>
-            </div>
-            {entries.map((e) => (
-                <div
-                    key={e.wallet}
-                    className={`leaderboard-row ${e.wallet === currentWallet ? "highlight" : ""}`}
-                >
-                    <span className="rank">
-                        {e.rank === 1 ? "🥇" : e.rank === 2 ? "🥈" : e.rank === 3 ? "🥉" : `#${e.rank}`}
-                    </span>
-                    <span className="wallet">{formatShort(e.wallet)}</span>
-                    <span className="star-balance">{(Number(e.starBalance) / 1e9).toFixed(0)} ⭐</span>
-                    <span className="earned">{formatStardust(e.lifetimeEarned)}</span>
-                </div>
-            ))}
-        </div>
-    );
-}
-
-// ==================== USER DASHBOARD ====================
-function UserDashboard({
-    earnings,
-    earningsHistory,
-    onClaim,
-    claiming,
-}: {
-    earnings: EarningsData | null;
-    earningsHistory: ChartDataPoint[];
-    onClaim: () => void;
-    claiming: boolean;
-}) {
-    if (!earnings) return null;
-
-    const starBalance = Number(earnings.starBalance) / 1e9;
-    const lifetimeEarned = Number(BigInt(earnings.lifetimeEarned || "0") / BigInt(1e9));
-    const claimed = Number(BigInt(earnings.claimed || "0") / BigInt(1e9));
-    const unclaimed = Number(BigInt(earnings.unclaimed || "0") / BigInt(1e9));
-
-    const earningsRate = starBalance * 0.001; // Example rate per second
-
-    return (
-        <div className="user-dashboard">
-            <div className="dashboard-header">
-                <h2>Your Dashboard</h2>
-                <span className="wallet-badge">{formatShort(earnings.wallet)}</span>
-            </div>
-
-            <div className="dashboard-stats">
-                <div className="big-stat">
-                    <span className="big-stat-icon">⭐</span>
-                    <div className="big-stat-content">
-                        <span className="big-stat-value">{starBalance.toFixed(0)}</span>
-                        <span className="big-stat-label">STAR Balance</span>
-                    </div>
-                </div>
-                <div className="big-stat accent">
-                    <span className="big-stat-icon">✨</span>
-                    <div className="big-stat-content">
-                        <span className="big-stat-value">{unclaimed.toLocaleString()}</span>
-                        <span className="big-stat-label">Available to Claim</span>
-                    </div>
-                </div>
             </div>
 
             <button
-                onClick={onClaim}
-                disabled={claiming || unclaimed === 0}
-                className="btn btn-claim"
+                className="btn btn-gold"
+                onClick={onRedeem}
+                disabled={unclaimedStardust < 1000}
+                style={{ width: "100%", marginBottom: 24 }}
             >
-                {claiming ? (
-                    <span className="claim-loading">Processing...</span>
-                ) : (
-                    <>
-                        <span className="claim-icon">💎</span>
-                        <span>Claim {unclaimed.toLocaleString()} STARDUST</span>
-                    </>
-                )}
+                🎲 Spin (1000 ✨)
             </button>
 
-            <div className="dashboard-charts">
-                <div className="chart-card">
-                    <h4>Earnings Over Time</h4>
-                    <LineChart
-                        data={earningsHistory}
-                        width={380}
-                        height={160}
-                        color="#00d4ff"
-                        formatValue={(v) => `${v.toLocaleString()} ✨`}
-                    />
-                </div>
-
-                <div className="stats-breakdown">
-                    <h4>Breakdown</h4>
-                    <DonutChart
-                        data={[
-                            { label: "Claimed", value: claimed },
-                            { label: "Unclaimed", value: unclaimed },
-                        ]}
-                        size={140}
-                        colors={["#10b981", "#a855f7"]}
-                    />
-                </div>
-            </div>
-
-            <div className="earnings-details">
-                <div className="detail-row">
-                    <span>Lifetime Earned</span>
-                    <span>{lifetimeEarned.toLocaleString()} ✨</span>
-                </div>
-                <div className="detail-row">
-                    <span>Already Claimed</span>
-                    <span>{claimed.toLocaleString()} ✨</span>
-                </div>
-                <div className="detail-row highlight">
-                    <span>Earning Rate</span>
-                    <span>~{earningsRate.toFixed(2)} ✨/sec</span>
-                </div>
-            </div>
-        </div>
-    );
-}
-
-// ==================== TREASURY PANEL ====================
-function TreasuryPanel({ treasury }: { treasury: TreasuryData }) {
-    return (
-        <div className="treasury-panel">
-            <div className="treasury-header">
-                <h2>🏦 Protocol Treasury</h2>
-                <div className="treasury-value">
-                    <span className="value-label">Total Value</span>
-                    <span className="value-amount">${treasury.totalValue.toLocaleString()}</span>
-                </div>
-            </div>
-
-            <div className="treasury-chart">
-                <h4>Treasury Value Over Time</h4>
-                <LineChart
-                    data={treasury.history}
-                    width={380}
-                    height={180}
-                    color="#f59e0b"
-                    gradientColor="rgba(245, 158, 11, 0.15)"
-                    formatValue={(v) => `$${v.toLocaleString()}`}
-                />
-            </div>
-
-            <div className="treasury-assets">
-                <h4>Treasury Assets</h4>
-                <BarChart
-                    data={treasury.tokens.map((t) => ({
-                        label: t.symbol,
-                        value: t.value,
-                    }))}
-                    color="#f59e0b"
-                />
-            </div>
-
-            <div className="exchange-cta">
-                <p>Exchange 1,000,000 ✨ STARDUST for a random portion of treasury!</p>
-                <button className="btn btn-exchange" disabled>
-                    🎲 Exchange (Coming Soon)
-                </button>
-            </div>
-        </div>
-    );
-}
-
-// ==================== USER SELECTOR ====================
-function UserSelector({
-    testUsers,
-    selectedUser,
-    onSelect,
-}: {
-    testUsers: TestUser[];
-    selectedUser: TestUser | null;
-    onSelect: (user: TestUser) => void;
-}) {
-    return (
-        <div className="user-selector">
-            <h3>Select Test User</h3>
-            <div className="user-grid">
-                {testUsers.map((user) => (
-                    <button
-                        key={user.id}
-                        onClick={() => onSelect(user)}
-                        className={`user-card ${selectedUser?.id === user.id ? "active" : ""}`}
-                    >
-                        <div className="user-avatar">👤</div>
-                        <span className="user-id">User {user.id}</span>
-                        <span className="user-key">{formatShort(user.publicKey)}</span>
-                        <span className="user-balance">{user.starBalance} STAR ⭐</span>
-                    </button>
+            <div className="card-title mb-8">Recent Winners</div>
+            <div className="winner-feed">
+                {winners.length === 0 ? (
+                    <div style={{ color: "var(--text-muted)", textAlign: "center", padding: 20 }}>
+                        No winners yet. Be the first!
+                    </div>
+                ) : winners.map((w, i) => (
+                    <div key={i} className="winner-item">
+                        <div className="winner-avatar">🎉</div>
+                        <div className="winner-info">
+                            <div className="winner-wallet">{w.wallet.slice(0, 4)}...{w.wallet.slice(-4)}</div>
+                            <div className="winner-time">{new Date(w.timestamp).toLocaleTimeString()}</div>
+                        </div>
+                        <div className="winner-amount">+{w.amount} SOL</div>
+                    </div>
                 ))}
             </div>
         </div>
     );
-}
+};
 
-// ==================== MAIN APP ====================
-function App() {
-    const [testUsers, setTestUsers] = useState<TestUser[]>([]);
-    const [config, setConfig] = useState<Config | null>(null);
-    const [selectedUser, setSelectedUser] = useState<TestUser | null>(null);
-    const [userKeypair, setUserKeypair] = useState<Keypair | null>(null);
-    const [publicKey, setPublicKey] = useState<string | null>(null);
-    const [earnings, setEarnings] = useState<EarningsData | null>(null);
-    const [earningsHistory, setEarningsHistory] = useState<ChartDataPoint[]>([]);
-    const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
-    const [stats, setStats] = useState<Stats | null>(null);
-    const [claiming, setClaiming] = useState(false);
-    const [connected, setConnected] = useState(false);
+// Login/Connect Modal
+const LoginModal: React.FC<{
+    open: boolean;
+    onClose: () => void;
+    testUsers: TestUser[];
+    onSelectTestUser: (user: TestUser) => void;
+    onImportKey: (key: string) => void;
+}> = ({ open, onClose, testUsers, onSelectTestUser, onImportKey }) => {
+    const [privateKey, setPrivateKey] = useState("");
+
+    const handleImport = () => {
+        if (privateKey.trim()) {
+            onImportKey(privateKey.trim());
+            setPrivateKey("");
+        }
+    };
+
+    return (
+        <div className={`modal-overlay ${open ? "open" : ""}`} onClick={onClose}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+                <div className="modal-header">
+                    <h2 className="modal-title">Connect Wallet</h2>
+                    <button className="modal-close" onClick={onClose}>✕</button>
+                </div>
+                <div className="modal-body">
+                    <div className="login-options">
+                        <button className="btn btn-primary" style={{ width: "100%" }} disabled>
+                            👻 Connect Phantom (Coming Soon)
+                        </button>
+                    </div>
+
+                    <div className="login-divider">or import private key</div>
+
+                    <input
+                        type="password"
+                        className="input-field"
+                        placeholder="Base64 encoded private key..."
+                        value={privateKey}
+                        onChange={e => setPrivateKey(e.target.value)}
+                    />
+                    <button
+                        className="btn btn-secondary mt-16"
+                        style={{ width: "100%" }}
+                        onClick={handleImport}
+                        disabled={!privateKey.trim()}
+                    >
+                        Import Key
+                    </button>
+
+                    {testUsers.length > 0 && (
+                        <>
+                            <div className="login-divider">test users (localnet only)</div>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                {testUsers.map(user => (
+                                    <button
+                                        key={user.id}
+                                        className="btn btn-secondary"
+                                        onClick={() => { onSelectTestUser(user); onClose(); }}
+                                    >
+                                        User {user.id} ({Math.round(user.starBalance / 1e9)} {TOKEN_NAME})
+                                    </button>
+                                ))}
+                            </div>
+                        </>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// Landing Page
+const LandingPage: React.FC<{ onLaunchApp: () => void }> = ({ onLaunchApp }) => (
+    <div className="app-container">
+        <div className="landing-hero">
+            <h1 className="landing-title">
+                Earn Stardust by<br />
+                <span className="text-gradient">Holding {TOKEN_NAME}</span>
+            </h1>
+            <p className="landing-subtitle">
+                The Stardust Protocol rewards token holders with continuous airdrops based on their holdings' USD value.
+                Simply hold {TOKEN_NAME} and watch your stardust accumulate.
+            </p>
+            <div className="landing-cta">
+                <button className="btn btn-primary" onClick={onLaunchApp}>
+                    Launch App →
+                </button>
+                <a href="#how-it-works" className="btn btn-secondary">
+                    Learn More
+                </a>
+            </div>
+        </div>
+
+        <div className="features-grid" id="how-it-works">
+            <div className="feature-card">
+                <div className="feature-icon">⭐</div>
+                <h3 className="feature-title">{TOKEN_NAME} Token</h3>
+                <p className="feature-desc">
+                    The core utility token of the ecosystem. Your holdings determine your earning power in the Stardust Protocol.
+                </p>
+            </div>
+            <div className="feature-card">
+                <div className="feature-icon">✨</div>
+                <h3 className="feature-title">Stardust Rewards</h3>
+                <p className="feature-desc">
+                    Earn stardust proportional to your {TOKEN_NAME} value. 1 USD worth = ~136 stardust per earning period.
+                </p>
+            </div>
+            <div className="feature-card">
+                <div className="feature-icon">🎰</div>
+                <h3 className="feature-title">SOL Redemption</h3>
+                <p className="feature-desc">
+                    Exchange your stardust for chances to win SOL rewards. Transparent probabilities, instant payouts.
+                </p>
+            </div>
+        </div>
+
+        <div className="card mt-32">
+            <div className="card-header">
+                <span className="card-title">Where Does the Value Come From?</span>
+            </div>
+            <p style={{ color: "var(--text-secondary)", lineHeight: 1.8 }}>
+                The Stardust Protocol is funded by protocol revenue streams including trading fees,
+                yield farming returns, and strategic partnerships. A portion of all revenue is
+                allocated to the stardust treasury, which backs the redemption system.
+                This creates a sustainable reward mechanism that benefits long-term holders.
+            </p>
+        </div>
+    </div>
+);
+
+// ============================================
+// MAIN APP
+// ============================================
+export function App() {
+    // State
+    const [page, setPage] = useState<"landing" | "app">("landing");
     const [activeTab, setActiveTab] = useState<"dashboard" | "treasury">("dashboard");
+    const [connected, setConnected] = useState(false);
+    const [publicKey, setPublicKey] = useState<string | null>(null);
+    const [userKeypair, setUserKeypair] = useState<Keypair | null>(null);
 
-    // Real treasury data from API
-    const [treasury, setTreasury] = useState<TreasuryData>({
-        totalValue: 0,
-        history: [],
-        tokens: [],
-    });
+    const [config, setConfig] = useState<Config | null>(null);
+    const [testUsers, setTestUsers] = useState<TestUser[]>([]);
+    const [stats, setStats] = useState<Stats | null>(null);
+    const [earnings, setEarnings] = useState<EarningsData | null>(null);
+    const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+    const [treasury, setTreasury] = useState<TreasuryData | null>(null);
+    const [winners, setWinners] = useState<WinnerEntry[]>([]);
 
-    // Fetch test users
+    const [claiming, setClaiming] = useState(false);
+    const [showLeaderboard, setShowLeaderboard] = useState(false);
+    const [showLogin, setShowLogin] = useState(false);
+
+    // Fetch initial data
     useEffect(() => {
         fetch("/api/test-users")
-            .then((r) => r.json())
+            .then(r => r.json())
             .then((data: any) => {
                 setTestUsers(data.users || []);
                 setConfig(data.config || null);
@@ -648,43 +595,23 @@ function App() {
             .catch(console.error);
     }, []);
 
-    // Connect with user
-    const connect = useCallback((user: TestUser) => {
-        const secretKeyBinary = atob(user.secretKey);
-        const secretKey = new Uint8Array(secretKeyBinary.length);
-        for (let i = 0; i < secretKeyBinary.length; i++) {
-            secretKey[i] = secretKeyBinary.charCodeAt(i);
-        }
-        const kp = Keypair.fromSecretKey(secretKey);
-        setUserKeypair(kp);
-        setPublicKey(user.publicKey);
-        setSelectedUser(user);
-        setConnected(true);
-        setEarningsHistory([]);
-    }, []);
-
-    const disconnect = useCallback(() => {
-        setPublicKey(null);
-        setSelectedUser(null);
-        setUserKeypair(null);
-        setConnected(false);
-        setEarnings(null);
-        setEarningsHistory([]);
-    }, []);
-
-    // Fetch global data including treasury
+    // Fetch global data
     const fetchData = useCallback(async () => {
         try {
             const [statsRes, lbRes, treasuryRes] = await Promise.all([
                 fetch("/api/stats"),
-                fetch("/api/leaderboard?limit=10"),
+                fetch("/api/leaderboard?limit=20"),
                 fetch("/api/treasury"),
             ]);
             setStats(await statsRes.json() as Stats);
             const lbData = await lbRes.json() as { leaderboard: LeaderboardEntry[] };
             setLeaderboard(lbData.leaderboard || []);
-            const treasuryData = await treasuryRes.json() as TreasuryData;
-            setTreasury(treasuryData);
+            const tData = await treasuryRes.json();
+            setTreasury({
+                ...tData,
+                apyTarget: 20,
+                currentApy: 18.5, // Calculate from real data
+            });
         } catch (e) {
             console.error("Failed to fetch data:", e);
         }
@@ -697,14 +624,6 @@ function App() {
             const res = await fetch(`/api/earnings/${publicKey}`);
             const data = await res.json();
             setEarnings(data);
-
-            // Add to history
-            setEarningsHistory((prev) => {
-                const earned = Number(BigInt(data.lifetimeEarned || "0") / BigInt(1e9));
-                const newPoint = { timestamp: Date.now(), value: earned };
-                const updated = [...prev, newPoint].slice(-30);
-                return updated;
-            });
         } catch (e) {
             console.error("Failed to fetch earnings:", e);
         }
@@ -712,84 +631,146 @@ function App() {
 
     // Polling
     useEffect(() => {
-        fetchData();
-        const interval = setInterval(fetchData, 5000);
-        return () => clearInterval(interval);
-    }, [fetchData]);
-
-    useEffect(() => {
-        if (connected) {
-            fetchEarnings();
-            const interval = setInterval(fetchEarnings, 2000);
+        if (page === "app") {
+            fetchData();
+            const interval = setInterval(fetchData, 5000);
             return () => clearInterval(interval);
         }
-    }, [connected, fetchEarnings]);
+    }, [page, fetchData]);
 
-    // Real claim handler - sends actual Solana transaction
-    const handleClaim = async () => {
-        if (!publicKey || !userKeypair || !config) {
-            console.error("No user connected or config missing");
-            return;
+    useEffect(() => {
+        if (connected && publicKey) {
+            fetchEarnings();
+            const interval = setInterval(fetchEarnings, 3000);
+            return () => clearInterval(interval);
         }
+    }, [connected, publicKey, fetchEarnings]);
+
+    // Connect with test user
+    const handleSelectTestUser = (user: TestUser) => {
+        try {
+            const secretKeyBinary = atob(user.secretKey);
+            const secretKey = new Uint8Array(secretKeyBinary.length);
+            for (let i = 0; i < secretKeyBinary.length; i++) {
+                secretKey[i] = secretKeyBinary.charCodeAt(i);
+            }
+            const kp = Keypair.fromSecretKey(secretKey);
+            setUserKeypair(kp);
+            setPublicKey(user.publicKey);
+            setConnected(true);
+        } catch (e) {
+            console.error("Failed to import key:", e);
+            alert("Failed to import key");
+        }
+    };
+
+    // Import private key
+    const handleImportKey = (key: string) => {
+        try {
+            const secretKeyBinary = atob(key);
+            const secretKey = new Uint8Array(secretKeyBinary.length);
+            for (let i = 0; i < secretKeyBinary.length; i++) {
+                secretKey[i] = secretKeyBinary.charCodeAt(i);
+            }
+            const kp = Keypair.fromSecretKey(secretKey);
+            setUserKeypair(kp);
+            setPublicKey(kp.publicKey.toBase58());
+            setConnected(true);
+            setShowLogin(false);
+        } catch (e) {
+            console.error("Failed to import key:", e);
+            alert("Invalid private key format");
+        }
+    };
+
+    // Disconnect
+    const handleDisconnect = () => {
+        setUserKeypair(null);
+        setPublicKey(null);
+        setConnected(false);
+        setEarnings(null);
+    };
+
+    // Claim handler
+    const handleClaim = async () => {
+        if (!userKeypair || !publicKey || !config) return;
 
         setClaiming(true);
         try {
-            // 1. Get signature data from backend
-            const sigResponse = await fetch("/api/signature", {
+            // Get signature from backend
+            const sigRes = await fetch("/api/signature", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ wallet: publicKey }),
             });
 
-            if (!sigResponse.ok) {
-                const err = await sigResponse.json() as { error?: string };
-                throw new Error(err.error || "Failed to get signature");
+            if (!sigRes.ok) {
+                throw new Error("Failed to get signature");
             }
 
-            const sigData = await sigResponse.json() as SignatureData;
-            console.log("Got signature data:", sigData);
+            const sigData = await sigRes.json() as {
+                signature: string;
+                message: string;
+                publicKey: string;
+                lifetimeEarned: string;
+                unclaimed: string;
+            };
 
-            // 2. Import necessary modules dynamically
-            const { Connection, Transaction, TransactionInstruction, PublicKey: PK, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } = await import("@solana/web3.js");
-            const bs58 = await import("bs58");
+            if (BigInt(sigData.unclaimed) <= 0n) {
+                alert("Nothing to claim");
+                return;
+            }
 
-            // 3. Create connection and build transaction
+            // Build transaction
             const connection = new Connection("http://localhost:8899", "confirmed");
+            const programId = new PublicKey(config.programId);
+            const userPubkey = new PublicKey(publicKey);
+            const statePda = new PublicKey(config.statePda);
+            const stardustMint = new PublicKey(config.stardustMint);
 
-            // Create Ed25519 verification instruction from backend data
+            // Build Ed25519 instruction
+            const signatureBytes = Uint8Array.from(atob(sigData.signature), c => c.charCodeAt(0));
+            const messageBytes = Uint8Array.from(atob(sigData.message), c => c.charCodeAt(0));
+            const authorityPubkeyBytes = Uint8Array.from(atob(sigData.publicKey), c => c.charCodeAt(0));
+
+            const ed25519Data = new Uint8Array(2 + 14 + 32 + 64 + messageBytes.length);
+            ed25519Data[0] = 1; // num_signatures
+            ed25519Data[1] = 0; // padding
+            const dataView = new DataView(ed25519Data.buffer);
+            dataView.setUint16(2, 48, true);  // signature offset
+            dataView.setUint16(4, 0xFFFF, true);
+            dataView.setUint16(6, 16, true);  // public key offset
+            dataView.setUint16(8, 0xFFFF, true);
+            dataView.setUint16(10, 112, true); // message offset
+            dataView.setUint16(12, messageBytes.length, true);
+            dataView.setUint16(14, 0xFFFF, true);
+            ed25519Data.set(authorityPubkeyBytes, 16);
+            ed25519Data.set(signatureBytes, 48);
+            ed25519Data.set(messageBytes, 112);
+
+            const ED25519_PROGRAM_ID = new PublicKey("Ed25519SigVerify111111111111111111111111111");
             const ed25519Ix = new TransactionInstruction({
-                programId: new PK(sigData.ed25519Instruction.programId),
+                programId: ED25519_PROGRAM_ID,
                 keys: [],
-                data: Buffer.from(sigData.ed25519Instruction.data, "base64"),
+                data: Buffer.from(ed25519Data),
             });
 
-            // Program constants
-            const programId = new PK(config.programId);
-            const statePda = new PK(config.statePda);
-            const stardustMint = new PK(config.stardustMint);
-            const userPubkey = new PK(publicKey);
-
-            // Derive user claim PDA
-            const [userClaimPda] = PK.findProgramAddressSync(
+            // Derive PDAs
+            const [userClaimPda] = PublicKey.findProgramAddressSync(
                 [Buffer.from("user_claim"), userPubkey.toBuffer()],
                 programId
             );
 
-            // Find user's stardust token account (ATA)
-            const { getAssociatedTokenAddress, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } = await import("@solana/spl-token");
+            const { getAssociatedTokenAddress, TOKEN_PROGRAM_ID } = await import("@solana/spl-token");
             const userTokenAccount = await getAssociatedTokenAddress(stardustMint, userPubkey);
 
-            // Build claim instruction data: [discriminator(8) | lifetime_earned(8)]
-            // Anchor discriminator for "claim_stardust" = first 8 bytes of sha256("global:claim_stardust")
-            // Computed: 70 a0 47 a3 6a fd 33 b3
+            // Build claim instruction
             const discriminator = Buffer.from([0x70, 0xa0, 0x47, 0xa3, 0x6a, 0xfd, 0x33, 0xb3]);
             const lifetimeEarned = BigInt(sigData.lifetimeEarned);
             const lifetimeEarnedBuffer = Buffer.alloc(8);
             lifetimeEarnedBuffer.writeBigUInt64LE(lifetimeEarned, 0);
-
             const claimIxData = Buffer.concat([discriminator, lifetimeEarnedBuffer]);
 
-            // Create claim instruction
             const claimIx = new TransactionInstruction({
                 programId,
                 keys: [
@@ -805,7 +786,7 @@ function App() {
                 data: claimIxData,
             });
 
-            // 4. Build and send transaction
+            // Build and send
             const tx = new Transaction();
             tx.add(ed25519Ix);
             tx.add(claimIx);
@@ -813,11 +794,8 @@ function App() {
             const { blockhash } = await connection.getLatestBlockhash();
             tx.recentBlockhash = blockhash;
             tx.feePayer = userPubkey;
-
-            // Sign with user keypair
             tx.sign(userKeypair);
 
-            // Send transaction
             const txSignature = await connection.sendRawTransaction(tx.serialize(), {
                 skipPreflight: false,
                 preflightCommitment: "confirmed",
@@ -825,7 +803,7 @@ function App() {
 
             console.log("Transaction sent:", txSignature);
 
-            // Wait for confirmation with blockhash strategy and longer timeout
+            // Wait for confirmation
             const latestBlockHash = await connection.getLatestBlockhash();
             const result = await connection.confirmTransaction({
                 blockhash: latestBlockHash.blockhash,
@@ -836,148 +814,190 @@ function App() {
             if (result.value.err) {
                 throw new Error(`Transaction failed: ${JSON.stringify(result.value.err)}`);
             }
-            console.log("Transaction confirmed!");
 
-            // 5. Notify backend of successful claim
             await fetch("/api/claim-confirmed", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ wallet: publicKey, signature: txSignature }),
             });
 
-            // Show success
-            alert(`🎉 Successfully claimed ${Number(sigData.unclaimed) / 1e9} STARDUST!\n\nTx: ${txSignature.slice(0, 20)}...`);
+            alert(`🎉 Successfully claimed ${Number(sigData.unclaimed) / 1e9} stardust!`);
+            fetchEarnings();
+            fetchData();
 
         } catch (error: any) {
             console.error("Claim failed:", error);
             alert(`Claim failed: ${error.message}`);
         } finally {
             setClaiming(false);
-            fetchEarnings();
         }
     };
 
-    // Global stats for display
-    const totalStarBalance = Number(stats?.totalStarBalance || 0) / 1e9;
-    const totalEarned = Number(BigInt(stats?.totalEarned || "0") / BigInt(1e9));
-    const totalClaimed = Number(BigInt(stats?.totalClaimed || "0") / BigInt(1e9));
+    // Redeem handler (placeholder)
+    const handleRedeem = async () => {
+        alert("Redemption coming soon! This will exchange stardust for random SOL rewards.");
+    };
+
+    // Render
+    if (page === "landing") {
+        return (
+            <>
+                <div className="app-background" />
+                <div className="app-container">
+                    <header className="header">
+                        <div className="logo">
+                            <div className="logo-icon">✦</div>
+                            <div>
+                                <div className="logo-text">GX402</div>
+                                <div className="logo-domain">{SITE_NAME}</div>
+                            </div>
+                        </div>
+                        <button className="btn btn-primary" onClick={() => setPage("app")}>
+                            Launch App
+                        </button>
+                    </header>
+                </div>
+                <LandingPage onLaunchApp={() => setPage("app")} />
+            </>
+        );
+    }
+
+    const unclaimedStardust = earnings ? Number(BigInt(earnings.unclaimed || "0")) / 1e9 : 0;
 
     return (
-        <div className="app">
-            <header className="header">
-                <div className="header-content">
+        <>
+            <div className="app-background" />
+            <div className="app-container">
+                {/* Header */}
+                <header className="header">
                     <div className="logo">
-                        <span className="logo-icon">✨</span>
-                        <h1>Stardust Protocol</h1>
+                        <div className="logo-icon">✦</div>
+                        <div>
+                            <div className="logo-text">GX402</div>
+                            <div className="logo-domain">{SITE_NAME}</div>
+                        </div>
                     </div>
+
                     <nav className="nav-tabs">
                         <button
                             className={`nav-tab ${activeTab === "dashboard" ? "active" : ""}`}
                             onClick={() => setActiveTab("dashboard")}
                         >
-                            📊 Dashboard
+                            Dashboard
                         </button>
                         <button
                             className={`nav-tab ${activeTab === "treasury" ? "active" : ""}`}
                             onClick={() => setActiveTab("treasury")}
                         >
-                            🏦 Treasury
+                            Treasury
                         </button>
                     </nav>
-                    <div className="header-right">
-                        <span className="network-badge">🔴 LOCALNET</span>
-                        {connected && publicKey && (
-                            <div className="wallet-connected">
-                                <span className="user-badge">User {selectedUser?.id}</span>
-                                <button onClick={disconnect} className="btn btn-sm">
-                                    Disconnect
+
+                    <div className="wallet-section">
+                        <NetworkBadge network="localnet" />
+                        {connected ? (
+                            <button className="btn-wallet connected" onClick={handleDisconnect}>
+                                <span className="wallet-address">
+                                    {publicKey?.slice(0, 4)}...{publicKey?.slice(-4)}
+                                </span>
+                                Disconnect
+                            </button>
+                        ) : (
+                            <button className="btn-wallet" onClick={() => setShowLogin(true)}>
+                                Connect Wallet
+                            </button>
+                        )}
+                    </div>
+                </header>
+
+                {/* Token Info */}
+                <TokenInfoBar config={config} stats={stats} />
+
+                {/* Main Content */}
+                {activeTab === "dashboard" && (
+                    <>
+                        {connected ? (
+                            <UserBalanceCard
+                                earnings={earnings}
+                                claiming={claiming}
+                                onClaim={handleClaim}
+                            />
+                        ) : (
+                            <div className="card" style={{ textAlign: "center", padding: 60 }}>
+                                <h2 style={{ marginBottom: 16 }}>Connect to View Your Dashboard</h2>
+                                <p style={{ color: "var(--text-muted)", marginBottom: 24 }}>
+                                    Connect your wallet to see your {TOKEN_NAME} balance and stardust earnings
+                                </p>
+                                <button className="btn btn-primary" onClick={() => setShowLogin(true)}>
+                                    Connect Wallet
                                 </button>
                             </div>
                         )}
-                    </div>
-                </div>
-            </header>
 
-            <main className="main">
-                {/* Global Stats Bar */}
-                <section className="stats-bar">
-                    <StatsCard
-                        icon="👥"
-                        label="Holders"
-                        value={stats?.totalHolders?.toString() || "0"}
-                    />
-                    <StatsCard
-                        icon="⭐"
-                        label="Total STAR"
-                        value={totalStarBalance.toFixed(0)}
-                        trend="up"
-                    />
-                    <StatsCard
-                        icon="✨"
-                        label="Stardust Earned"
-                        value={totalEarned.toLocaleString()}
-                        trend="up"
-                    />
-                    <StatsCard
-                        icon="💎"
-                        label="Claimed"
-                        value={totalClaimed.toLocaleString()}
-                    />
-                    <StatsCard
-                        icon="🏦"
-                        label="Treasury"
-                        value={`$${treasury.totalValue.toLocaleString()}`}
-                        trend="up"
-                    />
-                </section>
+                        <StardustInfoBar
+                            config={config}
+                            stats={stats}
+                            onShowLeaderboard={() => setShowLeaderboard(true)}
+                        />
 
-                {activeTab === "dashboard" && (
-                    <div className="dashboard-layout">
-                        {/* Left: User Panel */}
-                        <section className="panel user-panel">
-                            {!connected ? (
-                                <UserSelector
-                                    testUsers={testUsers}
-                                    selectedUser={selectedUser}
-                                    onSelect={connect}
-                                />
-                            ) : (
-                                <UserDashboard
-                                    earnings={earnings}
-                                    earningsHistory={earningsHistory}
-                                    onClaim={handleClaim}
-                                    claiming={claiming}
-                                />
-                            )}
-                        </section>
-
-                        {/* Right: Leaderboard */}
-                        <section className="panel leaderboard-panel">
-                            <div className="panel-header">
-                                <h2>🏆 Leaderboard</h2>
-                                <span className="live-indicator">● LIVE</span>
-                            </div>
-                            <Leaderboard entries={leaderboard} currentWallet={publicKey} />
-                        </section>
-                    </div>
+                        {connected && (
+                            <RedemptionSection
+                                unclaimedStardust={unclaimedStardust}
+                                onRedeem={handleRedeem}
+                                winners={winners}
+                            />
+                        )}
+                    </>
                 )}
 
                 {activeTab === "treasury" && (
-                    <div className="treasury-layout">
-                        <TreasuryPanel treasury={treasury} />
-                    </div>
+                    <TreasurySection treasury={treasury} />
                 )}
 
-                {/* Footer Info */}
-                <footer className="footer">
-                    <span>Program: {config?.programId?.slice(0, 16) || "..."}...</span>
-                    <span>STAR Mint: {config?.starTokenMint?.slice(0, 16) || "..."}...</span>
-                    <span>STARDUST Mint: {config?.stardustMint?.slice(0, 16) || "..."}...</span>
+                {/* Footer */}
+                <footer style={{
+                    textAlign: "center",
+                    padding: "40px 0",
+                    color: "var(--text-muted)",
+                    borderTop: "1px solid var(--border-subtle)",
+                    marginTop: 60,
+                    fontSize: "0.8rem"
+                }}>
+                    <div style={{ marginBottom: 8 }}>
+                        Program: {config?.programId?.slice(0, 8)}...{config?.programId?.slice(-4)}
+                    </div>
+                    <div>
+                        © 2026 {SITE_NAME} — Stardust Protocol
+                    </div>
                 </footer>
-            </main>
-        </div>
+            </div>
+
+            {/* Modals */}
+            <LeaderboardModal
+                open={showLeaderboard}
+                onClose={() => setShowLeaderboard(false)}
+                leaderboard={leaderboard}
+                currentWallet={publicKey}
+            />
+
+            <LoginModal
+                open={showLogin}
+                onClose={() => setShowLogin(false)}
+                testUsers={testUsers}
+                onSelectTestUser={handleSelectTestUser}
+                onImportKey={handleImportKey}
+            />
+        </>
     );
 }
 
-// Mount
-createRoot(document.getElementById("root")!).render(<App />);
+// ============================================
+// MOUNT THE APP
+// ============================================
+import { createRoot } from "react-dom/client";
+
+const container = document.getElementById("root");
+if (container) {
+    const root = createRoot(container);
+    root.render(<App />);
+}

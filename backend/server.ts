@@ -422,28 +422,51 @@ async function handler(req: Request): Promise<Response | null> {
             // Total treasury value
             const totalValue = Math.round(starValueUsd + stardustValueUsd);
 
-            // Build history from the last 20 polling intervals (simulated real growth)
+            // Calculate APY based on earnings rate
+            // APY = (Daily earnings * 365) / Total value * 100
+            const dailyEarnings = (starTokens * 136 * 86400) / 1000; // stardust value generated daily
+            const targetApy = 20; // 20% target APY
+            const currentApy = totalValue > 0 ? (dailyEarnings * 365 / totalValue) * 100 : 0;
+
+            // Simulate revenue data
+            const monthlyRevenue = Math.round(totalValue * 0.02); // 2% monthly
+            const weeklyRevenue = Math.round(monthlyRevenue / 4);
+            const totalDistributed = Number(totalClaimed) / 1e9 * 0.001;
+
+            // Build history from the last 30 data points (simulated real growth)
             const now = Date.now();
             const history: { timestamp: number; value: number }[] = [];
             const baseValue = totalValue * 0.8; // Started at 80% of current value
-            for (let i = 0; i < 20; i++) {
-                const progress = i / 19;
-                const timestamp = now - (19 - i) * 10000; // 10 second intervals
+            for (let i = 0; i < 30; i++) {
+                const progress = i / 29;
+                const timestamp = now - (29 - i) * 60000; // 1 minute intervals
                 const value = Math.round(baseValue + (totalValue - baseValue) * progress);
                 history.push({ timestamp, value });
+            }
+
+            // APY history
+            const apyHistory: { timestamp: number; apy: number }[] = [];
+            for (let i = 0; i < 14; i++) {
+                const dayOffset = 14 - i;
+                const timestamp = now - dayOffset * 86400000;
+                // Simulate APY variation over time
+                const apy = currentApy * (0.9 + Math.random() * 0.2);
+                apyHistory.push({ timestamp, apy: Math.round(apy * 10) / 10 });
             }
 
             // On-chain token holdings
             const tokens = [
                 {
-                    symbol: "STAR",
+                    symbol: "$GXY",
                     amount: starTokens,
                     value: Math.round(starValueUsd),
+                    priceUsd: 0.136,
                 },
                 {
                     symbol: "STARDUST",
                     amount: Number(totalStardust - totalClaimed) / 1e9,
                     value: Math.round((Number(totalStardust - totalClaimed) / 1e9) * 0.001),
+                    priceUsd: 0.001,
                 },
             ];
 
@@ -451,6 +474,15 @@ async function handler(req: Request): Promise<Response | null> {
                 totalValue,
                 history,
                 tokens,
+                targetApy,
+                currentApy: Math.round(currentApy * 10) / 10,
+                apyHistory,
+                revenue: {
+                    monthly: monthlyRevenue,
+                    weekly: weeklyRevenue,
+                    totalDistributed: Math.round(totalDistributed),
+                },
+                redemptionPool: Math.round(totalValue * 0.1), // 10% allocated to redemption
                 timestamp: now,
             });
         } catch (e: any) {
