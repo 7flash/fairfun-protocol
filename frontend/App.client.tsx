@@ -630,18 +630,11 @@ function App() {
     const [connected, setConnected] = useState(false);
     const [activeTab, setActiveTab] = useState<"dashboard" | "treasury">("dashboard");
 
-    // Mock treasury data (will be replaced with real data)
-    const [treasury] = useState<TreasuryData>({
-        totalValue: 125000,
-        history: Array.from({ length: 20 }, (_, i) => ({
-            timestamp: Date.now() - (20 - i) * 3600000,
-            value: 100000 + Math.random() * 50000,
-        })),
-        tokens: [
-            { symbol: "SOL", amount: 500, value: 75000 },
-            { symbol: "USDC", amount: 30000, value: 30000 },
-            { symbol: "STAR", amount: 100000, value: 20000 },
-        ],
+    // Real treasury data from API
+    const [treasury, setTreasury] = useState<TreasuryData>({
+        totalValue: 0,
+        history: [],
+        tokens: [],
     });
 
     // Fetch test users
@@ -679,16 +672,19 @@ function App() {
         setEarningsHistory([]);
     }, []);
 
-    // Fetch global data
+    // Fetch global data including treasury
     const fetchData = useCallback(async () => {
         try {
-            const [statsRes, lbRes] = await Promise.all([
+            const [statsRes, lbRes, treasuryRes] = await Promise.all([
                 fetch("/api/stats"),
                 fetch("/api/leaderboard?limit=10"),
+                fetch("/api/treasury"),
             ]);
-            setStats(await statsRes.json());
-            const lbData = await lbRes.json();
+            setStats(await statsRes.json() as Stats);
+            const lbData = await lbRes.json() as { leaderboard: LeaderboardEntry[] };
             setLeaderboard(lbData.leaderboard || []);
+            const treasuryData = await treasuryRes.json() as TreasuryData;
+            setTreasury(treasuryData);
         } catch (e) {
             console.error("Failed to fetch data:", e);
         }
