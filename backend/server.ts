@@ -104,6 +104,23 @@ async function fetchUserStarBalance(walletPubkey: string): Promise<bigint> {
 }
 
 /**
+ * Fetch real claimed STARDUST amount from on-chain token account
+ * This ensures we always have accurate data even if claim callbacks fail
+ */
+async function fetchClaimedStardust(walletPubkey: string): Promise<bigint> {
+    const stardustMint = new PublicKey(config.stardustMint);
+    const wallet = new PublicKey(walletPubkey);
+
+    try {
+        const ata = await getAssociatedTokenAddress(stardustMint, wallet);
+        return await getTokenBalance(ata.toBase58());
+    } catch (e) {
+        // User might not have claimed yet
+        return 0n;
+    }
+}
+
+/**
  * Calculate stardust earnings based on STAR token holdings
  * 1 STAR = 136 stardust per period (represents $136 price * 1 token)
  */
@@ -124,6 +141,12 @@ async function updateEarnings() {
                 `fetch_balance_${user.id}`
             );
 
+            // Fetch real claimed amount from on-chain stardust token account
+            const claimedOnChain = await m(
+                () => fetchClaimedStardust(user.publicKey),
+                `fetch_claimed_${user.id}`
+            );
+
             // Calculate earnings: (STAR balance / 1e9) * STARDUST_RATE
             const starTokens = starBalance / BigInt(1e9);
             const stardustThisPeriod = starTokens * STARDUST_RATE;
@@ -134,13 +157,13 @@ async function updateEarnings() {
             earningsStore.set(user.publicKey, {
                 wallet: user.publicKey,
                 lifetimeEarned: newLifetime,
-                claimed: existing?.claimed || 0n,
+                claimed: claimedOnChain, // Use on-chain data as source of truth
                 starBalance: starBalance,
                 lastUpdated: now,
             });
 
             console.log(
-                `  User ${user.id}: ${Number(starBalance) / 1e9} STAR -> +${Number(stardustThisPeriod) / 1e9} ✨`
+                `  User ${user.id}: ${Number(starBalance) / 1e9} STAR -> +${Number(stardustThisPeriod) / 1e9} ✨ (claimed: ${Number(claimedOnChain) / 1e9})`
             );
         }
 
