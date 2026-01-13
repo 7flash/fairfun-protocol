@@ -833,10 +833,83 @@ export function App() {
         }
     };
 
-    // Redeem handler (placeholder)
+    // Spin/Redeem handler
+    const [spinning, setSpinning] = useState(false);
+    const [lastSpinResult, setLastSpinResult] = useState<{
+        success: boolean;
+        rewardFormatted: string;
+        tierName: string;
+    } | null>(null);
+
     const handleRedeem = async () => {
-        alert("Redemption coming soon! This will exchange stardust for random SOL rewards.");
+        if (!publicKey) {
+            setShowLogin(true);
+            return;
+        }
+
+        setSpinning(true);
+        setLastSpinResult(null);
+
+        try {
+            const res = await fetch("/api/redemption/spin", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ wallet: publicKey }),
+            });
+
+            const result = await res.json();
+
+            if (!res.ok) {
+                alert(`Spin failed: ${result.error}`);
+                return;
+            }
+
+            setLastSpinResult({
+                success: true,
+                rewardFormatted: result.rewardFormatted,
+                tierName: result.tierName,
+            });
+
+            // Refresh data
+            fetchEarnings();
+            fetchWinners();
+
+            // Show result
+            setTimeout(() => {
+                alert(`🎉 ${result.tierName}! You won ${result.rewardFormatted}!`);
+            }, 500);
+
+        } catch (error: any) {
+            console.error("Spin failed:", error);
+            alert(`Spin failed: ${error.message}`);
+        } finally {
+            setSpinning(false);
+        }
     };
+
+    // Fetch recent winners
+    const fetchWinners = useCallback(async () => {
+        try {
+            const res = await fetch("/api/redemption/winners?limit=10");
+            const data = await res.json();
+            setWinners(data.winners?.map((w: any) => ({
+                wallet: w.wallet,
+                amount: w.rewardAmount / 1e9,
+                timestamp: w.timestamp,
+            })) || []);
+        } catch (e) {
+            console.error("Failed to fetch winners:", e);
+        }
+    }, []);
+
+    // Fetch winners on app load
+    useEffect(() => {
+        if (page === "app") {
+            fetchWinners();
+            const interval = setInterval(fetchWinners, 10000); // Every 10s
+            return () => clearInterval(interval);
+        }
+    }, [page, fetchWinners]);
 
     // Render
     if (page === "landing") {

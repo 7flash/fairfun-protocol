@@ -47,6 +47,43 @@ interface HolderEarnings {
 // In-memory store for earnings
 const earningsStore = new Map<string, HolderEarnings>();
 
+// ============================================
+// REDEMPTION SYSTEM
+// ============================================
+interface RedemptionWinner {
+    wallet: string;
+    rewardTier: number;
+    rewardAmount: number; // In lamports
+    timestamp: number;
+    txSignature?: string;
+}
+
+interface RedemptionConfig {
+    costPerSpin: bigint; // Stardust cost
+    probabilities: number[]; // Out of 10000 (basis points)
+    rewards: number[]; // SOL rewards in lamports
+    poolBalance: number; // Available SOL in lamports
+}
+
+// Redemption probabilities and rewards
+const REDEMPTION_CONFIG: RedemptionConfig = {
+    costPerSpin: 1000n * BigInt(1e9), // 1000 stardust (in smallest units)
+    probabilities: [5000, 3000, 1500, 450, 50], // 50%, 30%, 15%, 4.5%, 0.5%
+    rewards: [
+        0.001 * 1e9,  // 0.001 SOL in lamports
+        0.01 * 1e9,   // 0.01 SOL
+        0.1 * 1e9,    // 0.1 SOL
+        1 * 1e9,      // 1 SOL
+        10 * 1e9,     // 10 SOL
+    ],
+    poolBalance: 100 * 1e9, // 100 SOL initial pool
+};
+
+// Winner history (last 100 winners)
+const redemptionWinners: RedemptionWinner[] = [];
+let totalSpins = 0;
+let totalDistributed = 0;
+
 // Loaded config
 let config: LocalConfig;
 let authority: Keypair;
@@ -598,7 +635,138 @@ async function handler(req: Request): Promise<Response | null> {
         }
     }
 
+    // ============================================
+    // REDEMPTION API ENDPOINTS
+    // ============================================
+
+    // GET /api/redemption/config - Get redemption configuration
+    if (method === "GET" && path === "/api/redemption/config") {
+        return json({
+            costPerSpin: REDEMPTION_CONFIG.costPerSpin.toString(),
+            costPerSpinFormatted: Number(REDEMPTION_CONFIG.costPerSpin / BigInt(1e9)),
+            probabilities: REDEMPTION_CONFIG.probabilities.map(p => (p / 100).toFixed(1) + "%"),
+            rewards: REDEMPTION_CONFIG.rewards.map(r => ({
+                lamports: r,
+                sol: r / 1e9,
+                formatted: (r / 1e9).toFixed(3) + " SOL",
+            })),
+            poolBalance: REDEMPTION_CONFIG.poolBalance,
+            poolBalanceFormatted: (REDEMPTION_CONFIG.poolBalance / 1e9).toFixed(2) + " SOL",
+            totalSpins,
+            totalDistributed,
+        });
+    }
+
+    // GET /api/redemption/winners - Get recent winners
+    if (method === "GET" && path === "/api/redemption/winners") {
+        const limit = Math.min(parseInt(url.searchParams.get("limit") || "20"), 100);
+        return json({
+            winners: redemptionWinners.slice(-limit).reverse().map(w => ({
+                ...w,
+                rewardFormatted: (w.rewardAmount / 1e9).toFixed(3) + " SOL",
+                walletShort: w.wallet.slice(0, 4) + "..." + w.wallet.slice(-4),
+                timeAgo: formatTimeAgo(w.timestamp),
+            })),
+            totalSpins,
+            totalDistributed,
+            totalDistributedFormatted: (totalDistributed / 1e9).toFixed(3) + " SOL",
+        });
+    }
+
+    // POST /api/redemption/spin - Spin the wheel
+    if (method === "POST" && path === "/api/redemption/spin") {
+        try {
+            const body = await req.json() as { wallet: string };
+            const wallet = body.wallet;
+
+            if (!wallet) {
+                return json({ error: "wallet required" }, 400);
+            }
+
+            // Check user has enough stardust
+            const earnings = earningsStore.get(wallet);
+            if (!earnings) {
+                return json({ error: "no earnings found" }, 404);
+            }
+
+            const unclaimed = earnings.lifetimeEarned - earnings.claimed;
+            if (unclaimed < REDEMPTION_CONFIG.costPerSpin) {
+                return json({
+                    error: "insufficient stardust",
+                    required: REDEMPTION_CONFIG.costPerSpin.toString(),
+                    available: unclaimed.toString(),
+                }, 400);
+            }
+
+            // Deduct stardust cost
+            earnings.claimed += REDEMPTION_CONFIG.costPerSpin;
+
+            // Generate random outcome
+            const random = Math.floor(Math.random() * 10000);
+            let cumulativeProb = 0;
+            let rewardTier = 0;
+
+            for (let i = 0; i < REDEMPTION_CONFIG.probabilities.length; i++) {
+                cumulativeProb += REDEMPTION_CONFIG.probabilities[i];
+                if (random < cumulativeProb) {
+                    rewardTier = i;
+                    break;
+                }
+            }
+
+            const rewardAmount = REDEMPTION_CONFIG.rewards[rewardTier];
+
+            // Update stats
+            totalSpins++;
+            totalDistributed += rewardAmount;
+            REDEMPTION_CONFIG.poolBalance -= rewardAmount;
+
+            // Record winner
+            const winner: RedemptionWinner = {
+                wallet,
+                rewardTier,
+                rewardAmount,
+                timestamp: Date.now(),
+            };
+
+            redemptionWinners.push(winner);
+
+            // Keep only last 100 winners
+            if (redemptionWinners.length > 100) {
+                redemptionWinners.shift();
+            }
+
+            console.log(`🎰 SPIN #${totalSpins}: ${wallet.slice(0, 8)}... won ${(rewardAmount / 1e9).toFixed(3)} SOL (tier ${rewardTier})`);
+
+            return json({
+                success: true,
+                spinNumber: totalSpins,
+                rewardTier,
+                rewardAmount,
+                rewardFormatted: (rewardAmount / 1e9).toFixed(3) + " SOL",
+                tierName: ["Common", "Uncommon", "Rare", "Epic", "Legendary"][rewardTier],
+                newUnclaimedStardust: (earnings.lifetimeEarned - earnings.claimed).toString(),
+                poolRemaining: REDEMPTION_CONFIG.poolBalance,
+            });
+        } catch (e: any) {
+            console.error("Spin error:", e);
+            return json({ error: e.message || "spin failed" }, 500);
+        }
+    }
+
     return null;
+}
+
+// Helper function for time ago
+function formatTimeAgo(timestamp: number): string {
+    const seconds = Math.floor((Date.now() - timestamp) / 1000);
+    if (seconds < 60) return `${seconds}s ago`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
 }
 
 serve(handler);
