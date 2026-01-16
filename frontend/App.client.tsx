@@ -458,6 +458,158 @@ const RedemptionSection: React.FC<{
     );
 };
 
+// APY Calculator Section
+const APYCalculator: React.FC = () => {
+    const [dailyRevenue, setDailyRevenue] = useState<string>("1000");
+    const [gxyHoldings, setGxyHoldings] = useState<string>("10000000");
+    const [marketCap, setMarketCap] = useState<string>("136000000");
+
+    // Fixed values
+    const PRICE_PER_CLAIM = 1_000_000; // 1M stardust
+    const TOTAL_SUPPLY = 1_000_000_000;
+
+    // Parse inputs
+    const dailyRevenueNum = parseFloat(dailyRevenue) || 0;
+    const gxyHoldingsNum = parseFloat(gxyHoldings) || 0;
+    const marketCapNum = parseFloat(marketCap) || 1;
+
+    // Calculations
+    const tokenPrice = marketCapNum / TOTAL_SUPPLY;
+    const holdingsValue = gxyHoldingsNum * tokenPrice;
+    const holdingsPercentage = (gxyHoldingsNum / TOTAL_SUPPLY) * 100;
+
+    // Stardust earned per day based on USD value (1 USD = ~136 stardust/period from the constant)
+    // But for APY, we're looking at the treasury distribution
+    const dailyStardustEarnings = holdingsValue * 136; // Stardust per day approximation
+
+    // How many claims can user make per day
+    const claimsPerDay = dailyStardustEarnings / PRICE_PER_CLAIM;
+
+    // User's share of daily treasury revenue
+    const dailyUserShare = dailyRevenueNum * (holdingsPercentage / 100);
+
+    // Annual yields
+    const annualUserYield = dailyUserShare * 365;
+    const apyPercentage = holdingsValue > 0 ? (annualUserYield / holdingsValue) * 100 : 0;
+
+    return (
+        <div className="apy-calculator-section">
+            <div className="apy-calc-title">📊 APY Calculator</div>
+            <div className="apy-calc-desc">
+                Calculate your expected annual yield based on your {TOKEN_NAME} holdings and protocol parameters.
+            </div>
+
+            <div className="apy-calc-grid">
+                {/* Input Fields */}
+                <div className="apy-calc-inputs">
+                    <div className="apy-input-group">
+                        <label className="apy-input-label">
+                            <Tooltip text="Daily revenue that flows into the treasury for distribution to holders">
+                                Daily Treasury Revenue ($)
+                            </Tooltip>
+                        </label>
+                        <input
+                            type="number"
+                            className="input-field"
+                            value={dailyRevenue}
+                            onChange={e => setDailyRevenue(e.target.value)}
+                            placeholder="1000"
+                        />
+                    </div>
+
+                    <div className="apy-input-group">
+                        <label className="apy-input-label">
+                            <Tooltip text="Your total GXY token holdings. This determines your share of rewards.">
+                                Your {TOKEN_NAME} Holdings
+                            </Tooltip>
+                        </label>
+                        <input
+                            type="number"
+                            className="input-field"
+                            value={gxyHoldings}
+                            onChange={e => setGxyHoldings(e.target.value)}
+                            placeholder="10000000"
+                        />
+                    </div>
+
+                    <div className="apy-input-group">
+                        <label className="apy-input-label">
+                            <Tooltip text="Total market cap of GXY token. Used to derive the token price (Market Cap / Total Supply).">
+                                {TOKEN_NAME} Market Cap ($)
+                            </Tooltip>
+                        </label>
+                        <input
+                            type="number"
+                            className="input-field"
+                            value={marketCap}
+                            onChange={e => setMarketCap(e.target.value)}
+                            placeholder="136000000"
+                        />
+                    </div>
+
+                    <div className="apy-input-group faded">
+                        <label className="apy-input-label">Price per Claim (Fixed)</label>
+                        <div className="apy-fixed-value">1,000,000 ✨ stardust</div>
+                    </div>
+                </div>
+
+                {/* Results */}
+                <div className="apy-calc-results">
+                    <div className="apy-result-card main">
+                        <div className="apy-result-value">{apyPercentage.toFixed(2)}%</div>
+                        <div className="apy-result-label">Estimated APY</div>
+                    </div>
+
+                    <div className="apy-result-row">
+                        <div className="apy-result-card">
+                            <div className="apy-result-value small">${tokenPrice.toFixed(6)}</div>
+                            <div className="apy-result-label">{TOKEN_NAME} Price</div>
+                        </div>
+                        <div className="apy-result-card">
+                            <div className="apy-result-value small">${holdingsValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+                            <div className="apy-result-label">Your Holdings Value</div>
+                        </div>
+                    </div>
+
+                    <div className="apy-result-row">
+                        <div className="apy-result-card">
+                            <div className="apy-result-value small">{holdingsPercentage.toFixed(4)}%</div>
+                            <div className="apy-result-label">Supply Ownership</div>
+                        </div>
+                        <div className="apy-result-card">
+                            <div className="apy-result-value small">${dailyUserShare.toFixed(2)}</div>
+                            <div className="apy-result-label">Daily Yield</div>
+                        </div>
+                    </div>
+
+                    <div className="apy-result-row">
+                        <div className="apy-result-card">
+                            <div className="apy-result-value small">{dailyStardustEarnings.toLocaleString(undefined, { maximumFractionDigits: 0 })} ✨</div>
+                            <div className="apy-result-label">Daily Stardust</div>
+                        </div>
+                        <div className="apy-result-card">
+                            <div className="apy-result-value small">{claimsPerDay.toFixed(2)}</div>
+                            <div className="apy-result-label">Claims/Day</div>
+                        </div>
+                    </div>
+
+                    <div className="apy-summary">
+                        <div className="apy-summary-row">
+                            <span>Annual Yield:</span>
+                            <span className="text-gold">${annualUserYield.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div className="apy-calc-note">
+                <strong>Note:</strong> This is an estimate based on current parameters. Actual yields depend on
+                total claims, treasury performance, and your claim frequency. APY assumes you claim all available rewards.
+            </div>
+        </div>
+    );
+};
+
 // Login/Connect Modal
 const LoginModal: React.FC<{
     open: boolean;
@@ -595,7 +747,7 @@ const LandingPage: React.FC<{ onLaunchApp: () => void }> = ({ onLaunchApp }) => 
 export function App() {
     // State
     const [page, setPage] = useState<"landing" | "app">("landing");
-    const [activeTab, setActiveTab] = useState<"dashboard" | "treasury">("dashboard");
+    const [activeTab, setActiveTab] = useState<"dashboard" | "treasury" | "calculator">("dashboard");
     const [connected, setConnected] = useState(false);
     const [publicKey, setPublicKey] = useState<string | null>(null);
     const [userKeypair, setUserKeypair] = useState<Keypair | null>(null);
@@ -992,6 +1144,12 @@ export function App() {
                         >
                             Treasury
                         </button>
+                        <button
+                            className={`nav-tab ${activeTab === "calculator" ? "active" : ""}`}
+                            onClick={() => setActiveTab("calculator")}
+                        >
+                            APY Calculator
+                        </button>
                     </nav>
 
                     <div className="wallet-section">
@@ -1054,6 +1212,10 @@ export function App() {
 
                 {activeTab === "treasury" && (
                     <TreasurySection treasury={treasury} />
+                )}
+
+                {activeTab === "calculator" && (
+                    <APYCalculator />
                 )}
 
                 {/* Footer */}
