@@ -465,38 +465,66 @@ const APYCalculator: React.FC = () => {
     const [marketCap, setMarketCap] = useState<string>("136000000");
 
     // Fixed values
-    const PRICE_PER_CLAIM = 1_000_000; // 1M stardust
+    const PRICE_PER_CLAIM = 1_000_000; // 1M stardust per STAR NFT
     const TOTAL_SUPPLY = 1_000_000_000;
+
+    // NFT Rarity Tiers with treasury % ranges
+    const RARITY_TIERS = [
+        { name: "Common", probability: 50, minPct: 0.001, maxPct: 0.005, color: "#94a3b8", emoji: "⚪" },
+        { name: "Uncommon", probability: 30, minPct: 0.005, maxPct: 0.02, color: "#22c55e", emoji: "🟢" },
+        { name: "Rare", probability: 15, minPct: 0.02, maxPct: 0.1, color: "#3b82f6", emoji: "🔷" },
+        { name: "Epic", probability: 4.5, minPct: 0.1, maxPct: 0.5, color: "#a855f7", emoji: "💎" },
+        { name: "Legendary", probability: 0.5, minPct: 0.5, maxPct: 2, color: "#fbbf24", emoji: "🌟" },
+    ];
 
     // Parse inputs
     const dailyRevenueNum = parseFloat(dailyRevenue) || 0;
     const gxyHoldingsNum = parseFloat(gxyHoldings) || 0;
     const marketCapNum = parseFloat(marketCap) || 1;
 
-    // Calculations
+    // Basic calculations
     const tokenPrice = marketCapNum / TOTAL_SUPPLY;
     const holdingsValue = gxyHoldingsNum * tokenPrice;
     const holdingsPercentage = (gxyHoldingsNum / TOTAL_SUPPLY) * 100;
 
-    // Stardust earned per day based on USD value (1 USD = ~136 stardust/period from the constant)
-    // But for APY, we're looking at the treasury distribution
-    const dailyStardustEarnings = holdingsValue * 136; // Stardust per day approximation
-
-    // How many claims can user make per day
+    // Stardust earned per day (holding-based accumulation)
+    const dailyStardustEarnings = holdingsValue * 136;
     const claimsPerDay = dailyStardustEarnings / PRICE_PER_CLAIM;
 
-    // User's share of daily treasury revenue
-    const dailyUserShare = dailyRevenueNum * (holdingsPercentage / 100);
+    // Calculate daily earnings range based on luck
+    // Worst case: all Common NFTs (avgPct = 0.003%)
+    // Best case: all Legendary NFTs (avgPct = 1.25%)
+    const avgCommonPct = (RARITY_TIERS[0].minPct + RARITY_TIERS[0].maxPct) / 2;
+    const avgLegendaryPct = (RARITY_TIERS[4].minPct + RARITY_TIERS[4].maxPct) / 2;
 
-    // Annual yields
-    const annualUserYield = dailyUserShare * 365;
-    const apyPercentage = holdingsValue > 0 ? (annualUserYield / holdingsValue) * 100 : 0;
+    // Expected treasury value = daily revenue * 30 days buffer (assumed)
+    const estimatedTreasuryValue = dailyRevenueNum * 30;
+
+    // Daily earnings = claims * treasury % * treasury value
+    const dailyEarningsMin = claimsPerDay * (avgCommonPct / 100) * estimatedTreasuryValue;
+    const dailyEarningsMax = claimsPerDay * (avgLegendaryPct / 100) * estimatedTreasuryValue;
+
+    // Calculate expected average (weighted by probability)
+    const expectedAvgPct = RARITY_TIERS.reduce((acc, tier) => {
+        const avgPct = (tier.minPct + tier.maxPct) / 2;
+        return acc + (tier.probability / 100) * avgPct;
+    }, 0);
+    const dailyEarningsExpected = claimsPerDay * (expectedAvgPct / 100) * estimatedTreasuryValue;
+
+    // APY calculations
+    const annualEarningsMin = dailyEarningsMin * 365;
+    const annualEarningsMax = dailyEarningsMax * 365;
+    const annualEarningsExpected = dailyEarningsExpected * 365;
+
+    const apyMin = holdingsValue > 0 ? (annualEarningsMin / holdingsValue) * 100 : 0;
+    const apyMax = holdingsValue > 0 ? (annualEarningsMax / holdingsValue) * 100 : 0;
+    const apyExpected = holdingsValue > 0 ? (annualEarningsExpected / holdingsValue) * 100 : 0;
 
     return (
         <div className="apy-calculator-section">
             <div className="apy-calc-title">📊 APY Calculator</div>
             <div className="apy-calc-desc">
-                Calculate your expected annual yield based on your {TOKEN_NAME} holdings and protocol parameters.
+                Calculate your expected returns from STAR NFT redemption. Earnings depend on NFT rarity luck!
             </div>
 
             <div className="apy-calc-grid">
@@ -504,7 +532,7 @@ const APYCalculator: React.FC = () => {
                 <div className="apy-calc-inputs">
                     <div className="apy-input-group">
                         <label className="apy-input-label">
-                            <Tooltip text="Daily revenue that flows into the treasury for distribution to holders">
+                            <Tooltip text="Daily revenue that fills the treasury. Users claim % of treasury when burning STAR NFTs.">
                                 Daily Treasury Revenue ($)
                             </Tooltip>
                         </label>
@@ -519,7 +547,7 @@ const APYCalculator: React.FC = () => {
 
                     <div className="apy-input-group">
                         <label className="apy-input-label">
-                            <Tooltip text="Your total GXY token holdings. This determines your share of rewards.">
+                            <Tooltip text="Your GXY holdings determine stardust accumulation rate. More GXY = more stardust = more STAR NFTs.">
                                 Your {TOKEN_NAME} Holdings
                             </Tooltip>
                         </label>
@@ -534,7 +562,7 @@ const APYCalculator: React.FC = () => {
 
                     <div className="apy-input-group">
                         <label className="apy-input-label">
-                            <Tooltip text="Total market cap of GXY token. Used to derive the token price (Market Cap / Total Supply).">
+                            <Tooltip text="Total market cap determines your GXY token price and holdings value.">
                                 {TOKEN_NAME} Market Cap ($)
                             </Tooltip>
                         </label>
@@ -548,67 +576,91 @@ const APYCalculator: React.FC = () => {
                     </div>
 
                     <div className="apy-input-group faded">
-                        <label className="apy-input-label">Price per Claim (Fixed)</label>
-                        <div className="apy-fixed-value">1,000,000 ✨ stardust</div>
+                        <label className="apy-input-label">Stardust per STAR NFT</label>
+                        <div className="apy-fixed-value">1,000,000 ✨</div>
                     </div>
                 </div>
 
-                {/* Results */}
+                {/* Results - Daily Earnings First! */}
                 <div className="apy-calc-results">
-                    <div className="apy-result-card main">
-                        <div className="apy-result-value">{apyPercentage.toFixed(2)}%</div>
-                        <div className="apy-result-label">Estimated APY</div>
+                    {/* Primary: Daily Earnings Range */}
+                    <div className="apy-result-card featured">
+                        <div className="apy-range-label">Daily Earnings</div>
+                        <div className="apy-range-values">
+                            <span className="apy-range-min">${dailyEarningsMin.toFixed(2)}</span>
+                            <span className="apy-range-separator">→</span>
+                            <span className="apy-range-max">${dailyEarningsMax.toFixed(2)}</span>
+                        </div>
+                        <div className="apy-range-badges">
+                            <span className="tier-badge common">Common luck</span>
+                            <span className="tier-badge legendary">Legendary luck</span>
+                        </div>
                     </div>
 
+                    {/* Expected (Probability Weighted) */}
+                    <div className="apy-result-card expected">
+                        <div className="apy-result-value">${dailyEarningsExpected.toFixed(2)}/day</div>
+                        <div className="apy-result-label">Expected Daily (Avg Luck)</div>
+                    </div>
+
+                    {/* APY Range */}
+                    <div className="apy-result-card">
+                        <div className="apy-range-display">
+                            <span className="apy-value-small">{apyMin.toFixed(2)}%</span>
+                            <span className="apy-range-sep">-</span>
+                            <span className="apy-value-small highlight">{apyMax.toFixed(2)}%</span>
+                        </div>
+                        <div className="apy-result-label">APY Range (luck dependent)</div>
+                    </div>
+
+                    {/* Stats Row */}
                     <div className="apy-result-row">
-                        <div className="apy-result-card">
-                            <div className="apy-result-value small">${tokenPrice.toFixed(6)}</div>
-                            <div className="apy-result-label">{TOKEN_NAME} Price</div>
+                        <div className="apy-result-card mini">
+                            <div className="apy-result-value small">{claimsPerDay.toFixed(1)}</div>
+                            <div className="apy-result-label">NFTs/Day</div>
                         </div>
-                        <div className="apy-result-card">
-                            <div className="apy-result-value small">${holdingsValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
-                            <div className="apy-result-label">Your Holdings Value</div>
+                        <div className="apy-result-card mini">
+                            <div className="apy-result-value small">${holdingsValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                            <div className="apy-result-label">Holdings Value</div>
                         </div>
-                    </div>
-
-                    <div className="apy-result-row">
-                        <div className="apy-result-card">
-                            <div className="apy-result-value small">{holdingsPercentage.toFixed(4)}%</div>
-                            <div className="apy-result-label">Supply Ownership</div>
-                        </div>
-                        <div className="apy-result-card">
-                            <div className="apy-result-value small">${dailyUserShare.toFixed(2)}</div>
-                            <div className="apy-result-label">Daily Yield</div>
-                        </div>
-                    </div>
-
-                    <div className="apy-result-row">
-                        <div className="apy-result-card">
-                            <div className="apy-result-value small">{dailyStardustEarnings.toLocaleString(undefined, { maximumFractionDigits: 0 })} ✨</div>
-                            <div className="apy-result-label">Daily Stardust</div>
-                        </div>
-                        <div className="apy-result-card">
-                            <div className="apy-result-value small">{claimsPerDay.toFixed(2)}</div>
-                            <div className="apy-result-label">Claims/Day</div>
-                        </div>
-                    </div>
-
-                    <div className="apy-summary">
-                        <div className="apy-summary-row">
-                            <span>Annual Yield:</span>
-                            <span className="text-gold">${annualUserYield.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                        <div className="apy-result-card mini">
+                            <div className="apy-result-value small">${estimatedTreasuryValue.toLocaleString()}</div>
+                            <div className="apy-result-label">Est. Treasury</div>
                         </div>
                     </div>
                 </div>
             </div>
 
+            {/* NFT Rarity Breakdown */}
+            <div className="nft-rarity-section">
+                <div className="card-title" style={{ marginBottom: 12 }}>🎲 STAR NFT Rarity Tiers</div>
+                <div className="rarity-tiers-grid">
+                    {RARITY_TIERS.map(tier => (
+                        <div key={tier.name} className="rarity-tier-item" style={{ borderColor: tier.color }}>
+                            <div className="rarity-tier-header">
+                                <span className="rarity-emoji">{tier.emoji}</span>
+                                <span className="rarity-name" style={{ color: tier.color }}>{tier.name}</span>
+                            </div>
+                            <div className="rarity-probability">{tier.probability}% chance</div>
+                            <div className="rarity-treasury">
+                                Claims {tier.minPct}% - {tier.maxPct}%
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {/* How It Works */}
             <div className="apy-calc-note">
-                <strong>Note:</strong> This is an estimate based on current parameters. Actual yields depend on
-                total claims, treasury performance, and your claim frequency. APY assumes you claim all available rewards.
+                <strong>How it works:</strong><br />
+                1️⃣ Hold {TOKEN_NAME} → Accumulate stardust passively<br />
+                2️⃣ Exchange 1M stardust → Mint random rarity STAR NFT<br />
+                3️⃣ Burn STAR NFT → Claim % of treasury (time it for max value!)
             </div>
         </div>
     );
 };
+
 
 // Login/Connect Modal
 const LoginModal: React.FC<{

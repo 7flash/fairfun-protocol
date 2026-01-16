@@ -3322,6 +3322,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "star-nft"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang 0.29.0",
+ "anchor-spl 0.29.0",
+]
+
+[[package]]
 name = "stardust"
 version = "0.1.0"
 dependencies = [

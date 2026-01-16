@@ -8,10 +8,12 @@ skip-lint = false
 [programs.localnet]
 stardust = "GYQP75VdPpCU1xPsJS7CUkcBqzL718j7ihNmgJ3VESd7"
 redemption = "GXY4Red3mPt1onXkV1C2A3m5dR7xFdZiP8A9gN7K4bE5"
+star_nft = "STAR1NFTxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 [programs.devnet]
 stardust = "GYQP75VdPpCU1xPsJS7CUkcBqzL718j7ihNmgJ3VESd7"
 redemption = "GXY4Red3mPt1onXkV1C2A3m5dR7xFdZiP8A9gN7K4bE5"
+star_nft = "STAR1NFTxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 [registry]
 url = "https://api.apr.dev"
