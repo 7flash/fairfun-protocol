@@ -375,14 +375,32 @@ const RedemptionSection: React.FC<{
     unclaimedStardust: number;
     onRedeem: () => void;
     winners: WinnerEntry[];
-}> = ({ unclaimedStardust, onRedeem, winners }) => {
+    spinning?: boolean;
+}> = ({ unclaimedStardust, onRedeem, winners, spinning = false }) => {
     const probabilities = [
-        { amount: "0.001 SOL", chance: "50%" },
-        { amount: "0.01 SOL", chance: "30%" },
-        { amount: "0.1 SOL", chance: "15%" },
-        { amount: "1 SOL", chance: "4.5%" },
-        { amount: "10 SOL", chance: "0.5%" },
+        { amount: "0.001 SOL", chance: "50%", tier: "common" },
+        { amount: "0.01 SOL", chance: "30%", tier: "uncommon" },
+        { amount: "0.1 SOL", chance: "15%", tier: "rare" },
+        { amount: "1 SOL", chance: "4.5%", tier: "epic" },
+        { amount: "10 SOL", chance: "0.5%", tier: "legendary" },
     ];
+
+    // Get tier from amount
+    const getTier = (amount: number): string => {
+        if (amount >= 10) return "legendary";
+        if (amount >= 1) return "epic";
+        if (amount >= 0.1) return "rare";
+        if (amount >= 0.01) return "uncommon";
+        return "common";
+    };
+
+    const getTierEmoji = (amount: number): string => {
+        if (amount >= 10) return "🌟";
+        if (amount >= 1) return "💎";
+        if (amount >= 0.1) return "🔷";
+        if (amount >= 0.01) return "🟢";
+        return "⚪";
+    };
 
     return (
         <div className="redemption-section">
@@ -396,33 +414,43 @@ const RedemptionSection: React.FC<{
                     <div key={p.amount} className="probability-item">
                         <div className="probability-amount">{p.amount}</div>
                         <div className="probability-chance">{p.chance}</div>
+                        <div className={`tier-badge ${p.tier}`} style={{ marginTop: 6 }}>{p.tier}</div>
                     </div>
                 ))}
             </div>
 
             <button
-                className="btn btn-gold"
+                className={`btn btn-gold ${spinning ? 'spinning' : ''}`}
                 onClick={onRedeem}
-                disabled={unclaimedStardust < 1000}
+                disabled={unclaimedStardust < 1000 || spinning}
                 style={{ width: "100%", marginBottom: 24 }}
             >
-                🎲 Spin (1000 ✨)
+                {spinning ? '🎲 Spinning...' : '🎲 Spin (1000 ✨)'}
             </button>
 
-            <div className="card-title mb-8">Recent Winners</div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                <div className="card-title">Recent Winners</div>
+                <div className="live-indicator">
+                    <div className="live-dot" />
+                    LIVE
+                </div>
+            </div>
             <div className="winner-feed">
                 {winners.length === 0 ? (
                     <div style={{ color: "var(--text-muted)", textAlign: "center", padding: 20 }}>
                         No winners yet. Be the first!
                     </div>
                 ) : winners.map((w, i) => (
-                    <div key={i} className="winner-item">
-                        <div className="winner-avatar">🎉</div>
+                    <div key={i} className={`winner-item ${i === 0 ? 'new-winner' : ''}`}>
+                        <div className="winner-avatar">{getTierEmoji(w.amount)}</div>
                         <div className="winner-info">
                             <div className="winner-wallet">{w.wallet.slice(0, 4)}...{w.wallet.slice(-4)}</div>
                             <div className="winner-time">{new Date(w.timestamp).toLocaleTimeString()}</div>
                         </div>
-                        <div className="winner-amount">+{w.amount} SOL</div>
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+                            <div className="winner-amount">+{w.amount.toFixed(3)} SOL</div>
+                            <div className={`tier-badge ${getTier(w.amount)}`}>{getTier(w.amount)}</div>
+                        </div>
                     </div>
                 ))}
             </div>
@@ -1018,6 +1046,7 @@ export function App() {
                                 unclaimedStardust={unclaimedStardust}
                                 onRedeem={handleRedeem}
                                 winners={winners}
+                                spinning={spinning}
                             />
                         )}
                     </>
