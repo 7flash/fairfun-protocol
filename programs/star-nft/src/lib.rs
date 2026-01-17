@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::hash::hash;
 use anchor_spl::token::{self, Burn, Token, TokenAccount, Mint};
 
-declare_id!("STAR1NFTxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+declare_id!("HxqX7EZCWbYvjrZDJaVtU5y3ZjVXMEccWiahao9MPeKB");
 
 /// STAR NFT Program: Two-step redemption system
 /// 
