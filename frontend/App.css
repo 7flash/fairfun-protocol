@@ -5,18 +5,18 @@
 
 /* CSS Variables */
 :root {
-  /* Colors - Premium Dark Theme */
-  --bg-primary: #0a0a0f;
-  --bg-secondary: #12121a;
-  --bg-tertiary: #1a1a26;
-  --bg-card: rgba(20, 20, 32, 0.8);
-  --bg-card-hover: rgba(26, 26, 42, 0.9);
+  /* Colors - Minimalist Dark Theme */
+  --bg-primary: #0a0d0f;
+  --bg-secondary: #0f1419;
+  --bg-tertiary: #151d24;
+  --bg-card: rgba(15, 25, 32, 0.85);
+  --bg-card-hover: rgba(20, 35, 45, 0.9);
 
-  /* Accent Colors */
-  --accent-primary: #6366f1;
-  --accent-secondary: #8b5cf6;
-  --accent-gradient: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a855f7 100%);
-  --accent-glow: rgba(99, 102, 241, 0.3);
+  /* Accent Colors - Teal/Cyan */
+  --accent-primary: #14b8a6;
+  --accent-secondary: #06b6d4;
+  --accent-gradient: linear-gradient(135deg, #14b8a6 0%, #06b6d4 50%, #0ea5e9 100%);
+  --accent-glow: rgba(20, 184, 166, 0.25);
 
   /* Gold/Reward Colors */
   --gold-primary: #fbbf24;
@@ -31,7 +31,7 @@
   /* Text */
   --text-primary: #ffffff;
   --text-secondary: rgba(255, 255, 255, 0.7);
-  --text-muted: rgba(255, 255, 255, 0.5);
+  --text-muted: rgba(255, 255, 255, 0.45);
 
   /* Borders */
   --border-subtle: rgba(255, 255, 255, 0.06);
@@ -45,9 +45,9 @@
 
   /* Radius */
   --radius-sm: 6px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 24px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
 
   /* Transitions */
   --transition-fast: 150ms ease;
@@ -89,8 +89,8 @@ body {
   inset: 0;
   z-index: -1;
   background:
-    radial-gradient(ellipse at 20% 20%, rgba(99, 102, 241, 0.08) 0%, transparent 50%),
-    radial-gradient(ellipse at 80% 80%, rgba(139, 92, 246, 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse at 20% 20%, rgba(20, 184, 166, 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 80%, rgba(6, 182, 212, 0.05) 0%, transparent 50%),
     var(--bg-primary);
 }
 
@@ -1675,4 +1675,133 @@ body {
   font-size: 0.7rem;
   color: var(--text-secondary);
   font-weight: 500;
+}
+
+/* ============================================
+   SPINNING WHEEL
+   ============================================ */
+.wheel-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 24px 0;
+}
+
+.spinning-wheel {
+  width: 180px;
+  height: 180px;
+  position: relative;
+}
+
+.wheel-svg {
+  width: 100%;
+  height: 100%;
+  transition: transform 4s cubic-bezier(0.17, 0.67, 0.12, 0.99);
+}
+
+.wheel-svg.spinning {
+  animation: wheel-spin 3s cubic-bezier(0.17, 0.67, 0.12, 0.99) forwards;
+}
+
+@keyframes wheel-spin {
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(1800deg);
+  }
+}
+
+.wheel-pointer {
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 12px solid transparent;
+  border-right: 12px solid transparent;
+  border-top: 20px solid var(--gold-primary);
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+}
+
+.wheel-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 50px;
+  height: 50px;
+  background: var(--bg-primary);
+  border-radius: 50%;
+  border: 3px solid var(--gold-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  z-index: 10;
+}
+
+/* ============================================
+   INLINE LEADERBOARD SECTION
+   ============================================ */
+.inline-leaderboard {
+  margin-top: 24px;
+  padding: 20px;
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+}
+
+.inline-leaderboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.inline-leaderboard-title {
+  font-size: 1rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.leaderboard-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.leaderboard-compact .leaderboard-item {
+  padding: 10px 12px;
+  font-size: 0.85rem;
+}
+
+/* Main content grid for side-by-side layout */
+.redemption-content-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+@media (max-width: 768px) {
+  .redemption-content-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.redemption-left {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.redemption-right {
+  display: flex;
+  flex-direction: column;
 }

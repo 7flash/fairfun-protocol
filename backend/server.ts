@@ -67,7 +67,7 @@ interface RedemptionConfig {
 
 // Redemption probabilities and rewards
 const REDEMPTION_CONFIG: RedemptionConfig = {
-    costPerSpin: 1000n * BigInt(1e9), // 1000 stardust (in smallest units)
+    costPerSpin: 1_000_000n * BigInt(1e9), // 1M stardust (in smallest units)
     probabilities: [5000, 3000, 1500, 450, 50], // 50%, 30%, 15%, 4.5%, 0.5%
     rewards: [
         0.001 * 1e9,  // 0.001 SOL in lamports
@@ -78,6 +78,9 @@ const REDEMPTION_CONFIG: RedemptionConfig = {
     ],
     poolBalance: 100 * 1e9, // 100 SOL initial pool
 };
+
+// Maximum unclaimed stardust (1M) - incentivizes users to claim
+const MAX_UNCLAIMED = 1_000_000n * BigInt(1e9);
 
 // Winner history (last 100 winners)
 const redemptionWinners: RedemptionWinner[] = [];
@@ -93,16 +96,37 @@ let connection: Connection;
  * Load local config from setup script
  */
 function loadConfig(): LocalConfig {
-    // Check both possible locations
+    // Check if we're on mainnet (check for mainnet-config.json or env variable)
+    const isMainnet = process.env.SOLANA_RPC?.includes("mainnet") ||
+        fs.existsSync("./mainnet-config.json") ||
+        fs.existsSync("../mainnet-config.json");
+
+    if (isMainnet) {
+        const mainnetPaths = ["./mainnet-config.json", "../mainnet-config.json"];
+        for (const configPath of mainnetPaths) {
+            if (fs.existsSync(configPath)) {
+                console.log(`Loading MAINNET config from ${configPath}`);
+                const mainnetConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+                // Mainnet config doesn't have testUsers or starTokenMint, adapt it
+                return {
+                    ...mainnetConfig,
+                    starTokenMint: mainnetConfig.starTokenMint || "11111111111111111111111111111111", // Placeholder
+                    testUsers: mainnetConfig.testUsers || [],
+                };
+            }
+        }
+    }
+
+    // Fallback to local config
     const paths = ["./local-config.json", "../local-config.json"];
     for (const configPath of paths) {
         if (fs.existsSync(configPath)) {
-            console.log(`Loading config from ${configPath}`);
+            console.log(`Loading LOCAL config from ${configPath}`);
             return JSON.parse(fs.readFileSync(configPath, "utf-8"));
         }
     }
     throw new Error(
-        "local-config.json not found. Run 'bun run scripts/setup-local.ts' first!"
+        "Config not found. Run 'bun run scripts/setup-local.ts' or 'bun run scripts/init-mainnet.ts' first!"
     );
 }
 
@@ -295,8 +319,8 @@ try {
     process.exit(1);
 }
 
-// Start earnings update (every 10 seconds)
-setInterval(updateEarnings, 10 * 1000);
+// Start earnings update (every 60 seconds / 1 minute)
+setInterval(updateEarnings, 60 * 1000);
 updateEarnings();
 
 // JSON helper
@@ -406,13 +430,19 @@ async function handler(req: Request): Promise<Response | null> {
         const wallet = path.replace("/api/earnings/", "");
         const earnings = earningsStore.get(wallet);
 
+        // Calculate unclaimed with 1M cap
+        let unclaimed = earnings ? (earnings.lifetimeEarned - earnings.claimed) : 0n;
+        if (unclaimed > MAX_UNCLAIMED) {
+            unclaimed = MAX_UNCLAIMED;
+        }
+        const isCapped = unclaimed >= MAX_UNCLAIMED;
+
         return json({
             wallet,
             lifetimeEarned: earnings?.lifetimeEarned.toString() || "0",
             claimed: earnings?.claimed.toString() || "0",
-            unclaimed: earnings
-                ? (earnings.lifetimeEarned - earnings.claimed).toString()
-                : "0",
+            unclaimed: unclaimed.toString(),
+            isCapped, // Frontend can show "1M MAX" indicator
             starBalance: earnings?.starBalance.toString() || "0",
             lastUpdated: earnings?.lastUpdated || null,
         });

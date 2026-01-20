@@ -13,7 +13,7 @@ use errors::StardustError;
 use introspection::verify_ed25519_ix_integrity;
 use state::{ProtocolState, UserClaim};
 
-declare_id!("GYQP75VdPpCU1xPsJS7CUkcBqzL718j7ihNmgJ3VESd7");
+declare_id!("HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A");
 
 /// Stardust Protocol: Secure claim of stardust tokens via backend-signed lifetime earnings
 #[program]
@@ -28,7 +28,7 @@ pub mod stardust {
         let state = &mut ctx.accounts.state;
         state.authority = authority;
         state.stardust_mint = ctx.accounts.stardust_mint.key();
-        state.bump = *ctx.bumps.get("state").unwrap();
+        state.bump = ctx.bumps.state;
 
         msg!("Stardust Protocol Initialized");
         msg!("Authority: {}", authority);

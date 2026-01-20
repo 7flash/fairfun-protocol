@@ -34,6 +34,7 @@ interface EarningsData {
     lifetimeEarned: string;
     claimed: string;
     unclaimed: string;
+    isCapped?: boolean; // True when unclaimed is at 1M max
     starBalance: string;
 }
 
@@ -370,19 +371,21 @@ const TreasurySection: React.FC<{ treasury: TreasuryData | null }> = ({ treasury
     );
 };
 
-// Redemption Section
+// Redemption Section with Spinning Wheel
 const RedemptionSection: React.FC<{
     unclaimedStardust: number;
     onRedeem: () => void;
     winners: WinnerEntry[];
     spinning?: boolean;
-}> = ({ unclaimedStardust, onRedeem, winners, spinning = false }) => {
+    leaderboard?: LeaderboardEntry[];
+    currentWallet?: string | null;
+}> = ({ unclaimedStardust, onRedeem, winners, spinning = false, leaderboard = [], currentWallet }) => {
     const probabilities = [
-        { amount: "0.001 SOL", chance: "50%", tier: "common" },
-        { amount: "0.01 SOL", chance: "30%", tier: "uncommon" },
-        { amount: "0.1 SOL", chance: "15%", tier: "rare" },
-        { amount: "1 SOL", chance: "4.5%", tier: "epic" },
-        { amount: "10 SOL", chance: "0.5%", tier: "legendary" },
+        { amount: "0.001 SOL", chance: "50%", tier: "common", color: "#94a3b8" },
+        { amount: "0.01 SOL", chance: "30%", tier: "uncommon", color: "#22c55e" },
+        { amount: "0.1 SOL", chance: "15%", tier: "rare", color: "#3b82f6" },
+        { amount: "1 SOL", chance: "4.5%", tier: "epic", color: "#a855f7" },
+        { amount: "10 SOL", chance: "0.5%", tier: "legendary", color: "#fbbf24" },
     ];
 
     // Get tier from amount
@@ -402,58 +405,154 @@ const RedemptionSection: React.FC<{
         return "⚪";
     };
 
+    // Spinning Wheel SVG
+    const WheelSVG = () => {
+        const segments = probabilities.length;
+        const anglePerSegment = 360 / segments;
+
+        return (
+            <svg viewBox="0 0 200 200" className={`wheel-svg ${spinning ? 'spinning' : ''}`}>
+                {probabilities.map((p, i) => {
+                    const startAngle = i * anglePerSegment - 90;
+                    const endAngle = (i + 1) * anglePerSegment - 90;
+                    const startRad = (startAngle * Math.PI) / 180;
+                    const endRad = (endAngle * Math.PI) / 180;
+
+                    const x1 = 100 + 85 * Math.cos(startRad);
+                    const y1 = 100 + 85 * Math.sin(startRad);
+                    const x2 = 100 + 85 * Math.cos(endRad);
+                    const y2 = 100 + 85 * Math.sin(endRad);
+
+                    const largeArc = anglePerSegment > 180 ? 1 : 0;
+                    const pathD = `M100,100 L${x1},${y1} A85,85 0 ${largeArc},1 ${x2},${y2} Z`;
+
+                    // Text position
+                    const midAngle = (startAngle + endAngle) / 2;
+                    const midRad = (midAngle * Math.PI) / 180;
+                    const textX = 100 + 55 * Math.cos(midRad);
+                    const textY = 100 + 55 * Math.sin(midRad);
+
+                    return (
+                        <g key={i}>
+                            <path d={pathD} fill={p.color} stroke="#0a0d0f" strokeWidth="2" />
+                            <text
+                                x={textX}
+                                y={textY}
+                                fill="#fff"
+                                fontSize="9"
+                                fontWeight="bold"
+                                textAnchor="middle"
+                                dominantBaseline="middle"
+                                transform={`rotate(${midAngle + 90}, ${textX}, ${textY})`}
+                            >
+                                {p.amount.split(' ')[0]}
+                            </text>
+                        </g>
+                    );
+                })}
+                <circle cx="100" cy="100" r="25" fill="var(--bg-primary)" stroke="var(--gold-primary)" strokeWidth="3" />
+                <text x="100" y="100" fill="var(--gold-primary)" fontSize="16" textAnchor="middle" dominantBaseline="middle">✨</text>
+            </svg>
+        );
+    };
+
     return (
         <div className="redemption-section">
-            <div className="redemption-title">🎰 Stardust Redemption</div>
+            <div className="redemption-title">🎰 Galaxy Wheel</div>
             <div className="redemption-desc">
-                Exchange your stardust for a chance to win SOL rewards! 1000 stardust per spin.
+                Spin the wheel with 1,000,000 stardust for a chance to win SOL rewards!
             </div>
 
-            <div className="probability-table">
-                {probabilities.map(p => (
-                    <div key={p.amount} className="probability-item">
-                        <div className="probability-amount">{p.amount}</div>
-                        <div className="probability-chance">{p.chance}</div>
-                        <div className={`tier-badge ${p.tier}`} style={{ marginTop: 6 }}>{p.tier}</div>
+            <div className="redemption-content-grid">
+                {/* Left: Wheel + Spin Button */}
+                <div className="redemption-left">
+                    <div className="wheel-container">
+                        <div className="spinning-wheel">
+                            <div className="wheel-pointer" />
+                            <WheelSVG />
+                        </div>
                     </div>
-                ))}
-            </div>
 
-            <button
-                className={`btn btn-gold ${spinning ? 'spinning' : ''}`}
-                onClick={onRedeem}
-                disabled={unclaimedStardust < 1000 || spinning}
-                style={{ width: "100%", marginBottom: 24 }}
-            >
-                {spinning ? '🎲 Spinning...' : '🎲 Spin (1000 ✨)'}
-            </button>
+                    <div style={{ marginBottom: 12, color: "var(--text-secondary)", fontSize: "0.875rem" }}>
+                        Your stardust: <strong style={{ color: "var(--gold-primary)" }}>
+                            {unclaimedStardust.toLocaleString(undefined, { maximumFractionDigits: 0 })} ✨
+                        </strong>
+                    </div>
 
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                <div className="card-title">Recent Winners</div>
-                <div className="live-indicator">
-                    <div className="live-dot" />
-                    LIVE
+                    <button
+                        className={`btn btn-gold ${spinning ? 'spinning' : ''}`}
+                        onClick={onRedeem}
+                        disabled={unclaimedStardust < 1000000 || spinning}
+                        style={{ width: "100%" }}
+                    >
+                        {spinning ? '🎲 Spinning...' : '🎲 Spin (1M ✨)'}
+                    </button>
+
+                    {unclaimedStardust < 1000000 && (
+                        <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: 8 }}>
+                            Need {(1000000 - unclaimedStardust).toLocaleString()} more stardust
+                        </div>
+                    )}
+                </div>
+
+                {/* Right: Winners Feed */}
+                <div className="redemption-right">
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                        <div className="card-title">Recent Winners</div>
+                        <div className="live-indicator">
+                            <div className="live-dot" />
+                            LIVE
+                        </div>
+                    </div>
+                    <div className="winner-feed" style={{ maxHeight: 220 }}>
+                        {winners.length === 0 ? (
+                            <div style={{ color: "var(--text-muted)", textAlign: "center", padding: 20 }}>
+                                No winners yet. Be the first!
+                            </div>
+                        ) : winners.map((w, i) => (
+                            <div key={i} className={`winner-item ${i === 0 ? 'new-winner' : ''}`}>
+                                <div className="winner-avatar">{getTierEmoji(w.amount)}</div>
+                                <div className="winner-info">
+                                    <div className="winner-wallet">{w.wallet.slice(0, 4)}...{w.wallet.slice(-4)}</div>
+                                    <div className="winner-time">{new Date(w.timestamp).toLocaleTimeString()}</div>
+                                </div>
+                                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+                                    <div className="winner-amount">+{w.amount.toFixed(3)} SOL</div>
+                                    <div className={`tier-badge ${getTier(w.amount)}`}>{getTier(w.amount)}</div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
                 </div>
             </div>
-            <div className="winner-feed">
-                {winners.length === 0 ? (
-                    <div style={{ color: "var(--text-muted)", textAlign: "center", padding: 20 }}>
-                        No winners yet. Be the first!
+
+            {/* Inline Leaderboard */}
+            {leaderboard.length > 0 && (
+                <div className="inline-leaderboard">
+                    <div className="inline-leaderboard-header">
+                        <div className="inline-leaderboard-title">🏆 Top Holders</div>
                     </div>
-                ) : winners.map((w, i) => (
-                    <div key={i} className={`winner-item ${i === 0 ? 'new-winner' : ''}`}>
-                        <div className="winner-avatar">{getTierEmoji(w.amount)}</div>
-                        <div className="winner-info">
-                            <div className="winner-wallet">{w.wallet.slice(0, 4)}...{w.wallet.slice(-4)}</div>
-                            <div className="winner-time">{new Date(w.timestamp).toLocaleTimeString()}</div>
-                        </div>
-                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                            <div className="winner-amount">+{w.amount.toFixed(3)} SOL</div>
-                            <div className={`tier-badge ${getTier(w.amount)}`}>{getTier(w.amount)}</div>
-                        </div>
+                    <div className="leaderboard-compact">
+                        {leaderboard.slice(0, 5).map((entry, i) => {
+                            const earned = Number(BigInt(entry.lifetimeEarned || "0")) / 1e9;
+                            const isCurrentUser = entry.wallet === currentWallet;
+                            return (
+                                <div key={entry.wallet} className={`leaderboard-item ${isCurrentUser ? "current-user" : ""}`}>
+                                    <div className={`leaderboard-rank ${i === 0 ? "gold" : i === 1 ? "silver" : i === 2 ? "bronze" : ""}`}>
+                                        {i + 1}
+                                    </div>
+                                    <div className="leaderboard-wallet">
+                                        {entry.wallet.slice(0, 4)}...{entry.wallet.slice(-4)}
+                                    </div>
+                                    <div className="leaderboard-earned">
+                                        <div className="leaderboard-earned-value">{earned.toLocaleString(undefined, { maximumFractionDigits: 0 })} ✨</div>
+                                    </div>
+                                </div>
+                            );
+                        })}
                     </div>
-                ))}
-            </div>
+                </div>
+            )}
         </div>
     );
 };
@@ -669,7 +768,9 @@ const LoginModal: React.FC<{
     testUsers: TestUser[];
     onSelectTestUser: (user: TestUser) => void;
     onImportKey: (key: string) => void;
-}> = ({ open, onClose, testUsers, onSelectTestUser, onImportKey }) => {
+    onConnectPhantom?: () => void;
+    phantomAvailable?: boolean;
+}> = ({ open, onClose, testUsers, onSelectTestUser, onImportKey, onConnectPhantom, phantomAvailable = false }) => {
     const [privateKey, setPrivateKey] = useState("");
 
     const handleImport = () => {
@@ -688,8 +789,13 @@ const LoginModal: React.FC<{
                 </div>
                 <div className="modal-body">
                     <div className="login-options">
-                        <button className="btn btn-primary" style={{ width: "100%" }} disabled>
-                            👻 Connect Phantom (Coming Soon)
+                        <button
+                            className="btn btn-primary"
+                            style={{ width: "100%" }}
+                            onClick={onConnectPhantom}
+                            disabled={!phantomAvailable}
+                        >
+                            👻 {phantomAvailable ? 'Connect Phantom' : 'Install Phantom Wallet'}
                         </button>
                     </div>
 
@@ -797,8 +903,7 @@ const LandingPage: React.FC<{ onLaunchApp: () => void }> = ({ onLaunchApp }) => 
 // MAIN APP
 // ============================================
 export function App() {
-    // State
-    const [page, setPage] = useState<"landing" | "app">("landing");
+    // State - skip landing, go straight to app
     const [activeTab, setActiveTab] = useState<"dashboard" | "treasury" | "calculator">("dashboard");
     const [connected, setConnected] = useState(false);
     const [publicKey, setPublicKey] = useState<string | null>(null);
@@ -813,8 +918,59 @@ export function App() {
     const [winners, setWinners] = useState<WinnerEntry[]>([]);
 
     const [claiming, setClaiming] = useState(false);
-    const [showLeaderboard, setShowLeaderboard] = useState(false);
+    const [spinning, setSpinning] = useState(false);
+    const [wheelRotation, setWheelRotation] = useState(0);
     const [showLogin, setShowLogin] = useState(false);
+    const [showLeaderboard, setShowLeaderboard] = useState(false);
+    const [phantomWallet, setPhantomWallet] = useState<any>(null);
+
+    // Restore wallet from localStorage on mount
+    useEffect(() => {
+        const savedWallet = localStorage.getItem('stardust-wallet');
+        if (savedWallet) {
+            setPublicKey(savedWallet);
+            setConnected(true);
+        }
+    }, []);
+
+    // Check for Phantom wallet
+    useEffect(() => {
+        const checkPhantom = () => {
+            if ((window as any).solana?.isPhantom) {
+                setPhantomWallet((window as any).solana);
+            }
+        };
+        checkPhantom();
+        // Phantom may load after page load
+        window.addEventListener('load', checkPhantom);
+        return () => window.removeEventListener('load', checkPhantom);
+    }, []);
+
+    // Connect Phantom wallet
+    const handleConnectPhantom = async () => {
+        try {
+            if (!phantomWallet) {
+                window.open('https://phantom.app/', '_blank');
+                return;
+            }
+            const response = await phantomWallet.connect();
+            const pubkey = response.publicKey.toString();
+            setPublicKey(pubkey);
+            setConnected(true);
+            setShowLogin(false);
+            // Persist to localStorage
+            localStorage.setItem('stardust-wallet', pubkey);
+
+            // Register wallet with backend
+            await fetch('/api/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ wallet: pubkey }),
+            });
+        } catch (err) {
+            console.error('Phantom connection failed:', err);
+        }
+    };
 
     // Fetch initial data
     useEffect(() => {
@@ -861,14 +1017,12 @@ export function App() {
         }
     }, [publicKey]);
 
-    // Polling
+    // Polling - always run since we go straight to app
     useEffect(() => {
-        if (page === "app") {
-            fetchData();
-            const interval = setInterval(fetchData, 5000);
-            return () => clearInterval(interval);
-        }
-    }, [page, fetchData]);
+        fetchData();
+        const interval = setInterval(fetchData, 5000);
+        return () => clearInterval(interval);
+    }, [fetchData]);
 
     useEffect(() => {
         if (connected && publicKey) {
@@ -890,6 +1044,9 @@ export function App() {
             setUserKeypair(kp);
             setPublicKey(user.publicKey);
             setConnected(true);
+            setShowLogin(false);
+            // Persist to localStorage
+            localStorage.setItem('stardust-wallet', user.publicKey);
         } catch (e) {
             console.error("Failed to import key:", e);
             alert("Failed to import key");
@@ -921,6 +1078,7 @@ export function App() {
         setPublicKey(null);
         setConnected(false);
         setEarnings(null);
+        localStorage.removeItem('stardust-wallet');
     };
 
     // Claim handler
@@ -1066,7 +1224,6 @@ export function App() {
     };
 
     // Spin/Redeem handler
-    const [spinning, setSpinning] = useState(false);
     const [lastSpinResult, setLastSpinResult] = useState<{
         success: boolean;
         rewardFormatted: string;
@@ -1089,17 +1246,18 @@ export function App() {
                 body: JSON.stringify({ wallet: publicKey }),
             });
 
-            const result = await res.json();
+            const result = await res.json() as { error?: string; rewardFormatted?: string; tierName?: string };
 
             if (!res.ok) {
+                setSpinning(false);
                 alert(`Spin failed: ${result.error}`);
                 return;
             }
 
             setLastSpinResult({
                 success: true,
-                rewardFormatted: result.rewardFormatted,
-                tierName: result.tierName,
+                rewardFormatted: result.rewardFormatted || '0',
+                tierName: result.tierName || 'Unknown',
             });
 
             // Refresh data
@@ -1136,36 +1294,10 @@ export function App() {
 
     // Fetch winners on app load
     useEffect(() => {
-        if (page === "app") {
-            fetchWinners();
-            const interval = setInterval(fetchWinners, 10000); // Every 10s
-            return () => clearInterval(interval);
-        }
-    }, [page, fetchWinners]);
-
-    // Render
-    if (page === "landing") {
-        return (
-            <>
-                <div className="app-background" />
-                <div className="app-container">
-                    <header className="header">
-                        <div className="logo">
-                            <div className="logo-icon">✦</div>
-                            <div>
-                                <div className="logo-text">GX402</div>
-                                <div className="logo-domain">{SITE_NAME}</div>
-                            </div>
-                        </div>
-                        <button className="btn btn-primary" onClick={() => setPage("app")}>
-                            Launch App
-                        </button>
-                    </header>
-                </div>
-                <LandingPage onLaunchApp={() => setPage("app")} />
-            </>
-        );
-    }
+        fetchWinners();
+        const interval = setInterval(fetchWinners, 10000); // Every 10s
+        return () => clearInterval(interval);
+    }, [fetchWinners]);
 
     const unclaimedStardust = earnings ? Number(BigInt(earnings.unclaimed || "0")) / 1e9 : 0;
 
@@ -1257,6 +1389,8 @@ export function App() {
                                 onRedeem={handleRedeem}
                                 winners={winners}
                                 spinning={spinning}
+                                leaderboard={leaderboard}
+                                currentWallet={publicKey}
                             />
                         )}
                     </>
@@ -1288,7 +1422,8 @@ export function App() {
                 </footer>
             </div>
 
-            {/* Modals */}
+            {/* Login Modal */}
+
             <LeaderboardModal
                 open={showLeaderboard}
                 onClose={() => setShowLeaderboard(false)}
@@ -1302,6 +1437,8 @@ export function App() {
                 testUsers={testUsers}
                 onSelectTestUser={handleSelectTestUser}
                 onImportKey={handleImportKey}
+                onConnectPhantom={handleConnectPhantom}
+                phantomAvailable={!!phantomWallet}
             />
         </>
     );
