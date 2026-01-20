@@ -477,11 +477,11 @@ function App() {
 
             // Create claim instruction
             // Anchor discriminator for "claim_stardust" = first 8 bytes of sha256("global:claim_stardust")
-            // Pre-computed: [62, 198, 214, 193, 213, 159, 108, 210]
+            // Correct: [112, 160, 71, 163, 106, 253, 51, 179] = 0x70a047a36afd33b3
             const lifetimeEarned = BigInt(sigData.lifetimeEarned);
             const claimData = Buffer.alloc(16); // 8 bytes discriminator + 8 bytes u64
             // Anchor discriminator for claim_stardust
-            const discriminator = [62, 198, 214, 193, 213, 159, 108, 210];
+            const discriminator = [112, 160, 71, 163, 106, 253, 51, 179];
             for (let i = 0; i < 8; i++) {
                 claimData.writeUInt8(discriminator[i], i);
             }
@@ -513,6 +513,18 @@ function App() {
 
             // Build transaction
             const transaction = new Transaction();
+
+            // First, create ATA if it doesn't exist (idempotent - won't fail if exists)
+            const { createAssociatedTokenAccountIdempotentInstruction, ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } = await import('@solana/spl-token');
+            const createAtaIx = createAssociatedTokenAccountIdempotentInstruction(
+                userPubkey, // payer
+                userStardustAta, // ata
+                userPubkey, // owner
+                stardustMint, // mint
+            );
+            transaction.add(createAtaIx);
+
+            // Add Ed25519 and claim instructions
             transaction.add(ed25519Ix);
             transaction.add(claimIx);
 
