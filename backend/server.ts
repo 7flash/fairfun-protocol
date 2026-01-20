@@ -1,5 +1,6 @@
 import { serve } from "@ments/web";
 import { measure } from "@ments/utils";
+import { SatiDB, z } from "@ments/db";
 import {
     Keypair,
     PublicKey,
@@ -13,6 +14,22 @@ import {
 import * as nacl from "tweetnacl";
 import bs58 from "bs58";
 import * as fs from "fs";
+
+// ============================================
+// DATABASE PERSISTENCE
+// ============================================
+const EarningsSchema = z.object({
+    wallet: z.string(),
+    lifetimeEarned: z.string(), // BigInt as string for DB storage
+    claimed: z.string(),
+    starBalance: z.string(),
+    lastUpdated: z.number(),
+});
+
+// Initialize SatiDB for persistence
+const db = new SatiDB("stardust.db", {
+    earnings: EarningsSchema,
+});
 
 // Types
 interface LocalConfig {
@@ -236,12 +253,14 @@ async function updateEarnings() {
             if (config.testUsers.find((u) => u.publicKey === wallet)) continue;
 
             const starBalance = await fetchUserStarBalance(wallet);
+            const claimed = await fetchClaimedStardust(wallet); // Fetch on-chain claimed amount
             const starTokens = starBalance / BigInt(1e9);
             const stardustThisPeriod = starTokens * STARDUST_RATE;
 
             earningsStore.set(wallet, {
                 ...earnings,
                 lifetimeEarned: earnings.lifetimeEarned + stardustThisPeriod,
+                claimed, // Update from on-chain
                 starBalance,
                 lastUpdated: now,
             });
@@ -321,9 +340,62 @@ try {
     process.exit(1);
 }
 
+// ============================================
+// DATABASE PERSISTENCE FUNCTIONS
+// ============================================
+/**
+ * Load earnings from SQLite database into memory on startup
+ */
+function loadFromDatabase() {
+    try {
+        const records = db.earnings.find({});
+        let loadedCount = 0;
+        for (const record of records) {
+            earningsStore.set(record.wallet, {
+                wallet: record.wallet,
+                lifetimeEarned: BigInt(record.lifetimeEarned),
+                claimed: BigInt(record.claimed),
+                starBalance: BigInt(record.starBalance),
+                lastUpdated: record.lastUpdated,
+            });
+            loadedCount++;
+        }
+        console.log(`📂 Loaded ${loadedCount} earnings records from database`);
+    } catch (e: any) {
+        console.log("📂 No existing database found, starting fresh");
+    }
+}
+
+/**
+ * Flush all earnings from memory to SQLite database
+ */
+function flushToDatabase() {
+    measure(async () => {
+        let flushedCount = 0;
+        for (const [wallet, earnings] of earningsStore.entries()) {
+            db.earnings.upsert({
+                wallet: earnings.wallet,
+                lifetimeEarned: earnings.lifetimeEarned.toString(),
+                claimed: earnings.claimed.toString(),
+                starBalance: earnings.starBalance.toString(),
+                lastUpdated: earnings.lastUpdated,
+            });
+            flushedCount++;
+        }
+        console.log(`💾 Flushed ${flushedCount} earnings records to database`);
+    }, "flush_to_database");
+}
+
+// Load existing data from database on startup
+loadFromDatabase();
+
 // Start earnings update (every 60 seconds / 1 minute)
 setInterval(updateEarnings, 60 * 1000);
 updateEarnings();
+
+// Flush to database every hour (3600 seconds)
+setInterval(flushToDatabase, 60 * 60 * 1000);
+console.log("🔄 Scheduled: earnings update every 1 min, DB flush every 1 hour");
 
 // JSON helper
 const json = (data: any, status = 200) =>
@@ -432,8 +504,20 @@ async function handler(req: Request): Promise<Response | null> {
         const wallet = path.replace("/api/earnings/", "");
         const earnings = earningsStore.get(wallet);
 
-        // Calculate unclaimed with 1M cap
-        let unclaimed = earnings ? (earnings.lifetimeEarned - earnings.claimed) : 0n;
+        // Get claimed amount from store (updated from on-chain)
+        const claimed = earnings?.claimed || 0n;
+
+        // Ensure lifetimeEarned is at least equal to claimed (in case backend restarted)
+        let lifetimeEarned = earnings?.lifetimeEarned || 0n;
+        if (lifetimeEarned < claimed) {
+            lifetimeEarned = claimed;
+        }
+
+        // Calculate unclaimed with 1M cap - ensure never negative
+        let unclaimed = lifetimeEarned - claimed;
+        if (unclaimed < 0n) {
+            unclaimed = 0n;
+        }
         if (unclaimed > MAX_UNCLAIMED) {
             unclaimed = MAX_UNCLAIMED;
         }
@@ -441,8 +525,8 @@ async function handler(req: Request): Promise<Response | null> {
 
         return json({
             wallet,
-            lifetimeEarned: earnings?.lifetimeEarned.toString() || "0",
-            claimed: earnings?.claimed.toString() || "0",
+            lifetimeEarned: lifetimeEarned.toString(),
+            claimed: claimed.toString(),
             unclaimed: unclaimed.toString(),
             isCapped, // Frontend can show "1M MAX" indicator
             starBalance: earnings?.starBalance.toString() || "0",
@@ -643,39 +727,68 @@ async function handler(req: Request): Promise<Response | null> {
                 return json({ error: "wallet required" }, 400);
             }
 
+            // Fetch on-chain data
+            const starBalance = await fetchUserStarBalance(wallet);
+            const claimed = await fetchClaimedStardust(wallet);
+
             // Check if wallet already exists (don't reset existing earnings)
             const existing = earningsStore.get(wallet);
             if (existing) {
-                // Just update the balance, don't reset earnings
-                const starBalance = await fetchUserStarBalance(wallet);
+                // Update balance and claimed from on-chain
+                let lifetimeEarned = existing.lifetimeEarned;
+                // Ensure lifetimeEarned is at least claimed (recover from backend restart)
+                if (lifetimeEarned < claimed) {
+                    lifetimeEarned = claimed;
+                }
+
                 earningsStore.set(wallet, {
                     ...existing,
+                    lifetimeEarned,
+                    claimed,
                     starBalance,
                     lastUpdated: Date.now(),
                 });
                 return json({
                     success: true,
                     wallet,
-                    lifetimeEarned: existing.lifetimeEarned.toString(),
+                    lifetimeEarned: lifetimeEarned.toString(),
+                    claimed: claimed.toString(),
                     starBalance: starBalance.toString(),
                 });
             }
 
-            // New wallet - fetch balance and initialize with 0 earnings
-            const starBalance = await fetchUserStarBalance(wallet);
-
-            earningsStore.set(wallet, {
+            // New wallet - initialize with claimed from on-chain
+            // lifetimeEarned starts at claimed (so unclaimed = 0, will accumulate from now)
+            const newEarnings = {
                 wallet,
-                lifetimeEarned: 0n, // Start at 0, will accumulate over time
-                claimed: 0n,
+                lifetimeEarned: claimed, // Start at claimed amount, accumulate from there
+                claimed,
                 starBalance,
                 lastUpdated: Date.now(),
-            });
+            };
+            earningsStore.set(wallet, newEarnings);
+
+            // Persist immediately to database
+            try {
+                const dbRecord = {
+                    wallet: newEarnings.wallet,
+                    lifetimeEarned: newEarnings.lifetimeEarned.toString(),
+                    claimed: newEarnings.claimed.toString(),
+                    starBalance: newEarnings.starBalance.toString(),
+                    lastUpdated: newEarnings.lastUpdated,
+                };
+                console.log(`💾 Saving to DB:`, JSON.stringify(dbRecord));
+                db.earnings.insert(dbRecord);
+                console.log(`💾 Saved new wallet ${wallet} to database`);
+            } catch (dbErr: any) {
+                console.error(`❌ Failed to save wallet to DB:`, dbErr?.message || dbErr);
+            }
 
             return json({
                 success: true,
                 wallet,
-                lifetimeEarned: "0",
+                lifetimeEarned: newEarnings.lifetimeEarned.toString(),
+                claimed: newEarnings.claimed.toString(),
                 starBalance: starBalance.toString(),
             });
         } catch (e) {

@@ -119,8 +119,8 @@ const MyWalletSection: React.FC<{
 }> = ({ earnings, claiming, onClaim }) => {
     const balance = earnings ? Number(BigInt(earnings.starBalance || "0")) / 1e9 : 0;
     const balanceUsd = balance * TOKEN_PRICE_USD;
-    const earned = earnings ? Number(BigInt(earnings.lifetimeEarned || "0")) / 1e9 : 0;
-    const available = earnings ? Number(BigInt(earnings.unclaimed || "0")) / 1e9 : 0;
+    const claimed = earnings ? Number(BigInt(earnings.claimed || "0")) / 1e9 : 0;
+    const unclaimed = earnings ? Number(BigInt(earnings.unclaimed || "0")) / 1e9 : 0;
 
     return (
         <Section label="MY WALLET" className="wallet-section">
@@ -133,18 +133,18 @@ const MyWalletSection: React.FC<{
                 <div className="wallet-card stardust">
                     <div className="stardust-row">
                         <div>
-                            <div className="wallet-card-label">Stardust Earned</div>
-                            <div className="wallet-card-value">{earned.toLocaleString(undefined, { maximumFractionDigits: 0 })} ✨</div>
+                            <div className="wallet-card-label">Stardust Balance</div>
+                            <div className="wallet-card-value">{claimed.toLocaleString(undefined, { maximumFractionDigits: 0 })} ✨</div>
                         </div>
                         <div className="stardust-divider" />
                         <div>
                             <div className="wallet-card-label">Available to Claim</div>
-                            <div className="wallet-card-value text-gold">{available.toLocaleString(undefined, { maximumFractionDigits: 0 })} ✨</div>
+                            <div className="wallet-card-value text-gold">{unclaimed.toLocaleString(undefined, { maximumFractionDigits: 0 })} ✨</div>
                         </div>
                         <button
                             className="btn btn-primary claim-btn"
                             onClick={onClaim}
-                            disabled={claiming || available <= 0}
+                            disabled={claiming || unclaimed <= 0}
                         >
                             {claiming ? "Claiming..." : "CLAIM"}
                         </button>
