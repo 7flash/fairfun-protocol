@@ -930,6 +930,12 @@ export function App() {
         if (savedWallet) {
             setPublicKey(savedWallet);
             setConnected(true);
+            // Auto-register with backend (in case backend restarted)
+            fetch('/api/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ wallet: savedWallet }),
+            }).catch(console.error);
         }
     }, []);
 
@@ -1337,7 +1343,7 @@ export function App() {
                     </nav>
 
                     <div className="wallet-section">
-                        <NetworkBadge network="localnet" />
+                        <NetworkBadge network="mainnet" />
                         {connected ? (
                             <button className="btn-wallet connected" onClick={handleDisconnect}>
                                 <span className="wallet-address">

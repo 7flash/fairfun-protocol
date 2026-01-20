@@ -183,9 +183,11 @@ async function fetchClaimedStardust(walletPubkey: string): Promise<bigint> {
 
 /**
  * Calculate stardust earnings based on STAR token holdings
- * 1 STAR = 136 stardust per period (represents $136 price * 1 token)
+ * Rate: 1 stardust per $1 worth of tokens per hour
+ * With STAR at ~$0.136 per token, 1 STAR = 0.136 stardust/hour = 0.00227 stardust/minute
+ * We run every 60s, so per-period rate = 0.136 stardust per STAR token
  */
-const STARDUST_RATE = 136n * BigInt(1e9); // Per STAR token per period
+const STARDUST_RATE = BigInt(Math.floor(0.136 * 1e9)); // ~0.136 stardust per STAR per minute
 
 /**
  * Update earnings based on real STAR token balances
@@ -641,14 +643,30 @@ async function handler(req: Request): Promise<Response | null> {
                 return json({ error: "wallet required" }, 400);
             }
 
-            // Fetch real balance if exists
+            // Check if wallet already exists (don't reset existing earnings)
+            const existing = earningsStore.get(wallet);
+            if (existing) {
+                // Just update the balance, don't reset earnings
+                const starBalance = await fetchUserStarBalance(wallet);
+                earningsStore.set(wallet, {
+                    ...existing,
+                    starBalance,
+                    lastUpdated: Date.now(),
+                });
+                return json({
+                    success: true,
+                    wallet,
+                    lifetimeEarned: existing.lifetimeEarned.toString(),
+                    starBalance: starBalance.toString(),
+                });
+            }
+
+            // New wallet - fetch balance and initialize with 0 earnings
             const starBalance = await fetchUserStarBalance(wallet);
-            const starTokens = starBalance / BigInt(1e9);
-            const stardustAmount = starTokens * STARDUST_RATE;
 
             earningsStore.set(wallet, {
                 wallet,
-                lifetimeEarned: stardustAmount,
+                lifetimeEarned: 0n, // Start at 0, will accumulate over time
                 claimed: 0n,
                 starBalance,
                 lastUpdated: Date.now(),
@@ -657,7 +675,7 @@ async function handler(req: Request): Promise<Response | null> {
             return json({
                 success: true,
                 wallet,
-                lifetimeEarned: stardustAmount.toString(),
+                lifetimeEarned: "0",
                 starBalance: starBalance.toString(),
             });
         } catch (e) {
