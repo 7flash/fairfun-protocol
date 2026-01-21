@@ -182,10 +182,51 @@ async function fetchUserStarBalance(walletPubkey: string): Promise<bigint> {
 }
 
 /**
- * Fetch real claimed STARDUST amount from on-chain token account
- * This ensures we always have accurate data even if claim callbacks fail
+ * Fetch real claimed STARDUST amount from on-chain UserClaim PDA
+ * This reads the actual claimed amount from the program, NOT the token balance
+ * (Token balance can change via transfers, but claimed amount is immutable)
  */
 async function fetchClaimedStardust(walletPubkey: string): Promise<bigint> {
+    try {
+        const wallet = new PublicKey(walletPubkey);
+        const programId = new PublicKey(config.programId);
+
+        // Derive UserClaim PDA: ["user_claim", user_pubkey]
+        const [userClaimPda] = PublicKey.findProgramAddressSync(
+            [Buffer.from("user_claim"), wallet.toBuffer()],
+            programId
+        );
+
+        // Fetch the account data
+        const accountInfo = await connection.getAccountInfo(userClaimPda);
+
+        if (!accountInfo || !accountInfo.data) {
+            // User hasn't claimed yet - no UserClaim PDA exists
+            return 0n;
+        }
+
+        // Parse UserClaim account data:
+        // [8 bytes discriminator] [32 bytes user] [8 bytes claimed_amount] [8 bytes timestamp] [1 byte bump]
+        // claimed_amount is at offset 40 (8 + 32)
+        const data = accountInfo.data;
+        if (data.length < 48) {
+            return 0n;
+        }
+
+        // Read u64 little-endian at offset 40
+        const claimedAmount = data.readBigUInt64LE(40);
+        return claimedAmount;
+    } catch (e) {
+        console.error(`Failed to fetch UserClaim for ${walletPubkey}:`, e);
+        return 0n;
+    }
+}
+
+/**
+ * Fetch actual stardust token balance from wallet's token account
+ * This is the current balance (can decrease via transfers)
+ */
+async function fetchStardustTokenBalance(walletPubkey: string): Promise<bigint> {
     const stardustMint = new PublicKey(config.stardustMint);
     const wallet = new PublicKey(walletPubkey);
 
@@ -193,7 +234,7 @@ async function fetchClaimedStardust(walletPubkey: string): Promise<bigint> {
         const ata = await getAssociatedTokenAddress(stardustMint, wallet);
         return await getTokenBalance(ata.toBase58());
     } catch (e) {
-        // User might not have claimed yet
+        // User might not have a stardust token account
         return 0n;
     }
 }
@@ -523,6 +564,9 @@ async function handler(req: Request): Promise<Response | null> {
         }
         const isCapped = unclaimed >= MAX_UNCLAIMED;
 
+        // Fetch actual stardust token balance (can be different from claimed if user transferred tokens)
+        const stardustTokenBalance = await fetchStardustTokenBalance(wallet);
+
         return json({
             wallet,
             lifetimeEarned: lifetimeEarned.toString(),
@@ -530,6 +574,7 @@ async function handler(req: Request): Promise<Response | null> {
             unclaimed: unclaimed.toString(),
             isCapped, // Frontend can show "1M MAX" indicator
             starBalance: earnings?.starBalance.toString() || "0",
+            stardustTokenBalance: stardustTokenBalance.toString(), // Actual current stardust token balance
             lastUpdated: earnings?.lastUpdated || null,
         });
     }

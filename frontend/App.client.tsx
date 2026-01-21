@@ -19,6 +19,7 @@ interface EarningsData {
     unclaimed: string;
     isCapped?: boolean;
     starBalance: string;
+    stardustTokenBalance?: string; // Actual current stardust token balance
 }
 
 interface LeaderboardEntry {
@@ -40,7 +41,7 @@ interface WinnerEntry {
 // ============================================
 const TOKEN_NAME = "$GXY";
 const TOKEN_PRICE_USD = 0.136;
-const SPIN_COST = 1_000_000; // 1M stardust
+const SPIN_COST = 1_000; // 1K stardust (temporarily reduced for testing)
 
 // ============================================
 // COMPONENTS
@@ -119,7 +120,8 @@ const MyWalletSection: React.FC<{
 }> = ({ earnings, claiming, onClaim }) => {
     const balance = earnings ? Number(BigInt(earnings.starBalance || "0")) / 1e9 : 0;
     const balanceUsd = balance * TOKEN_PRICE_USD;
-    const claimed = earnings ? Number(BigInt(earnings.claimed || "0")) / 1e9 : 0;
+    // Use stardustTokenBalance (actual current balance) instead of claimed (total ever claimed)
+    const stardustBalance = earnings ? Number(BigInt(earnings.stardustTokenBalance || earnings.claimed || "0")) / 1e9 : 0;
     const unclaimed = earnings ? Number(BigInt(earnings.unclaimed || "0")) / 1e9 : 0;
 
     return (
@@ -134,7 +136,7 @@ const MyWalletSection: React.FC<{
                     <div className="stardust-row">
                         <div>
                             <div className="wallet-card-label">Stardust Balance</div>
-                            <div className="wallet-card-value">{claimed.toLocaleString(undefined, { maximumFractionDigits: 0 })} ✨</div>
+                            <div className="wallet-card-value">{stardustBalance.toLocaleString(undefined, { maximumFractionDigits: 0 })} ✨</div>
                         </div>
                         <div className="stardust-divider" />
                         <div>
