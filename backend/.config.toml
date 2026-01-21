@@ -1,8 +1,8 @@
 # Backend config for stardust-protocol
 BUN_PORT = 3005
 
-# Solana RPC endpoint
-SOLANA_RPC = "https://api.mainnet-beta.solana.com"
+# Solana RPC endpoint (using Helius for reliable mainnet access)
+SOLANA_RPC = "https://mainnet.helius-rpc.com/?api-key=15319bf4-5b40-4958-ac8d-6313aa55eb92"
 
 # Main token mint address (token holders earn stardust based on their holdings)
 # This should be the SPL token whose holders earn stardust

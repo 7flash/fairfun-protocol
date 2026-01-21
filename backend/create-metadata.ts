@@ -26,11 +26,11 @@ console.log(`   Program ID: ${config.programId}`);
 console.log(`   Stardust Mint: ${config.stardustMint}`);
 console.log(`   Authority: ${config.authority.publicKey}`);
 
-// Token metadata
-const TOKEN_NAME = "Stardust";
-const TOKEN_SYMBOL = "STRDST";
-// For now, use a simple metadata URI - should be replaced with actual IPFS/Arweave URI
-const TOKEN_URI = "https://arweave.net/stardust-metadata.json"; // Placeholder
+// Token metadata (matching stardust-metadata.json)
+const TOKEN_NAME = "Galaxy Stardust";
+const TOKEN_SYMBOL = "GXYSTAR";
+// Using the shelbynet hosted metadata JSON
+const TOKEN_URI = "https://api.shelbynet.shelby.xyz/shelby/v1/blobs/0x2031c1b6866a0ad467fd5f0fee5850574fb3dbdb2b74105004c6fca71b7fdfc8/stardust-metadata.json";
 
 // Metaplex Token Metadata Program ID
 const TOKEN_METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");

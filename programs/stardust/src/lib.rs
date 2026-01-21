@@ -130,12 +130,6 @@ pub mod stardust {
     }
 
     /// Create token metadata for the stardust mint
-    /// This allows the token to display properly in wallets like Phantom
-    ///
-    /// # Arguments
-    /// * `name` - Token name (e.g., "Stardust")
-    /// * `symbol` - Token symbol (e.g., "STRDST")
-    /// * `uri` - URI to metadata JSON (IPFS/Arweave)
     pub fn create_metadata(
         ctx: Context<CreateMetadata>,
         name: String,
@@ -143,12 +137,9 @@ pub mod stardust {
         uri: String,
     ) -> Result<()> {
         let state = &ctx.accounts.state;
-
-        // STATE PDA seeds for signing (mint authority)
         let seeds = &[b"state".as_ref(), &[state.bump]];
         let signer_seeds = &[&seeds[..]];
 
-        // Build token metadata data
         let data_v2 = DataV2 {
             name,
             symbol,
@@ -159,7 +150,6 @@ pub mod stardust {
             uses: None,
         };
 
-        // Build CPI accounts for create_metadata_accounts_v3
         let cpi_accounts = CreateMetadataAccountsV3 {
             metadata: ctx.accounts.metadata.to_account_info(),
             mint: ctx.accounts.stardust_mint.to_account_info(),
@@ -170,21 +160,14 @@ pub mod stardust {
             rent: ctx.accounts.rent.to_account_info(),
         };
 
-        let cpi_program = ctx.accounts.token_metadata_program.to_account_info();
-        let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer_seeds);
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_metadata_program.to_account_info(),
+            cpi_accounts,
+            signer_seeds,
+        );
 
-        // Execute CPI to create metadata account
-        create_metadata_accounts_v3(
-            cpi_ctx,
-            data_v2,
-            true, // is_mutable
-            true, // update_authority_is_signer
-            None, // collection_details
-        )?;
-
+        create_metadata_accounts_v3(cpi_ctx, data_v2, true, true, None)?;
         msg!("Token Metadata Created!");
-        msg!("Metadata Account: {}", ctx.accounts.metadata.key());
-
         Ok(())
     }
 }
@@ -268,30 +251,16 @@ pub struct ClaimStardust<'info> {
 
 #[derive(Accounts)]
 pub struct CreateMetadata<'info> {
-    /// Protocol state (mint authority signer)
-    #[account(
-        seeds = [b"state"],
-        bump = state.bump,
-        has_one = stardust_mint
-    )]
+    #[account(seeds = [b"state"], bump = state.bump, has_one = stardust_mint)]
     pub state: Account<'info, ProtocolState>,
-
-    /// Stardust token mint
     #[account(mut)]
     pub stardust_mint: Account<'info, Mint>,
-
-    /// Metadata account (will be created)
-    /// CHECK: Created by Metaplex program via CPI
+    /// CHECK: Created by Metaplex
     #[account(mut)]
     pub metadata: UncheckedAccount<'info>,
-
-    /// Payer for account creation
     #[account(mut)]
     pub payer: Signer<'info>,
-
-    /// Metaplex Token Metadata Program
     pub token_metadata_program: Program<'info, Metadata>,
-
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
 }

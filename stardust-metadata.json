@@ -1,0 +1,17 @@
+{
+    "name": "Galaxy Stardust",
+    "symbol": "GXYSTAR",
+    "description": "Earn Stardust by holding $GXY tokens and burn it in the Galaxy Wheel to claim SOL rewards.",
+    "image": "https://api.shelbynet.shelby.xyz/shelby/v1/blobs/0x2031c1b6866a0ad467fd5f0fee5850574fb3dbdb2b74105004c6fca71b7fdfc8/stardust_logo_white.jpg",
+    "external_url": "https://galaxy.do",
+    "attributes": [
+        {
+            "trait_type": "Protocol",
+            "value": "Stardust"
+        },
+        {
+            "trait_type": "Type",
+            "value": "Utility Token"
+        }
+    ]
+}
