@@ -62,6 +62,12 @@ const Header: React.FC<{
                 <div className="logo-domain">gx402.xyz</div>
             </div>
         </div>
+        <nav className="header-nav">
+            <a href="#wallet" className="nav-link">Wallet</a>
+            <a href="#wheel" className="nav-link">Wheel</a>
+            <a href="#leaders" className="nav-link">Leaders</a>
+            <a href="#history" className="nav-link">History</a>
+        </nav>
         <div className="header-right">
             <div className="network-badge mainnet">
                 <span className="network-dot" />
@@ -101,8 +107,9 @@ const Section: React.FC<{
     label: string;
     children: React.ReactNode;
     className?: string;
-}> = ({ label, children, className = "" }) => (
-    <div className={`section-row ${className}`}>
+    id?: string;
+}> = ({ label, children, className = "", id }) => (
+    <div id={id} className={`section-row ${className}`}>
         <div className="section-label">
             <span>{label}</span>
         </div>
@@ -125,7 +132,7 @@ const MyWalletSection: React.FC<{
     const unclaimed = earnings ? Number(BigInt(earnings.unclaimed || "0")) / 1e9 : 0;
 
     return (
-        <Section label="MY WALLET" className="wallet-section">
+        <Section label="MY WALLET" className="wallet-section" id="wallet">
             <div className="wallet-grid">
                 <div className="wallet-card">
                     <div className="wallet-card-label">{TOKEN_NAME} Balance</div>
@@ -175,7 +182,7 @@ const GalaxyWheelSection: React.FC<{
     ];
 
     return (
-        <Section label="GALAXY WHEEL" className="wheel-section">
+        <Section label="GALAXY WHEEL" className="wheel-section" id="wheel">
             <div className="wheel-container">
                 <div className="wheel-wrapper">
                     <div className="wheel-pointer">▼</div>
@@ -208,7 +215,7 @@ const GalaxyWheelSection: React.FC<{
                     </svg>
                 </div>
                 <div className="wheel-info">
-                    <div className="wheel-cost">Cost: 1,000,000 ✨</div>
+                    <div className="wheel-cost">Cost: {SPIN_COST.toLocaleString()} ✨</div>
                     <div className="wheel-balance">Your balance: {available.toLocaleString()} ✨</div>
                     <button
                         className={`btn btn-gold spin-btn ${spinning ? 'spinning' : ''}`}
@@ -229,7 +236,7 @@ const LeadersSection: React.FC<{
     leaderboard: LeaderboardEntry[];
     currentWallet: string | null;
 }> = ({ leaderboard, currentWallet }) => (
-    <Section label="LEADERS" className="leaders-section">
+    <Section label="LEADERS" className="leaders-section" id="leaders">
         <table className="leaders-table">
             <thead>
                 <tr>
@@ -262,7 +269,7 @@ const LeadersSection: React.FC<{
 
 // History Section
 const HistorySection: React.FC<{ winners: WinnerEntry[] }> = ({ winners }) => (
-    <Section label="HISTORY" className="history-section">
+    <Section label="HISTORY" className="history-section" id="history">
         <div className="history-header">
             <span>Recent Wins</span>
             <span className="live-badge"><span className="live-dot" />LIVE</span>
@@ -452,7 +459,11 @@ function App() {
 
             // 2. Build the transaction
             // Use Helius public RPC (more reliable than official mainnet-beta)
-            const connection = new Connection('https://mainnet.helius-rpc.com/?api-key=15319bf4-5b40-4958-ac8d-6313aa55eb92', 'confirmed');
+            // Disable WebSocket to avoid "ws does not work in browser" error
+            const connection = new Connection('https://mainnet.helius-rpc.com/?api-key=15319bf4-5b40-4958-ac8d-6313aa55eb92', {
+                commitment: 'confirmed',
+                wsEndpoint: undefined, // Disable WebSocket, use HTTP polling
+            });
             const userPubkey = new PublicKey(publicKey);
             const programId = new PublicKey(config.programId);
             const statePda = new PublicKey(config.statePda);
@@ -603,7 +614,8 @@ function App() {
         }
     };
 
-    const available = earnings ? Number(BigInt(earnings.unclaimed || "0")) / 1e9 : 0;
+    // Use stardustTokenBalance (actual tokens in wallet) for wheel, not unclaimed (claimable from protocol)
+    const available = earnings ? Number(BigInt(earnings.stardustTokenBalance || earnings.claimed || "0")) / 1e9 : 0;
 
     return (
         <>

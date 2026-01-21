@@ -4,47 +4,50 @@ use anchor_spl::token::{self, Burn, Token, TokenAccount, Mint};
 
 declare_id!("GXY4Red3mPt1onXkV1C2A3m5dR7xFdZiP8A9gN7K4bE5");
 
-/// Stardust Redemption Program
-/// Allows users to burn stardust tokens for a chance to win SOL rewards
-/// Probabilities are configurable by admin
+/// Galaxy Wheel Program (formerly Stardust Redemption)
+/// Users burn stardust tokens for a chance to win SOL from treasury
+/// Rewards are % of treasury, not fixed amounts
+/// Probabilities must sum to 100%
 
 #[program]
-pub mod stardust_redemption {
+pub mod galaxy_wheel {
     use super::*;
 
-    /// Initialize the redemption pool with SOL rewards
+    /// Initialize the wheel with configuration
+    /// probabilities: [nothing, small(1%), medium(10%), jackpot(50%)] in basis points (sum to 10000)
+    /// reward_bps: [0, 100, 1000, 5000] = [0%, 1%, 10%, 50%] of treasury
     pub fn initialize(
         ctx: Context<Initialize>,
-        cost_per_spin: u64,   // Stardust cost per spin (in token units)
-        probabilities: [u16; 5], // Probabilities out of 10000 (basis points)
-        rewards: [u64; 5],    // SOL rewards in lamports for each tier
+        cost_per_spin: u64,         // Stardust cost per spin (with 9 decimals)
+        probabilities: [u16; 4],    // Probabilities in basis points (must sum to 10000)
+        reward_bps: [u16; 4],       // Reward as basis points of treasury
     ) -> Result<()> {
         let state = &mut ctx.accounts.state;
+        
+        // Validate probabilities sum to 10000 (100%)
+        let total_prob: u16 = probabilities.iter().sum();
+        require!(total_prob == 10000, WheelError::InvalidProbabilities);
         
         state.authority = ctx.accounts.authority.key();
         state.stardust_mint = ctx.accounts.stardust_mint.key();
         state.cost_per_spin = cost_per_spin;
         state.probabilities = probabilities;
-        state.rewards = rewards;
+        state.reward_bps = reward_bps;
         state.total_spins = 0;
         state.total_distributed = 0;
         state.bump = ctx.bumps.state;
+        state.pool_bump = ctx.bumps.pool;
         
-        // Validate probabilities sum to 10000 (100%)
-        let total_prob: u16 = probabilities.iter().sum();
-        require!(total_prob == 10000, RedemptionError::InvalidProbabilities);
-        
-        msg!("Redemption pool initialized");
-        msg!("Cost per spin: {} stardust", cost_per_spin);
-        msg!("Reward tiers: {:?}", rewards);
+        msg!("Galaxy Wheel initialized!");
+        msg!("Cost per spin: {} stardust (raw)", cost_per_spin);
         msg!("Probabilities: {:?}", probabilities);
+        msg!("Reward percentages (bps): {:?}", reward_bps);
         
         Ok(())
     }
 
-    /// Fund the redemption pool with SOL
+    /// Fund the treasury pool with SOL
     pub fn fund_pool(ctx: Context<FundPool>, amount: u64) -> Result<()> {
-        // Transfer SOL from funder to pool PDA
         let ix = anchor_lang::solana_program::system_instruction::transfer(
             &ctx.accounts.funder.key(),
             &ctx.accounts.pool.key(),
@@ -59,14 +62,18 @@ pub mod stardust_redemption {
             ],
         )?;
         
-        msg!("Pool funded with {} lamports", amount);
+        msg!("Treasury funded with {} lamports ({} SOL)", amount, amount as f64 / 1e9);
         Ok(())
     }
 
     /// Spin the wheel - burn stardust for a chance to win SOL
+    /// Returns: tier (0-3) in program logs and SpinResult event
     pub fn spin(ctx: Context<Spin>) -> Result<()> {
         let state = &mut ctx.accounts.state;
         let clock = Clock::get()?;
+        
+        // Get treasury balance before spin
+        let treasury_balance = ctx.accounts.pool.lamports();
         
         // Generate pseudo-random number using blockhash and user data
         let seed_data = [
@@ -81,17 +88,19 @@ pub mod stardust_redemption {
         
         // Determine reward tier based on probabilities
         let mut cumulative: u16 = 0;
-        let mut reward_tier: usize = 0;
+        let mut reward_tier: u8 = 0;
         
         for (i, &prob) in state.probabilities.iter().enumerate() {
             cumulative += prob;
             if random_value < cumulative {
-                reward_tier = i;
+                reward_tier = i as u8;
                 break;
             }
         }
         
-        let reward_amount = state.rewards[reward_tier];
+        // Calculate reward as % of treasury
+        let reward_bps = state.reward_bps[reward_tier as usize] as u64;
+        let reward_amount = (treasury_balance * reward_bps) / 10000;
         
         // Burn stardust from user
         let cpi_accounts = Burn {
@@ -106,8 +115,7 @@ pub mod stardust_redemption {
         
         // Transfer SOL reward from pool to user
         if reward_amount > 0 {
-            let pool_lamports = ctx.accounts.pool.lamports();
-            require!(pool_lamports >= reward_amount, RedemptionError::InsufficientPoolBalance);
+            require!(treasury_balance >= reward_amount, WheelError::InsufficientTreasury);
             
             **ctx.accounts.pool.try_borrow_mut_lamports()? -= reward_amount;
             **ctx.accounts.user.try_borrow_mut_lamports()? += reward_amount;
@@ -117,40 +125,60 @@ pub mod stardust_redemption {
         state.total_spins += 1;
         state.total_distributed += reward_amount;
         
-        // Emit winner event
+        // Update user spin history
+        let user_history = &mut ctx.accounts.user_history;
+        if user_history.user == Pubkey::default() {
+            // First spin - initialize
+            user_history.user = ctx.accounts.user.key();
+        }
+        user_history.total_spins += 1;
+        user_history.total_won += reward_amount;
+        user_history.last_spin_tier = reward_tier;
+        user_history.last_spin_amount = reward_amount;
+        user_history.last_spin_timestamp = clock.unix_timestamp;
+        
+        // Emit result event
         emit!(SpinResult {
             user: ctx.accounts.user.key(),
-            reward_tier: reward_tier as u8,
+            tier: reward_tier,
             reward_amount,
+            treasury_balance,
             timestamp: clock.unix_timestamp,
         });
         
-        msg!("Spin #{}: User {} won {} lamports (tier {})", 
-            state.total_spins, 
-            ctx.accounts.user.key(),
+        msg!("🎰 Spin #{}: Tier {} - Won {} lamports ({} SOL)", 
+            state.total_spins,
+            reward_tier,
             reward_amount,
-            reward_tier
+            reward_amount as f64 / 1e9
         );
         
         Ok(())
     }
 
-    /// Admin: Update probabilities and rewards
-    pub fn update_config(
+    /// Admin: Update spin cost only
+    pub fn set_spin_cost(ctx: Context<UpdateConfig>, cost_per_spin: u64) -> Result<()> {
+        ctx.accounts.state.cost_per_spin = cost_per_spin;
+        msg!("Spin cost updated to {} stardust", cost_per_spin);
+        Ok(())
+    }
+
+    /// Admin: Update probabilities and reward percentages
+    pub fn set_probabilities(
         ctx: Context<UpdateConfig>,
-        probabilities: [u16; 5],
-        rewards: [u64; 5],
+        probabilities: [u16; 4],
+        reward_bps: [u16; 4],
     ) -> Result<()> {
-        let state = &mut ctx.accounts.state;
-        
         // Validate probabilities sum to 10000
         let total_prob: u16 = probabilities.iter().sum();
-        require!(total_prob == 10000, RedemptionError::InvalidProbabilities);
+        require!(total_prob == 10000, WheelError::InvalidProbabilities);
         
+        let state = &mut ctx.accounts.state;
         state.probabilities = probabilities;
-        state.rewards = rewards;
+        state.reward_bps = reward_bps;
         
-        msg!("Config updated - Probabilities: {:?}, Rewards: {:?}", probabilities, rewards);
+        msg!("Probabilities updated: {:?}", probabilities);
+        msg!("Reward percentages (bps) updated: {:?}", reward_bps);
         Ok(())
     }
 }
@@ -164,17 +192,18 @@ pub struct Initialize<'info> {
     #[account(
         init,
         payer = authority,
-        space = 8 + RedemptionState::INIT_SPACE,
-        seeds = [b"redemption_state"],
+        space = 8 + WheelState::INIT_SPACE,
+        seeds = [b"wheel_state"],
         bump
     )]
-    pub state: Account<'info, RedemptionState>,
+    pub state: Account<'info, WheelState>,
     
+    /// CHECK: SOL treasury pool PDA
     #[account(
-        seeds = [b"redemption_pool"],
+        mut,
+        seeds = [b"wheel_pool"],
         bump
     )]
-    /// CHECK: This is the SOL pool PDA
     pub pool: AccountInfo<'info>,
     
     pub stardust_mint: Account<'info, Mint>,
@@ -187,12 +216,12 @@ pub struct Initialize<'info> {
 
 #[derive(Accounts)]
 pub struct FundPool<'info> {
+    /// CHECK: SOL treasury pool PDA
     #[account(
         mut,
-        seeds = [b"redemption_pool"],
+        seeds = [b"wheel_pool"],
         bump
     )]
-    /// CHECK: This is the SOL pool PDA
     pub pool: AccountInfo<'info>,
     
     #[account(mut)]
@@ -205,17 +234,17 @@ pub struct FundPool<'info> {
 pub struct Spin<'info> {
     #[account(
         mut,
-        seeds = [b"redemption_state"],
+        seeds = [b"wheel_state"],
         bump = state.bump
     )]
-    pub state: Account<'info, RedemptionState>,
+    pub state: Account<'info, WheelState>,
     
+    /// CHECK: SOL treasury pool PDA
     #[account(
         mut,
-        seeds = [b"redemption_pool"],
-        bump
+        seeds = [b"wheel_pool"],
+        bump = state.pool_bump
     )]
-    /// CHECK: This is the SOL pool PDA
     pub pool: AccountInfo<'info>,
     
     #[account(mut)]
@@ -228,6 +257,15 @@ pub struct Spin<'info> {
     )]
     pub user_stardust: Account<'info, TokenAccount>,
     
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + UserSpinHistory::INIT_SPACE,
+        seeds = [b"user_history", user.key().as_ref()],
+        bump
+    )]
+    pub user_history: Account<'info, UserSpinHistory>,
+    
     #[account(mut)]
     pub user: Signer<'info>,
     
@@ -239,11 +277,11 @@ pub struct Spin<'info> {
 pub struct UpdateConfig<'info> {
     #[account(
         mut,
-        seeds = [b"redemption_state"],
+        seeds = [b"wheel_state"],
         bump = state.bump,
-        constraint = state.authority == authority.key()
+        constraint = state.authority == authority.key() @ WheelError::Unauthorized
     )]
-    pub state: Account<'info, RedemptionState>,
+    pub state: Account<'info, WheelState>,
     
     pub authority: Signer<'info>,
 }
@@ -254,15 +292,27 @@ pub struct UpdateConfig<'info> {
 
 #[account]
 #[derive(InitSpace)]
-pub struct RedemptionState {
+pub struct WheelState {
     pub authority: Pubkey,
     pub stardust_mint: Pubkey,
     pub cost_per_spin: u64,
-    pub probabilities: [u16; 5],  // Probabilities in basis points (10000 = 100%)
-    pub rewards: [u64; 5],        // SOL rewards in lamports
+    pub probabilities: [u16; 4],  // Probabilities in basis points (10000 = 100%)
+    pub reward_bps: [u16; 4],     // Reward as basis points of treasury
     pub total_spins: u64,
     pub total_distributed: u64,   // Total SOL distributed
     pub bump: u8,
+    pub pool_bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct UserSpinHistory {
+    pub user: Pubkey,
+    pub total_spins: u64,
+    pub total_won: u64,
+    pub last_spin_tier: u8,
+    pub last_spin_amount: u64,
+    pub last_spin_timestamp: i64,
 }
 
 // ============================================
@@ -272,8 +322,9 @@ pub struct RedemptionState {
 #[event]
 pub struct SpinResult {
     pub user: Pubkey,
-    pub reward_tier: u8,
+    pub tier: u8,
     pub reward_amount: u64,
+    pub treasury_balance: u64,
     pub timestamp: i64,
 }
 
@@ -282,13 +333,16 @@ pub struct SpinResult {
 // ============================================
 
 #[error_code]
-pub enum RedemptionError {
+pub enum WheelError {
     #[msg("Probabilities must sum to 10000 (100%)")]
     InvalidProbabilities,
     
-    #[msg("Insufficient balance in redemption pool")]
-    InsufficientPoolBalance,
+    #[msg("Insufficient balance in treasury")]
+    InsufficientTreasury,
     
     #[msg("Insufficient stardust balance")]
     InsufficientStardust,
+    
+    #[msg("Unauthorized - only authority can perform this action")]
+    Unauthorized,
 }
