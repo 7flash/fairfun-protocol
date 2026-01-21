@@ -7,16 +7,17 @@ skip-lint = false
 
 [programs.localnet]
 stardust = "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A"
-redemption = "GXY4Red3mPt1onXkV1C2A3m5dR7xFdZiP8A9gN7K4bE5"
+wheel = "GXY4Red3mPt1onXkV1C2A3m5dR7xFdZiP8A9gN7K4bE5"
 star_nft = "HxqX7EZCWbYvjrZDJaVtU5y3ZjVXMEccWiahao9MPeKB"
 
 [programs.devnet]
 stardust = "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A"
-redemption = "GXY4Red3mPt1onXkV1C2A3m5dR7xFdZiP8A9gN7K4bE5"
+wheel = "GXY4Red3mPt1onXkV1C2A3m5dR7xFdZiP8A9gN7K4bE5"
 star_nft = "HxqX7EZCWbYvjrZDJaVtU5y3ZjVXMEccWiahao9MPeKB"
 
 [programs.mainnet]
 stardust = "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A"
+wheel = "3M12BfitAEYz14WJBMnjahEuSvhsWhjfGJXbzur26o2U"
 
 [registry]
 url = "https://api.apr.dev"

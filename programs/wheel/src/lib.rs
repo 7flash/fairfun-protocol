@@ -2,35 +2,39 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::hash::hash;
 use anchor_spl::token::{self, Burn, Token, TokenAccount, Mint};
 
-declare_id!("GXY4Red3mPt1onXkV1C2A3m5dR7xFdZiP8A9gN7K4bE5");
+declare_id!("3M12BfitAEYz14WJBMnjahEuSvhsWhjfGJXbzur26o2U");
 
-/// Galaxy Wheel Program (formerly Stardust Redemption)
+/// Galaxy Wheel Program
 /// Users burn stardust tokens for a chance to win SOL from treasury
-/// Rewards are % of treasury, not fixed amounts
+/// Rewards are % of treasury, dynamic tier count (1-10)
 /// Probabilities must sum to 100%
+
+pub const MAX_TIERS: usize = 10;
 
 #[program]
 pub mod galaxy_wheel {
     use super::*;
 
     /// Initialize the wheel with configuration
-    /// probabilities: [nothing, small(1%), medium(10%), jackpot(50%)] in basis points (sum to 10000)
-    /// reward_bps: [0, 100, 1000, 5000] = [0%, 1%, 10%, 50%] of treasury
     pub fn initialize(
         ctx: Context<Initialize>,
-        cost_per_spin: u64,         // Stardust cost per spin (with 9 decimals)
-        probabilities: [u16; 4],    // Probabilities in basis points (must sum to 10000)
-        reward_bps: [u16; 4],       // Reward as basis points of treasury
+        cost_per_spin: u64,
+        num_tiers: u8,
+        probabilities: [u16; MAX_TIERS],
+        reward_bps: [u16; MAX_TIERS],
     ) -> Result<()> {
+        require!(num_tiers >= 1 && num_tiers <= 10, WheelError::InvalidTierCount);
+        
         let state = &mut ctx.accounts.state;
         
         // Validate probabilities sum to 10000 (100%)
-        let total_prob: u16 = probabilities.iter().sum();
+        let total_prob: u16 = probabilities[..num_tiers as usize].iter().sum();
         require!(total_prob == 10000, WheelError::InvalidProbabilities);
         
         state.authority = ctx.accounts.authority.key();
         state.stardust_mint = ctx.accounts.stardust_mint.key();
         state.cost_per_spin = cost_per_spin;
+        state.num_tiers = num_tiers;
         state.probabilities = probabilities;
         state.reward_bps = reward_bps;
         state.total_spins = 0;
@@ -38,11 +42,7 @@ pub mod galaxy_wheel {
         state.bump = ctx.bumps.state;
         state.pool_bump = ctx.bumps.pool;
         
-        msg!("Galaxy Wheel initialized!");
-        msg!("Cost per spin: {} stardust (raw)", cost_per_spin);
-        msg!("Probabilities: {:?}", probabilities);
-        msg!("Reward percentages (bps): {:?}", reward_bps);
-        
+        msg!("Galaxy Wheel initialized with {} tiers", num_tiers);
         Ok(())
     }
 
@@ -62,20 +62,20 @@ pub mod galaxy_wheel {
             ],
         )?;
         
-        msg!("Treasury funded with {} lamports ({} SOL)", amount, amount as f64 / 1e9);
+        msg!("Treasury funded with {} lamports", amount);
         Ok(())
     }
 
     /// Spin the wheel - burn stardust for a chance to win SOL
-    /// Returns: tier (0-3) in program logs and SpinResult event
     pub fn spin(ctx: Context<Spin>) -> Result<()> {
         let state = &mut ctx.accounts.state;
         let clock = Clock::get()?;
+        let num_tiers = state.num_tiers as usize;
         
         // Get treasury balance before spin
         let treasury_balance = ctx.accounts.pool.lamports();
         
-        // Generate pseudo-random number using blockhash and user data
+        // Generate pseudo-random number
         let seed_data = [
             ctx.accounts.user.key().as_ref(),
             &clock.slot.to_le_bytes(),
@@ -90,8 +90,8 @@ pub mod galaxy_wheel {
         let mut cumulative: u16 = 0;
         let mut reward_tier: u8 = 0;
         
-        for (i, &prob) in state.probabilities.iter().enumerate() {
-            cumulative += prob;
+        for i in 0..num_tiers {
+            cumulative += state.probabilities[i];
             if random_value < cumulative {
                 reward_tier = i as u8;
                 break;
@@ -128,7 +128,6 @@ pub mod galaxy_wheel {
         // Update user spin history
         let user_history = &mut ctx.accounts.user_history;
         if user_history.user == Pubkey::default() {
-            // First spin - initialize
             user_history.user = ctx.accounts.user.key();
         }
         user_history.total_spins += 1;
@@ -142,43 +141,40 @@ pub mod galaxy_wheel {
             user: ctx.accounts.user.key(),
             tier: reward_tier,
             reward_amount,
+            reward_bps: reward_bps as u16,
             treasury_balance,
             timestamp: clock.unix_timestamp,
         });
         
-        msg!("🎰 Spin #{}: Tier {} - Won {} lamports ({} SOL)", 
-            state.total_spins,
-            reward_tier,
-            reward_amount,
-            reward_amount as f64 / 1e9
-        );
-        
+        msg!("Spin #{}: Tier {} - Won {} lamports", state.total_spins, reward_tier, reward_amount);
         Ok(())
     }
 
     /// Admin: Update spin cost only
     pub fn set_spin_cost(ctx: Context<UpdateConfig>, cost_per_spin: u64) -> Result<()> {
         ctx.accounts.state.cost_per_spin = cost_per_spin;
-        msg!("Spin cost updated to {} stardust", cost_per_spin);
+        msg!("Spin cost updated to {}", cost_per_spin);
         Ok(())
     }
 
     /// Admin: Update probabilities and reward percentages
     pub fn set_probabilities(
         ctx: Context<UpdateConfig>,
-        probabilities: [u16; 4],
-        reward_bps: [u16; 4],
+        num_tiers: u8,
+        probabilities: [u16; MAX_TIERS],
+        reward_bps: [u16; MAX_TIERS],
     ) -> Result<()> {
-        // Validate probabilities sum to 10000
-        let total_prob: u16 = probabilities.iter().sum();
+        require!(num_tiers >= 1 && num_tiers <= 10, WheelError::InvalidTierCount);
+        
+        let total_prob: u16 = probabilities[..num_tiers as usize].iter().sum();
         require!(total_prob == 10000, WheelError::InvalidProbabilities);
         
         let state = &mut ctx.accounts.state;
+        state.num_tiers = num_tiers;
         state.probabilities = probabilities;
         state.reward_bps = reward_bps;
         
-        msg!("Probabilities updated: {:?}", probabilities);
-        msg!("Reward percentages (bps) updated: {:?}", reward_bps);
+        msg!("Config updated - {} tiers", num_tiers);
         Ok(())
     }
 }
@@ -192,7 +188,7 @@ pub struct Initialize<'info> {
     #[account(
         init,
         payer = authority,
-        space = 8 + WheelState::INIT_SPACE,
+        space = 8 + WheelState::LEN,
         seeds = [b"wheel_state"],
         bump
     )]
@@ -260,7 +256,7 @@ pub struct Spin<'info> {
     #[account(
         init_if_needed,
         payer = user,
-        space = 8 + UserSpinHistory::INIT_SPACE,
+        space = 8 + UserSpinHistory::LEN,
         seeds = [b"user_history", user.key().as_ref()],
         bump
     )]
@@ -291,28 +287,35 @@ pub struct UpdateConfig<'info> {
 // ============================================
 
 #[account]
-#[derive(InitSpace)]
 pub struct WheelState {
-    pub authority: Pubkey,
-    pub stardust_mint: Pubkey,
-    pub cost_per_spin: u64,
-    pub probabilities: [u16; 4],  // Probabilities in basis points (10000 = 100%)
-    pub reward_bps: [u16; 4],     // Reward as basis points of treasury
-    pub total_spins: u64,
-    pub total_distributed: u64,   // Total SOL distributed
-    pub bump: u8,
-    pub pool_bump: u8,
+    pub authority: Pubkey,          // 32
+    pub stardust_mint: Pubkey,      // 32
+    pub cost_per_spin: u64,         // 8
+    pub num_tiers: u8,              // 1
+    pub probabilities: [u16; MAX_TIERS],  // 20 (10 x 2)
+    pub reward_bps: [u16; MAX_TIERS],     // 20 (10 x 2)
+    pub total_spins: u64,           // 8
+    pub total_distributed: u64,     // 8
+    pub bump: u8,                   // 1
+    pub pool_bump: u8,              // 1
+}
+
+impl WheelState {
+    pub const LEN: usize = 32 + 32 + 8 + 1 + 20 + 20 + 8 + 8 + 1 + 1; // 131
 }
 
 #[account]
-#[derive(InitSpace)]
 pub struct UserSpinHistory {
-    pub user: Pubkey,
-    pub total_spins: u64,
-    pub total_won: u64,
-    pub last_spin_tier: u8,
-    pub last_spin_amount: u64,
-    pub last_spin_timestamp: i64,
+    pub user: Pubkey,               // 32
+    pub total_spins: u64,           // 8
+    pub total_won: u64,             // 8
+    pub last_spin_tier: u8,         // 1
+    pub last_spin_amount: u64,      // 8
+    pub last_spin_timestamp: i64,   // 8
+}
+
+impl UserSpinHistory {
+    pub const LEN: usize = 32 + 8 + 8 + 1 + 8 + 8; // 65
 }
 
 // ============================================
@@ -324,6 +327,7 @@ pub struct SpinResult {
     pub user: Pubkey,
     pub tier: u8,
     pub reward_amount: u64,
+    pub reward_bps: u16,
     pub treasury_balance: u64,
     pub timestamp: i64,
 }
@@ -336,6 +340,9 @@ pub struct SpinResult {
 pub enum WheelError {
     #[msg("Probabilities must sum to 10000 (100%)")]
     InvalidProbabilities,
+    
+    #[msg("Number of tiers must be between 1 and 10")]
+    InvalidTierCount,
     
     #[msg("Insufficient balance in treasury")]
     InsufficientTreasury,

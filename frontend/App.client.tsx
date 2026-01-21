@@ -44,6 +44,47 @@ const TOKEN_PRICE_USD = 0.136;
 const SPIN_COST = 1_000; // 1K stardust (temporarily reduced for testing)
 
 // ============================================
+// TOAST NOTIFICATIONS
+// ============================================
+interface Toast {
+    id: string;
+    type: 'success' | 'error' | 'pending';
+    message: string;
+    txSignature?: string;
+}
+
+const ToastContainer: React.FC<{
+    toasts: Toast[];
+    onDismiss: (id: string) => void;
+}> = ({ toasts, onDismiss }) => (
+    <div className="toast-container">
+        {toasts.map(toast => (
+            <div key={toast.id} className={`toast toast-${toast.type}`}>
+                <div className="toast-icon">
+                    {toast.type === 'success' && '✅'}
+                    {toast.type === 'error' && '❌'}
+                    {toast.type === 'pending' && '⏳'}
+                </div>
+                <div className="toast-content">
+                    <div className="toast-message">{toast.message}</div>
+                    {toast.txSignature && (
+                        <a
+                            href={`https://solscan.io/tx/${toast.txSignature}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="toast-link"
+                        >
+                            View on Solscan →
+                        </a>
+                    )}
+                </div>
+                <button className="toast-close" onClick={() => onDismiss(toast.id)}>×</button>
+            </div>
+        ))}
+    </div>
+);
+
+// ============================================
 // COMPONENTS
 // ============================================
 
@@ -313,6 +354,28 @@ function App() {
     const [spinning, setSpinning] = useState(false);
     const [showLogin, setShowLogin] = useState(false);
     const [phantomWallet, setPhantomWallet] = useState<any>(null);
+    const [toasts, setToasts] = useState<Toast[]>([]);
+
+    // Toast helpers
+    const addToast = useCallback((type: Toast['type'], message: string, txSignature?: string) => {
+        const id = Date.now().toString();
+        setToasts(prev => [...prev, { id, type, message, txSignature }]);
+        // Auto dismiss after 8 seconds for success/error
+        if (type !== 'pending') {
+            setTimeout(() => dismissToast(id), 8000);
+        }
+        return id;
+    }, []);
+
+    const dismissToast = useCallback((id: string) => {
+        setToasts(prev => prev.filter(t => t.id !== id));
+    }, []);
+
+    const updateToast = useCallback((id: string, type: Toast['type'], message: string, txSignature?: string) => {
+        setToasts(prev => prev.map(t => t.id === id ? { ...t, type, message, txSignature } : t));
+        // Auto dismiss after 8 seconds
+        setTimeout(() => dismissToast(id), 8000);
+    }, []);
 
     // Restore wallet from localStorage
     useEffect(() => {
