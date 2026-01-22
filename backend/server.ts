@@ -960,6 +960,29 @@ async function handler(req: Request): Promise<Response | null> {
         }
     }
 
+    // GET /api/wheel/treasury - Get treasury pool balance
+    if (path === "/api/wheel/treasury" && req.method === "GET") {
+        try {
+            // Derive pool PDA
+            const WHEEL_PROGRAM_ID = new PublicKey("3M12BfitAEYz14WJBMnjahEuSvhsWhjfGJXbzur26o2U");
+            const [poolPda] = PublicKey.findProgramAddressSync(
+                [Buffer.from("wheel_pool")],
+                WHEEL_PROGRAM_ID
+            );
+
+            const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
+            const balance = await connection.getBalance(poolPda);
+
+            return json({
+                balance: balance / 1e9, // SOL
+                balanceLamports: balance,
+                poolPda: poolPda.toBase58(),
+            });
+        } catch (e: any) {
+            return json({ error: e.message, balance: 0 }, 500);
+        }
+    }
+
     return null;
 }
 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { PublicKey, Connection, Transaction, TransactionInstruction, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
+import { getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 // ============================================
 // TYPES
@@ -42,6 +43,8 @@ interface WinnerEntry {
 const TOKEN_NAME = "$GXY";
 const TOKEN_PRICE_USD = 0.136;
 const SPIN_COST = 1_000; // 1K stardust (temporarily reduced for testing)
+const ADMIN_AUTHORITY = "77cQ99WQ2FWQT19kgpN2a9CfgYSfDqpomNVGtyYUrpAY";
+const WHEEL_PROGRAM_ID = "3M12BfitAEYz14WJBMnjahEuSvhsWhjfGJXbzur26o2U";
 
 // ============================================
 // TOAST NOTIFICATIONS
@@ -210,27 +213,45 @@ const GalaxyWheelSection: React.FC<{
     available: number;
     spinning: boolean;
     onSpin: () => void;
-}> = ({ available, spinning, onSpin }) => {
+    isAdmin?: boolean;
+    treasuryBalance?: number;
+    onFundTreasury?: (amount: number) => void;
+}> = ({ available, spinning, onSpin, isAdmin, treasuryBalance, onFundTreasury }) => {
     const canSpin = available >= SPIN_COST;
+    const [fundAmount, setFundAmount] = React.useState("0.1");
 
-    // Wheel segments
+    // Wheel segments - now showing actual treasury percentages
     const segments = [
-        { label: "0.001", color: "#94a3b8" },
-        { label: "0.01", color: "#22c55e" },
-        { label: "0.1", color: "#3b82f6" },
-        { label: "1", color: "#a855f7" },
-        { label: "10", color: "#fbbf24" },
+        { label: "Nothing", color: "#94a3b8", percent: 10, reward: 0 },
+        { label: "1%", color: "#22c55e", percent: 75, reward: 1 },
+        { label: "10%", color: "#3b82f6", percent: 14, reward: 10 },
+        { label: "50%", color: "#fbbf24", percent: 1, reward: 50 },
     ];
 
     return (
         <Section label="GALAXY WHEEL" className="wheel-section" id="wheel">
+            {/* Treasury Info - always visible */}
+            {treasuryBalance !== undefined && (
+                <div className="treasury-info" style={{ textAlign: "center", marginBottom: 16, padding: 12, background: "rgba(251, 191, 36, 0.1)", borderRadius: 8, border: "1px solid var(--gold-primary)" }}>
+                    <div style={{ fontSize: 14, color: "var(--text-muted)" }}>Treasury Pool</div>
+                    <div style={{ fontSize: 24, fontWeight: "bold", color: "var(--gold-primary)" }}>{treasuryBalance.toFixed(4)} SOL</div>
+                    <div style={{ fontSize: 12, marginTop: 8, display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap" }}>
+                        {segments.slice(1).map((seg, i) => (
+                            <span key={i} style={{ color: seg.color }}>
+                                {seg.percent}% chance → {((treasuryBalance * seg.reward) / 100).toFixed(4)} SOL
+                            </span>
+                        ))}
+                    </div>
+                </div>
+            )}
+
             <div className="wheel-container">
                 <div className="wheel-wrapper">
                     <div className="wheel-pointer">▼</div>
                     <svg viewBox="0 0 200 200" className={`wheel-svg ${spinning ? 'spinning' : ''}`}>
                         {segments.map((seg, i) => {
-                            const angle = (360 / 5) * i - 90;
-                            const endAngle = angle + 72;
+                            const angle = (360 / 4) * i - 90;
+                            const endAngle = angle + 90;
                             const startRad = (angle * Math.PI) / 180;
                             const endRad = (endAngle * Math.PI) / 180;
                             const x1 = 100 + 85 * Math.cos(startRad);
@@ -238,7 +259,7 @@ const GalaxyWheelSection: React.FC<{
                             const x2 = 100 + 85 * Math.cos(endRad);
                             const y2 = 100 + 85 * Math.sin(endRad);
                             const path = `M100,100 L${x1},${y1} A85,85 0 0,1 ${x2},${y2} Z`;
-                            const midAngle = angle + 36;
+                            const midAngle = angle + 45;
                             const midRad = (midAngle * Math.PI) / 180;
                             const textX = 100 + 55 * Math.cos(midRad);
                             const textY = 100 + 55 * Math.sin(midRad);
@@ -268,6 +289,32 @@ const GalaxyWheelSection: React.FC<{
                     {!canSpin && <div className="wheel-need">Need {(SPIN_COST - available).toLocaleString()} more ✨</div>}
                 </div>
             </div>
+
+            {/* Admin Controls - only visible to deployer */}
+            {isAdmin && onFundTreasury && (
+                <div className="admin-panel" style={{ marginTop: 20, padding: 16, background: "rgba(34, 197, 94, 0.1)", borderRadius: 8, border: "1px solid var(--success)" }}>
+                    <div style={{ fontSize: 14, fontWeight: "bold", color: "var(--success)", marginBottom: 12 }}>🔐 Admin Controls</div>
+                    <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                        <label style={{ fontSize: 14 }}>Fund Treasury:</label>
+                        <input
+                            type="number"
+                            value={fundAmount}
+                            onChange={(e) => setFundAmount(e.target.value)}
+                            step="0.1"
+                            min="0.01"
+                            style={{ background: "var(--bg-tertiary)", border: "1px solid var(--border-light)", borderRadius: 6, padding: "6px 10px", color: "var(--text-primary)", width: 100 }}
+                        />
+                        <span>SOL</span>
+                        <button
+                            className="btn btn-gold"
+                            onClick={() => onFundTreasury(parseFloat(fundAmount))}
+                            style={{ padding: "6px 16px" }}
+                        >
+                            💰 Fund
+                        </button>
+                    </div>
+                </div>
+            )}
         </Section>
     );
 };
@@ -355,6 +402,10 @@ function App() {
     const [showLogin, setShowLogin] = useState(false);
     const [phantomWallet, setPhantomWallet] = useState<any>(null);
     const [toasts, setToasts] = useState<Toast[]>([]);
+    const [treasuryBalance, setTreasuryBalance] = useState<number>(0);
+
+    // Check if current user is admin
+    const isAdmin = publicKey === ADMIN_AUTHORITY;
 
     // Toast helpers
     const addToast = useCallback((type: Toast['type'], message: string, txSignature?: string) => {
@@ -432,9 +483,10 @@ function App() {
         localStorage.removeItem('stardust-wallet');
     };
 
-    // Fetch config
+    // Fetch config and treasury on mount
     useEffect(() => {
         fetch('/api/config').then(r => r.json()).then(setConfig).catch(console.error);
+        fetch('/api/wheel/treasury').then(r => r.json()).then((d: any) => setTreasuryBalance(d.balance || 0)).catch(console.error);
     }, []);
 
     // Fetch earnings
@@ -632,46 +684,126 @@ function App() {
                 body: JSON.stringify({ wallet: publicKey, signature }),
             });
 
-            alert(`✅ Claimed successfully!\n\nTransaction: ${signature.slice(0, 20)}...`);
+            addToast('success', '✅ Claimed successfully!', signature);
             fetchEarnings();
 
         } catch (e: any) {
             console.error('Claim error:', e);
             if (e.message?.includes('User rejected')) {
-                alert('Transaction cancelled by user');
+                addToast('error', 'Transaction cancelled by user');
             } else {
-                alert(`Claim failed: ${e.message}`);
+                addToast('error', `Claim failed: ${e.message}`);
             }
         } finally {
             setClaiming(false);
         }
     };
 
-    // Spin handler
+    // Spin handler - On-chain transaction
     const handleSpin = async () => {
-        if (!publicKey) {
+        if (!publicKey || !phantomWallet) {
             setShowLogin(true);
             return;
         }
         setSpinning(true);
+        const toastId = addToast('pending', '🎰 Spinning the wheel...');
+
         try {
-            const res = await fetch('/api/redemption/spin', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ wallet: publicKey }),
+            const connection = new Connection("https://mainnet.helius-rpc.com/?api-key=15319bf4-5b40-4958-ac8d-6313aa55eb92", "confirmed");
+            const userPubkey = new PublicKey(publicKey);
+            const wheelProgramId = new PublicKey(WHEEL_PROGRAM_ID);
+
+            // PDAs
+            const [statePda] = PublicKey.findProgramAddressSync([Buffer.from("wheel_state")], wheelProgramId);
+            const [poolPda] = PublicKey.findProgramAddressSync([Buffer.from("wheel_pool")], wheelProgramId);
+            const [userHistoryPda] = PublicKey.findProgramAddressSync(
+                [Buffer.from("user_history"), userPubkey.toBytes()],
+                wheelProgramId
+            );
+
+            // Stardust mint from config
+            const stardustMint = new PublicKey(config?.stardustMint || "XG3VfC9e8hzjaeQutPHrCs1YE6jwbdCqhfRpY8miWo5");
+
+            // Get user's stardust token account
+            const userStardustAta = await getAssociatedTokenAddress(stardustMint, userPubkey);
+
+            // Spin discriminator: sha256("global:spin")[:8]
+            const spinDiscriminator = Buffer.from([0x57, 0x40, 0x78, 0x0a, 0x19, 0xe0, 0x7a, 0x5d]);
+
+            const spinIx = new TransactionInstruction({
+                programId: wheelProgramId,
+                keys: [
+                    { pubkey: statePda, isSigner: false, isWritable: true },
+                    { pubkey: poolPda, isSigner: false, isWritable: true },
+                    { pubkey: stardustMint, isSigner: false, isWritable: true },
+                    { pubkey: userStardustAta, isSigner: false, isWritable: true },
+                    { pubkey: userHistoryPda, isSigner: false, isWritable: true },
+                    { pubkey: userPubkey, isSigner: true, isWritable: true },
+                    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                ],
+                data: spinDiscriminator,
             });
-            const result = await res.json();
-            if (!res.ok) {
-                alert(`Spin failed: ${result.error}`);
-                return;
+
+            const transaction = new Transaction().add(spinIx);
+            const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+            transaction.recentBlockhash = blockhash;
+            transaction.feePayer = userPubkey;
+
+            // Sign and send via Phantom
+            const { signature } = await phantomWallet.signAndSendTransaction(transaction);
+
+            // Confirm
+            const confirmation = await connection.confirmTransaction({
+                signature,
+                blockhash,
+                lastValidBlockHeight,
+            }, 'confirmed');
+
+            if (confirmation.value.err) {
+                throw new Error('Transaction failed on-chain');
             }
-            setTimeout(() => {
-                alert(`🎉 ${result.tierName}! You won ${result.rewardFormatted}!`);
-            }, 500);
+
+            // Get transaction logs to parse result
+            const txDetails = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+            const logs = txDetails?.meta?.logMessages || [];
+
+            // Parse spin result from logs: "Spin #X: Tier Y - Won Z lamports"
+            let tier = 0;
+            let reward = 0;
+            for (const log of logs) {
+                const match = log.match(/Spin #\d+: Tier (\d+) - Won (\d+) lamports/);
+                if (match) {
+                    tier = parseInt(match[1]);
+                    reward = parseInt(match[2]);
+                    break;
+                }
+            }
+
+            const tierNames = ["Nothing 😢", "Small Win ✨", "Medium Win 🎉", "JACKPOT 🏆"];
+            const rewardSol = reward / 1e9;
+
+            dismissToast(toastId);
+            if (reward > 0) {
+                addToast('success', `🎉 ${tierNames[tier]}! You won ${rewardSol.toFixed(4)} SOL!`, signature);
+            } else {
+                addToast('error', `${tierNames[tier]} Better luck next time!`);
+            }
+
+            // Refresh balances
             fetchEarnings();
-            fetchWinners();
+            fetch('/api/wheel/treasury').then(r => r.json()).then((d: any) => setTreasuryBalance(d.balance || 0));
+
         } catch (e: any) {
-            alert(`Spin failed: ${e.message}`);
+            console.error('Spin error:', e);
+            dismissToast(toastId);
+            if (e.message?.includes('User rejected')) {
+                addToast('error', 'Transaction cancelled');
+            } else if (e.message?.includes('insufficient')) {
+                addToast('error', 'Insufficient stardust balance');
+            } else {
+                addToast('error', `Spin failed: ${e.message}`);
+            }
         } finally {
             setSpinning(false);
         }
@@ -683,6 +815,7 @@ function App() {
     return (
         <>
             <div className="app-background" />
+            <ToastContainer toasts={toasts} onDismiss={dismissToast} />
             <div className="app-container">
                 <Header
                     connected={connected}
@@ -703,6 +836,28 @@ function App() {
                             available={available}
                             spinning={spinning}
                             onSpin={handleSpin}
+                            isAdmin={isAdmin}
+                            treasuryBalance={treasuryBalance}
+                            onFundTreasury={async (amount) => {
+                                if (!phantomWallet || !publicKey) return;
+                                addToast('pending', 'Funding treasury...');
+                                try {
+                                    const res = await fetch('/api/wheel/fund', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ wallet: publicKey, amount }),
+                                    });
+                                    if (!res.ok) {
+                                        const err = await res.json();
+                                        throw new Error(err.error || 'Fund failed');
+                                    }
+                                    addToast('success', `Funded ${amount} SOL to treasury!`);
+                                    // Refresh treasury balance
+                                    fetch('/api/wheel/treasury').then(r => r.json()).then(d => setTreasuryBalance(d.balance || 0));
+                                } catch (e: any) {
+                                    addToast('error', `Fund failed: ${e.message}`);
+                                }
+                            }}
                         />
                     </>
                 ) : (

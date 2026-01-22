@@ -1,24 +1,26 @@
 import { serve, buildScript, buildStyle } from "@ments/web";
 
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:3005";
-const PROGRAM_ID = "GYQP75VdPpCU1xPsJS7CUkcBqzL718j7ihNmgJ3VESd7";
+const WHEEL_PROGRAM_ID = "3M12BfitAEYz14WJBMnjahEuSvhsWhjfGJXbzur26o2U";
 
 // Build assets on startup
 let scriptPath: string;
 let stylePath: string;
+let adminScriptPath: string;
 
 async function init() {
   scriptPath = await buildScript("./App.client.tsx", true);
   stylePath = await buildStyle("./App.css");
+  adminScriptPath = await buildScript("./Admin.client.tsx", true);
 }
 
 // HTML template with links to cached assets
-const html = () => `<!DOCTYPE html>
+const html = (script: string, title: string = "Stardust Protocol") => `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Stardust Protocol</title>
+  <title>${title}</title>
   <script type="importmap">
   {
     "imports": {
@@ -44,16 +46,23 @@ const html = () => `<!DOCTYPE html>
 </head>
 <body>
   <div id="root"></div>
-  <script type="module" src="${scriptPath}"></script>
+  <script type="module" src="${script}"></script>
 </body>
 </html>`;
 
 async function handler(req: Request): Promise<Response | null> {
   const url = new URL(req.url);
 
-  // Serve the app
+  // Serve the main app
   if (url.pathname === "/" || url.pathname === "/index.html") {
-    return new Response(html(), {
+    return new Response(html(scriptPath), {
+      headers: { "Content-Type": "text/html" },
+    });
+  }
+
+  // Serve admin page
+  if (url.pathname === "/admin") {
+    return new Response(html(adminScriptPath, "Galaxy Wheel Admin"), {
       headers: { "Content-Type": "text/html" },
     });
   }
@@ -81,4 +90,5 @@ serve(handler);
 
 console.log(`Stardust Frontend running on port ${process.env.BUN_PORT}`);
 console.log(`Backend: ${BACKEND_URL}`);
-console.log(`Program: ${PROGRAM_ID}`);
+console.log(`Wheel Program: ${WHEEL_PROGRAM_ID}`);
+console.log(`Admin page: http://localhost:${process.env.BUN_PORT}/admin`);
