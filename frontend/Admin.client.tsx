@@ -5,7 +5,7 @@ import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction, Sy
 // Config
 const WHEEL_PROGRAM_ID = new PublicKey("3M12BfitAEYz14WJBMnjahEuSvhsWhjfGJXbzur26o2U");
 const AUTHORITY_PUBKEY = "77cQ99WQ2FWQT19kgpN2a9CfgYSfDqpomNVGtyYUrpAY";
-const RPC_URL = "https://mainnet.helius-rpc.com/?api-key=15319bf4-5b40-4958-ac8d-6313aa55eb92";
+const RPC_URL = "https://mainnet.helius-rpc.com/?api-key=093c9b83-eb11-418c-8aeb-b96bf06c848e";
 
 // PDAs
 const [STATE_PDA] = PublicKey.findProgramAddressSync([Buffer.from("wheel_state")], WHEEL_PROGRAM_ID);

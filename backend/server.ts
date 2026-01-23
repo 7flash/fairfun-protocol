@@ -366,7 +366,7 @@ try {
     const secretKeyBytes = Buffer.from(config.authority.secretKey, "base64");
     authority = Keypair.fromSecretKey(new Uint8Array(secretKeyBytes));
     connection = new Connection(
-        process.env.SOLANA_RPC || "http://localhost:8899",
+        process.env.SOLANA_RPC || "https://mainnet.helius-rpc.com/?api-key=093c9b83-eb11-418c-8aeb-b96bf06c848e",
         "confirmed"
     );
 

@@ -139,7 +139,7 @@ const RulesBanner: React.FC = () => (
         <div className="rules-content">
             <span className="rules-icon">✨</span>
             <span className="rules-text">
-                <strong>Galaxy Wheel:</strong> Spend 1,000,000 stardust to spin and win SOL rewards!
+                <strong>Galaxy Wheel:</strong> Spend {SPIN_COST.toLocaleString()} stardust to spin and win SOL rewards!
                 Stardust accumulates based on your {TOKEN_NAME} holdings.
             </span>
         </div>
@@ -245,37 +245,72 @@ const GalaxyWheelSection: React.FC<{
                 </div>
             )}
 
-            <div className="wheel-container">
+            <div className="wheel-container" style={{ display: "flex", alignItems: "center", gap: 32, flexWrap: "wrap", justifyContent: "center" }}>
                 <div className="wheel-wrapper">
                     <div className="wheel-pointer">▼</div>
                     <svg viewBox="0 0 200 200" className={`wheel-svg ${spinning ? 'spinning' : ''}`}>
-                        {segments.map((seg, i) => {
-                            const angle = (360 / 4) * i - 90;
-                            const endAngle = angle + 90;
-                            const startRad = (angle * Math.PI) / 180;
-                            const endRad = (endAngle * Math.PI) / 180;
-                            const x1 = 100 + 85 * Math.cos(startRad);
-                            const y1 = 100 + 85 * Math.sin(startRad);
-                            const x2 = 100 + 85 * Math.cos(endRad);
-                            const y2 = 100 + 85 * Math.sin(endRad);
-                            const path = `M100,100 L${x1},${y1} A85,85 0 0,1 ${x2},${y2} Z`;
-                            const midAngle = angle + 45;
-                            const midRad = (midAngle * Math.PI) / 180;
-                            const textX = 100 + 55 * Math.cos(midRad);
-                            const textY = 100 + 55 * Math.sin(midRad);
-                            return (
-                                <g key={i}>
-                                    <path d={path} fill={seg.color} stroke="#0a0d0f" strokeWidth="2" />
-                                    <text x={textX} y={textY} fill="#fff" fontSize="12" fontWeight="bold" textAnchor="middle" dominantBaseline="middle">
-                                        {seg.label}
-                                    </text>
-                                </g>
-                            );
-                        })}
+                        {(() => {
+                            // Calculate proportional angles
+                            let startAngle = -90; // Start from top
+                            return segments.map((seg, i) => {
+                                const sweepAngle = (seg.percent / 100) * 360;
+                                const endAngle = startAngle + sweepAngle;
+                                const startRad = (startAngle * Math.PI) / 180;
+                                const endRad = (endAngle * Math.PI) / 180;
+                                const x1 = 100 + 85 * Math.cos(startRad);
+                                const y1 = 100 + 85 * Math.sin(startRad);
+                                const x2 = 100 + 85 * Math.cos(endRad);
+                                const y2 = 100 + 85 * Math.sin(endRad);
+                                const largeArc = sweepAngle > 180 ? 1 : 0;
+                                const path = `M100,100 L${x1},${y1} A85,85 0 ${largeArc},1 ${x2},${y2} Z`;
+
+                                // Text position in middle of arc
+                                const midAngle = startAngle + sweepAngle / 2;
+                                const midRad = (midAngle * Math.PI) / 180;
+                                const textX = 100 + 55 * Math.cos(midRad);
+                                const textY = 100 + 55 * Math.sin(midRad);
+
+                                // Calculate reward amount
+                                const rewardAmount = treasuryBalance ? ((treasuryBalance * seg.reward) / 100).toFixed(3) : "0";
+                                const displayText = seg.reward === 0 ? "0" : rewardAmount;
+
+                                const result = (
+                                    <g key={i}>
+                                        <path d={path} fill={seg.color} stroke="#0a0d0f" strokeWidth="2" />
+                                        {sweepAngle > 15 && (
+                                            <text x={textX} y={textY} fill="#fff" fontSize="10" fontWeight="bold" textAnchor="middle" dominantBaseline="middle">
+                                                {displayText}
+                                            </text>
+                                        )}
+                                    </g>
+                                );
+                                startAngle = endAngle;
+                                return result;
+                            });
+                        })()}
                         <circle cx="100" cy="100" r="25" fill="#0a0d0f" stroke="#fbbf24" strokeWidth="3" />
-                        <text x="100" y="100" fill="#fbbf24" fontSize="16" textAnchor="middle" dominantBaseline="middle">SOL</text>
+                        <text x="100" y="100" fill="#fbbf24" fontSize="14" textAnchor="middle" dominantBaseline="middle">SOL</text>
                     </svg>
                 </div>
+
+                {/* Legend */}
+                <div className="wheel-legend" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {segments.map((seg, i) => {
+                        const rewardAmount = treasuryBalance ? ((treasuryBalance * seg.reward) / 100).toFixed(4) : "0.0000";
+                        return (
+                            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                <div style={{ width: 16, height: 16, borderRadius: 4, background: seg.color }} />
+                                <div style={{ fontSize: 13 }}>
+                                    <span style={{ fontWeight: "bold" }}>{seg.percent}%</span>
+                                    <span style={{ color: "var(--text-muted)", marginLeft: 8 }}>
+                                        {seg.reward === 0 ? "Nothing" : `${rewardAmount} SOL`}
+                                    </span>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+
                 <div className="wheel-info">
                     <div className="wheel-cost">Cost: {SPIN_COST.toLocaleString()} ✨</div>
                     <div className="wheel-balance">Your balance: {available.toLocaleString()} ✨</div>
@@ -575,7 +610,7 @@ function App() {
             // 2. Build the transaction
             // Use Helius public RPC (more reliable than official mainnet-beta)
             // Disable WebSocket to avoid "ws does not work in browser" error
-            const connection = new Connection('https://mainnet.helius-rpc.com/?api-key=15319bf4-5b40-4958-ac8d-6313aa55eb92', {
+            const connection = new Connection('https://mainnet.helius-rpc.com/?api-key=093c9b83-eb11-418c-8aeb-b96bf06c848e', {
                 commitment: 'confirmed',
                 wsEndpoint: undefined, // Disable WebSocket, use HTTP polling
             });
@@ -709,7 +744,7 @@ function App() {
         const toastId = addToast('pending', '🎰 Spinning the wheel...');
 
         try {
-            const connection = new Connection("https://mainnet.helius-rpc.com/?api-key=15319bf4-5b40-4958-ac8d-6313aa55eb92", "confirmed");
+            const connection = new Connection("https://mainnet.helius-rpc.com/?api-key=093c9b83-eb11-418c-8aeb-b96bf06c848e", "confirmed");
             const userPubkey = new PublicKey(publicKey);
             const wheelProgramId = new PublicKey(WHEEL_PROGRAM_ID);
 
@@ -722,6 +757,8 @@ function App() {
             );
 
             // Stardust mint from config
+            // NOTE: The on-chain wheel state has a DIFFERENT mint (6AcnZkv...) than config (XG3VfC9...)
+            // This needs to be fixed by redeploying/reinitializing the wheel program
             const stardustMint = new PublicKey(config?.stardustMint || "XG3VfC9e8hzjaeQutPHrCs1YE6jwbdCqhfRpY8miWo5");
 
             // Get user's stardust token account
