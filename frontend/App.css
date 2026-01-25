@@ -60,6 +60,22 @@
 html {
   font-size: 16px;
   -webkit-font-smoothing: antialiased;
+  scroll-behavior: smooth;
+}
+
+/* Scroll target highlight animation */
+.section-content:target {
+  animation: highlight-section 1.5s ease-out;
+}
+
+@keyframes highlight-section {
+  0% {
+    box-shadow: 0 0 0 3px var(--gold-primary), 0 0 30px rgba(251, 191, 36, 0.4);
+  }
+
+  100% {
+    box-shadow: none;
+  }
 }
 
 body {
@@ -386,8 +402,8 @@ body {
 
 .wheel-wrapper {
   position: relative;
-  width: 200px;
-  height: 200px;
+  width: 320px;
+  height: 320px;
 }
 
 .wheel-pointer {

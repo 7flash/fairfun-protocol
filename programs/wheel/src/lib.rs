@@ -177,6 +177,15 @@ pub mod galaxy_wheel {
         msg!("Config updated - {} tiers", num_tiers);
         Ok(())
     }
+
+    /// Admin: Update stardust mint address (for fixing initialization errors)
+    pub fn set_stardust_mint(ctx: Context<UpdateMint>, new_mint: Pubkey) -> Result<()> {
+        let state = &mut ctx.accounts.state;
+        let old_mint = state.stardust_mint;
+        state.stardust_mint = new_mint;
+        msg!("Stardust mint updated from {} to {}", old_mint, new_mint);
+        Ok(())
+    }
 }
 
 // ============================================
@@ -271,6 +280,19 @@ pub struct Spin<'info> {
 
 #[derive(Accounts)]
 pub struct UpdateConfig<'info> {
+    #[account(
+        mut,
+        seeds = [b"wheel_state"],
+        bump = state.bump,
+        constraint = state.authority == authority.key() @ WheelError::Unauthorized
+    )]
+    pub state: Account<'info, WheelState>,
+    
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateMint<'info> {
     #[account(
         mut,
         seeds = [b"wheel_state"],

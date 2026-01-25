@@ -107,10 +107,18 @@ const Header: React.FC<{
             </div>
         </div>
         <nav className="header-nav">
-            <a href="#wallet" className="nav-link">Wallet</a>
-            <a href="#wheel" className="nav-link">Wheel</a>
-            <a href="#leaders" className="nav-link">Leaders</a>
-            <a href="#history" className="nav-link">History</a>
+            <a href="#wallet" className="nav-link" onClick={(e) => { e.preventDefault(); document.getElementById('wallet')?.scrollIntoView({ behavior: 'smooth' }); }}>
+                Wallet
+            </a>
+            <a href="#wheel" className="nav-link" onClick={(e) => { e.preventDefault(); document.getElementById('wheel')?.scrollIntoView({ behavior: 'smooth' }); }}>
+                Wheel
+            </a>
+            <a href="#leaders" className="nav-link" onClick={(e) => { e.preventDefault(); document.getElementById('leaders')?.scrollIntoView({ behavior: 'smooth' }); }}>
+                Leaders
+            </a>
+            <a href="#history" className="nav-link" onClick={(e) => { e.preventDefault(); document.getElementById('history')?.scrollIntoView({ behavior: 'smooth' }); }}>
+                History
+            </a>
         </nav>
         <div className="header-right">
             <div className="network-badge mainnet">
@@ -313,7 +321,6 @@ const GalaxyWheelSection: React.FC<{
 
                 <div className="wheel-info">
                     <div className="wheel-cost">Cost: {SPIN_COST.toLocaleString()} ✨</div>
-                    <div className="wheel-balance">Your balance: {available.toLocaleString()} ✨</div>
                     <button
                         className={`btn btn-gold spin-btn ${spinning ? 'spinning' : ''}`}
                         onClick={onSpin}
@@ -366,22 +373,19 @@ const LeadersSection: React.FC<{
                     <th>#</th>
                     <th>Wallet</th>
                     <th>Claimed Stardust</th>
-                    <th>Earned SOL</th>
                 </tr>
             </thead>
             <tbody>
                 {leaderboard.length === 0 ? (
-                    <tr><td colSpan={4} className="empty">No data yet</td></tr>
+                    <tr><td colSpan={3} className="empty">No data yet</td></tr>
                 ) : leaderboard.slice(0, 10).map((entry, i) => {
                     const claimed = Number(BigInt(entry.claimed || "0")) / 1e9;
-                    const earnedSol = claimed / SPIN_COST * 0.05; // Rough estimate
                     const isMe = entry.wallet === currentWallet;
                     return (
                         <tr key={entry.wallet} className={isMe ? 'current-user' : ''}>
                             <td className={`rank ${i < 3 ? ['gold', 'silver', 'bronze'][i] : ''}`}>{i + 1}</td>
                             <td className="wallet">{entry.wallet.slice(0, 4)}...{entry.wallet.slice(-4)}</td>
                             <td>{claimed.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
-                            <td className="sol">{earnedSol.toFixed(3)} SOL</td>
                         </tr>
                     );
                 })}
@@ -740,8 +744,9 @@ function App() {
             setShowLogin(true);
             return;
         }
-        setSpinning(true);
-        const toastId = addToast('pending', '🎰 Spinning the wheel...');
+
+        // Don't start spinning animation yet - wait for successful simulation and signing
+        const toastId = addToast('pending', '⏳ Preparing spin transaction...');
 
         try {
             const connection = new Connection("https://mainnet.helius-rpc.com/?api-key=093c9b83-eb11-418c-8aeb-b96bf06c848e", "confirmed");
@@ -756,28 +761,45 @@ function App() {
                 wheelProgramId
             );
 
-            // Stardust mint from config
-            // NOTE: The on-chain wheel state has a DIFFERENT mint (6AcnZkv...) than config (XG3VfC9...)
-            // This needs to be fixed by redeploying/reinitializing the wheel program
+            // Stardust mint - now correctly set on-chain after fix
             const stardustMint = new PublicKey(config?.stardustMint || "XG3VfC9e8hzjaeQutPHrCs1YE6jwbdCqhfRpY8miWo5");
 
             // Get user's stardust token account
             const userStardustAta = await getAssociatedTokenAddress(stardustMint, userPubkey);
 
+            // Check if user has the stardust token account and sufficient balance BEFORE simulating
+            try {
+                const tokenBalance = await connection.getTokenAccountBalance(userStardustAta);
+                const balance = tokenBalance.value.uiAmount || 0;
+                console.log("User stardust balance:", balance);
+                if (balance < SPIN_COST) {
+                    dismissToast(toastId);
+                    addToast('error', `Insufficient stardust! You have ${balance.toLocaleString()} but need ${SPIN_COST.toLocaleString()} ✨ to spin.`);
+                    return;
+                }
+            } catch (e) {
+                console.error("Token account check failed:", e);
+                dismissToast(toastId);
+                addToast('error', 'You need stardust tokens to spin! Claim stardust first by holding $GXY tokens.');
+                return;
+            }
+
             // Spin discriminator: sha256("global:spin")[:8]
             const spinDiscriminator = Buffer.from([0x57, 0x40, 0x78, 0x0a, 0x19, 0xe0, 0x7a, 0x5d]);
 
+            // Account order MUST match Spin context in lib.rs:
+            // 1. state, 2. pool, 3. stardust_mint, 4. user_stardust, 5. user_history, 6. user, 7. token_program, 8. system_program
             const spinIx = new TransactionInstruction({
                 programId: wheelProgramId,
                 keys: [
-                    { pubkey: statePda, isSigner: false, isWritable: true },
-                    { pubkey: poolPda, isSigner: false, isWritable: true },
-                    { pubkey: stardustMint, isSigner: false, isWritable: true },
-                    { pubkey: userStardustAta, isSigner: false, isWritable: true },
-                    { pubkey: userHistoryPda, isSigner: false, isWritable: true },
-                    { pubkey: userPubkey, isSigner: true, isWritable: true },
-                    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                    { pubkey: statePda, isSigner: false, isWritable: true },          // state
+                    { pubkey: poolPda, isSigner: false, isWritable: true },           // pool
+                    { pubkey: stardustMint, isSigner: false, isWritable: true },      // stardust_mint
+                    { pubkey: userStardustAta, isSigner: false, isWritable: true },   // user_stardust
+                    { pubkey: userHistoryPda, isSigner: false, isWritable: true },    // user_history
+                    { pubkey: userPubkey, isSigner: true, isWritable: true },         // user
+                    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // token_program
+                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
                 ],
                 data: spinDiscriminator,
             });
@@ -786,6 +808,36 @@ function App() {
             const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
             transaction.recentBlockhash = blockhash;
             transaction.feePayer = userPubkey;
+
+            // Simulate transaction first to catch errors before signing
+            console.log("Simulating spin transaction...");
+            console.log("Accounts:", {
+                state: statePda.toBase58(),
+                pool: poolPda.toBase58(),
+                stardustMint: stardustMint.toBase58(),
+                userStardust: userStardustAta.toBase58(),
+                userHistory: userHistoryPda.toBase58(),
+                user: userPubkey.toBase58(),
+            });
+
+            try {
+                const simResult = await connection.simulateTransaction(transaction);
+                if (simResult.value.err) {
+                    console.error("Simulation failed:", simResult.value.err);
+                    console.error("Logs:", simResult.value.logs);
+                    throw new Error(`Simulation failed: ${JSON.stringify(simResult.value.err)}. Check console for logs.`);
+                }
+                console.log("Simulation succeeded! Logs:", simResult.value.logs);
+            } catch (simErr: any) {
+                console.error("Simulation error:", simErr);
+                dismissToast(toastId);
+                addToast('error', `Simulation failed: ${simErr.message}`);
+                return;
+            }
+
+            // Simulation passed! Now start the wheel animation and prompt for signing
+            setSpinning(true);
+            updateToast(toastId, 'pending', '🎰 Spinning the wheel... Sign to confirm!');
 
             // Sign and send via Phantom
             const { signature } = await phantomWallet.signAndSendTransaction(transaction);
