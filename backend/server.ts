@@ -148,7 +148,18 @@ function loadConfig(): LocalConfig {
 }
 
 /**
+ * Custom error for RPC rate limiting
+ */
+class RpcRateLimitError extends Error {
+    constructor(message: string = 'RPC rate limited (429)') {
+        super(message);
+        this.name = 'RpcRateLimitError';
+    }
+}
+
+/**
  * Get real token balance from Solana
+ * Throws RpcRateLimitError if rate limited
  */
 async function getTokenBalance(
     tokenAccountAddress: string
@@ -159,7 +170,12 @@ async function getTokenBalance(
             new PublicKey(tokenAccountAddress)
         );
         return account.amount;
-    } catch (e) {
+    } catch (e: any) {
+        // Check for rate limiting (429 errors)
+        const errorStr = String(e?.message || e);
+        if (errorStr.includes('429') || errorStr.includes('Too Many Requests') || errorStr.includes('rate limit')) {
+            throw new RpcRateLimitError();
+        }
         console.error(`Failed to get balance for ${tokenAccountAddress}:`, e);
         return 0n;
     }
@@ -223,17 +239,45 @@ async function fetchClaimedStardust(walletPubkey: string): Promise<bigint> {
 }
 
 /**
+ * Cache for stardust token balances to avoid rate limiting
+ * TTL: 5 minutes (increased due to heavy RPC rate limiting)
+ */
+const stardustBalanceCache = new Map<string, { balance: bigint, timestamp: number }>();
+const BALANCE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+/**
  * Fetch actual stardust token balance from wallet's token account
  * This is the current balance (can decrease via transfers)
+ * Uses caching to reduce RPC calls
+ * Returns stale cached value if rate limited, or 0n if no cache
  */
 async function fetchStardustTokenBalance(walletPubkey: string): Promise<bigint> {
+    // Check cache first
+    const cached = stardustBalanceCache.get(walletPubkey);
+    if (cached && Date.now() - cached.timestamp < BALANCE_CACHE_TTL) {
+        return cached.balance;
+    }
+
     const stardustMint = new PublicKey(config.stardustMint);
     const wallet = new PublicKey(walletPubkey);
 
     try {
         const ata = await getAssociatedTokenAddress(stardustMint, wallet);
-        return await getTokenBalance(ata.toBase58());
-    } catch (e) {
+        const balance = await getTokenBalance(ata.toBase58());
+
+        // Cache the result
+        stardustBalanceCache.set(walletPubkey, { balance, timestamp: Date.now() });
+
+        return balance;
+    } catch (e: any) {
+        // On rate limit, return stale cached value if available
+        if (e instanceof RpcRateLimitError) {
+            if (cached) {
+                console.log(`Rate limited, using stale cache for ${walletPubkey}`);
+                return cached.balance;
+            }
+            throw e; // No cache, propagate error
+        }
         // User might not have a stardust token account
         return 0n;
     }
@@ -473,6 +517,7 @@ async function handler(req: Request): Promise<Response | null> {
             stardustMint: config.stardustMint,
             statePda: config.statePda,
             starTokenMint: config.starTokenMint,
+            rpcUrl: process.env.SOLANA_RPC || "https://mainnet.helius-rpc.com/?api-key=15319bf4-5b40-4958-ac8d-6313aa55eb92",
         });
     }
 
@@ -564,8 +609,25 @@ async function handler(req: Request): Promise<Response | null> {
         }
         const isCapped = unclaimed >= MAX_UNCLAIMED;
 
-        // Fetch actual stardust token balance (can be different from claimed if user transferred tokens)
-        const stardustTokenBalance = await fetchStardustTokenBalance(wallet);
+        // Get stardust token balance from cache (non-blocking)
+        // Don't await RPC calls here - they can hang due to rate limiting
+        let stardustTokenBalance = 0n;
+        let rpcWarning: string | null = null;
+
+        // Check cache first (fast path)
+        const cached = stardustBalanceCache.get(wallet);
+        if (cached && Date.now() - cached.timestamp < BALANCE_CACHE_TTL) {
+            stardustTokenBalance = cached.balance;
+        } else {
+            // Use claimed as fallback (what user has claimed so far)
+            stardustTokenBalance = claimed;
+            rpcWarning = 'Balance data is being refreshed...';
+
+            // Trigger background refresh (non-blocking)
+            fetchStardustTokenBalance(wallet).catch(e => {
+                console.warn(`Background balance fetch failed for ${wallet}:`, e.message);
+            });
+        }
 
         return json({
             wallet,
@@ -576,6 +638,7 @@ async function handler(req: Request): Promise<Response | null> {
             starBalance: earnings?.starBalance.toString() || "0",
             stardustTokenBalance: stardustTokenBalance.toString(), // Actual current stardust token balance
             lastUpdated: earnings?.lastUpdated || null,
+            rpcWarning, // Frontend can show toast if this is set
         });
     }
 

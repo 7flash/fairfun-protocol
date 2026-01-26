@@ -11,6 +11,7 @@ interface Config {
     stardustMint: string;
     starTokenMint: string;
     authority: string;
+    rpcUrl: string;
 }
 
 interface EarningsData {
@@ -549,25 +550,78 @@ function App() {
 
     // Fetch config and treasury on mount
     useEffect(() => {
-        fetch('/api/config').then(r => r.json()).then(setConfig).catch(console.error);
-        fetch('/api/wheel/treasury').then(r => r.json()).then((d: any) => setTreasuryBalance(d.balance || 0)).catch(console.error);
-    }, []);
+        fetch('/api/config')
+            .then(r => {
+                if (!r.ok) throw new Error(`Config fetch failed: ${r.status}`);
+                return r.json();
+            })
+            .then(setConfig)
+            .catch(err => {
+                console.error('Config fetch failed:', err);
+                addToast('error', '⚠️ Failed to load app config. Please refresh.');
+            });
+        fetch('/api/wheel/treasury')
+            .then(r => {
+                if (!r.ok) throw new Error(`Treasury fetch failed: ${r.status}`);
+                return r.json();
+            })
+            .then((d: any) => setTreasuryBalance(d.balance || 0))
+            .catch(err => {
+                console.error('Treasury fetch failed:', err);
+            });
+    }, [addToast]);
 
     // Fetch earnings
     const fetchEarnings = useCallback(async () => {
         if (!publicKey) return;
         try {
             const res = await fetch(`/api/earnings/${publicKey}`);
+            if (!res.ok) {
+                const errorData = await res.json().catch(() => ({}));
+                // Check for rate limiting
+                if (res.status === 429 || errorData.error?.includes('429')) {
+                    console.warn('Rate limited when fetching earnings');
+                    addToast('error', '⚠️ RPC rate limited. Balances may be delayed. Please wait...');
+                    return;
+                }
+                throw new Error(errorData.error || `HTTP ${res.status}`);
+            }
             const data = await res.json();
+
+            // Check if there's an error in the response
+            if (data.error) {
+                if (data.error.includes('429') || data.error.includes('rate')) {
+                    addToast('error', '⚠️ RPC rate limited. Balances may be stale.');
+                } else {
+                    addToast('error', `⚠️ ${data.error}`);
+                }
+                return;
+            }
+
+            // Check for RPC warning (non-blocking but informative)
+            if (data.rpcWarning) {
+                // Only show warning toast occasionally to avoid spamming (every 30 seconds max)
+                const lastWarningKey = 'last-rpc-warning-toast';
+                const lastWarning = parseInt(localStorage.getItem(lastWarningKey) || '0');
+                if (Date.now() - lastWarning > 30000) {
+                    addToast('error', `⚠️ ${data.rpcWarning}`);
+                    localStorage.setItem(lastWarningKey, Date.now().toString());
+                }
+            }
+
             setEarnings(data);
-        } catch (e) {
+        } catch (e: any) {
             console.error('Fetch earnings failed:', e);
+            // Only show toast for non-network errors (avoid spamming on connectivity issues)
+            if (!e.message?.includes('fetch')) {
+                addToast('error', `Failed to fetch balances: ${e.message}`);
+            }
         }
-    }, [publicKey]);
+    }, [publicKey, addToast]);
 
     useEffect(() => {
         fetchEarnings();
-        const interval = setInterval(fetchEarnings, 10000);
+        const interval = setInterval(fetchEarnings, 30000); // 30 seconds to avoid rate limiting
         return () => clearInterval(interval);
     }, [fetchEarnings]);
 
@@ -637,9 +691,9 @@ function App() {
             console.log('Backend signature data:', sigData);
 
             // 2. Build the transaction
-            // Use Helius public RPC (more reliable than official mainnet-beta)
-            // Disable WebSocket to avoid "ws does not work in browser" error
-            const connection = new Connection('https://mainnet.helius-rpc.com/?api-key=093c9b83-eb11-418c-8aeb-b96bf06c848e', {
+            // Use RPC URL from config (loaded from backend's environment)
+            const rpcUrl = config.rpcUrl || 'https://mainnet.helius-rpc.com/?api-key=093c9b83-eb11-418c-8aeb-b96bf06c848e';
+            const connection = new Connection(rpcUrl, {
                 commitment: 'confirmed',
                 wsEndpoint: undefined, // Disable WebSocket, use HTTP polling
             });
@@ -774,7 +828,10 @@ function App() {
         const toastId = addToast('pending', '⏳ Preparing spin transaction...');
 
         try {
-            const connection = new Connection("https://mainnet.helius-rpc.com/?api-key=093c9b83-eb11-418c-8aeb-b96bf06c848e", "confirmed");
+            // Use RPC URL from config
+            const rpcUrl = config?.rpcUrl || 'https://mainnet.helius-rpc.com/?api-key=093c9b83-eb11-418c-8aeb-b96bf06c848e';
+            console.log("Using RPC URL:", rpcUrl);
+            const connection = new Connection(rpcUrl, "confirmed");
             const userPubkey = new PublicKey(publicKey);
             const wheelProgramId = new PublicKey(WHEEL_PROGRAM_ID);
 
@@ -802,10 +859,16 @@ function App() {
                     addToast('error', `Insufficient stardust! You have ${balance.toLocaleString()} but need ${SPIN_COST.toLocaleString()} ✨ to spin.`);
                     return;
                 }
-            } catch (e) {
+            } catch (e: any) {
                 console.error("Token account check failed:", e);
+                console.error("Error details:", e.message || e);
                 dismissToast(toastId);
-                addToast('error', 'You need stardust tokens to spin! Claim stardust first by holding $GXY tokens.');
+                // More specific error message
+                if (e.message?.includes('could not find account') || e.message?.includes('Token account does not exist')) {
+                    addToast('error', 'No stardust token account found. Please claim stardust first by holding $GXY tokens.');
+                } else {
+                    addToast('error', `Failed to check stardust balance: ${e.message || 'Unknown error'}`);
+                }
                 return;
             }
 
@@ -860,22 +923,79 @@ function App() {
                 return;
             }
 
-            // Simulation passed! Now start the wheel animation and prompt for signing
-            setSpinning(true);
-            updateToast(toastId, 'pending', '🎰 Spinning the wheel... Sign to confirm!');
+            // Simulation passed! Prompt for signing (don't start wheel yet)
+            updateToast(toastId, 'pending', '✍️ Please sign the transaction in your wallet...');
 
             // Sign and send via Phantom
-            const { signature } = await phantomWallet.signAndSendTransaction(transaction);
+            let signature: string;
+            try {
+                const result = await phantomWallet.signAndSendTransaction(transaction);
+                signature = result.signature;
+            } catch (signErr: any) {
+                dismissToast(toastId);
+                if (signErr.message?.includes('User rejected')) {
+                    addToast('error', 'Transaction cancelled by user');
+                } else {
+                    addToast('error', `Sign failed: ${signErr.message}`);
+                }
+                return;
+            }
 
-            // Confirm
-            const confirmation = await connection.confirmTransaction({
-                signature,
-                blockhash,
-                lastValidBlockHeight,
-            }, 'confirmed');
+            // NOW start the wheel animation (after user signed)
+            setSpinning(true);
+            updateToast(toastId, 'pending', '🎰 Wheel is spinning... Confirming transaction...');
 
-            if (confirmation.value.err) {
-                throw new Error('Transaction failed on-chain');
+            // Try to confirm with timeout handling
+            let confirmed = false;
+            let txError: any = null;
+
+            try {
+                const confirmation = await connection.confirmTransaction({
+                    signature,
+                    blockhash,
+                    lastValidBlockHeight,
+                }, 'confirmed');
+
+                if (confirmation.value.err) {
+                    txError = new Error('Transaction failed on-chain');
+                } else {
+                    confirmed = true;
+                }
+            } catch (confirmErr: any) {
+                console.warn('Confirmation error:', confirmErr);
+
+                // If block height exceeded, the tx might still have succeeded
+                // Check the transaction status directly
+                if (confirmErr.message?.includes('expired') || confirmErr.message?.includes('block height')) {
+                    updateToast(toastId, 'pending', '⏳ Checking transaction status...');
+
+                    // Wait a moment and check if transaction exists
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+
+                    try {
+                        const txStatus = await connection.getSignatureStatus(signature);
+                        if (txStatus.value?.confirmationStatus === 'confirmed' ||
+                            txStatus.value?.confirmationStatus === 'finalized') {
+                            confirmed = true;
+                        } else if (txStatus.value?.err) {
+                            txError = new Error('Transaction failed on-chain');
+                        } else {
+                            // Still pending or unknown - treat as potential success
+                            console.log('Transaction status unclear:', txStatus);
+                            confirmed = true; // Optimistically assume success
+                        }
+                    } catch (statusErr) {
+                        console.warn('Status check failed:', statusErr);
+                        // Can't determine status - check transaction directly
+                        confirmed = true; // Optimistically assume success
+                    }
+                } else {
+                    txError = confirmErr;
+                }
+            }
+
+            if (txError) {
+                throw txError;
             }
 
             // Get transaction logs to parse result
@@ -901,7 +1021,7 @@ function App() {
             if (reward > 0) {
                 addToast('success', `🎉 ${tierNames[tier]}! You won ${rewardSol.toFixed(4)} SOL!`, signature);
             } else {
-                addToast('error', `${tierNames[tier]} Better luck next time!`);
+                addToast('info', `${tierNames[tier]} Better luck next time!`);
             }
 
             // Refresh balances

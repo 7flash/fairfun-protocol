@@ -113,12 +113,29 @@ pub mod galaxy_wheel {
         
         token::burn(cpi_ctx, state.cost_per_spin)?;
         
-        // Transfer SOL reward from pool to user
+        // Transfer SOL reward from pool to user using invoke_signed
+        // Pool PDA is owned by System Program, so we use invoke_signed with PDA seeds
         if reward_amount > 0 {
             require!(treasury_balance >= reward_amount, WheelError::InsufficientTreasury);
             
-            **ctx.accounts.pool.try_borrow_mut_lamports()? -= reward_amount;
-            **ctx.accounts.user.try_borrow_mut_lamports()? += reward_amount;
+            let pool_bump = state.pool_bump;
+            let pool_seeds: &[&[u8]] = &[b"wheel_pool", &[pool_bump]];
+            
+            let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
+                &ctx.accounts.pool.key(),
+                &ctx.accounts.user.key(),
+                reward_amount,
+            );
+            
+            anchor_lang::solana_program::program::invoke_signed(
+                &transfer_ix,
+                &[
+                    ctx.accounts.pool.to_account_info(),
+                    ctx.accounts.user.to_account_info(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
+                &[pool_seeds],
+            )?;
         }
         
         // Update state
