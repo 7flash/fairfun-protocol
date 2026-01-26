@@ -500,6 +500,20 @@ function App() {
             return;
         }
         try {
+            // Check if already connected
+            if (phantomWallet.isConnected && phantomWallet.publicKey) {
+                const pk = phantomWallet.publicKey.toString();
+                setPublicKey(pk);
+                setConnected(true);
+                localStorage.setItem('stardust-wallet', pk);
+                await fetch('/api/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ wallet: pk }),
+                });
+                return;
+            }
+
             const resp = await phantomWallet.connect();
             const pk = resp.publicKey.toString();
             setPublicKey(pk);
@@ -510,8 +524,19 @@ function App() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ wallet: pk }),
             });
-        } catch (e) {
+        } catch (e: any) {
             console.error('Connect failed:', e);
+
+            // Handle known Phantom errors with helpful messages
+            const errorMsg = e?.message || String(e);
+            if (errorMsg.includes('Unexpected error') || errorMsg.includes('Me:')) {
+                // This is a known Phantom internal error
+                addToast('error', '⚠️ Phantom connection issue. Try: 1) Unlock your wallet 2) Refresh the page 3) Clear browser cache for this site');
+            } else if (errorMsg.includes('User rejected') || errorMsg.includes('cancel')) {
+                addToast('error', 'Connection cancelled');
+            } else {
+                addToast('error', `Connection failed: ${errorMsg}`);
+            }
         }
     };
 
