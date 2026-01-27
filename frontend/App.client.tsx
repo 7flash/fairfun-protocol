@@ -30,12 +30,14 @@ interface LeaderboardEntry {
     claimed: string;
     starBalance: string;
     rank: number;
+    totalWon?: number; // Total SOL won from wheel
 }
 
 interface WinnerEntry {
     wallet: string;
     amount: number;
     timestamp: number;
+    tier?: number; // 0=SUPERNOVA, 1=NEBULA, etc.
 }
 
 // ============================================
@@ -867,20 +869,25 @@ const LeadersSection: React.FC<{
                 <tr>
                     <th>#</th>
                     <th>Wallet</th>
-                    <th>Claimed Stardust</th>
+                    <th>Stardust</th>
+                    <th style={{ color: '#fbbf24' }}>🏆 Won</th>
                 </tr>
             </thead>
             <tbody>
                 {leaderboard.length === 0 ? (
-                    <tr><td colSpan={3} className="empty">No data yet</td></tr>
+                    <tr><td colSpan={4} className="empty">No data yet</td></tr>
                 ) : leaderboard.slice(0, 10).map((entry, i) => {
                     const claimed = Number(BigInt(entry.claimed || "0")) / 1e9;
                     const isMe = entry.wallet === currentWallet;
+                    const totalWon = entry.totalWon || 0;
                     return (
                         <tr key={entry.wallet} className={isMe ? 'current-user' : ''}>
                             <td className={`rank ${i < 3 ? ['gold', 'silver', 'bronze'][i] : ''}`}>{i + 1}</td>
                             <td className="wallet">{entry.wallet.slice(0, 4)}...{entry.wallet.slice(-4)}</td>
                             <td>{claimed.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                            <td style={{ color: totalWon > 0 ? '#10b981' : '#64748b' }}>
+                                {totalWon > 0 ? `${totalWon.toFixed(3)} SOL` : '-'}
+                            </td>
                         </tr>
                     );
                 })}
@@ -888,6 +895,15 @@ const LeadersSection: React.FC<{
         </table>
     </Section>
 );
+
+// Tier colors for history items
+const TIER_COLORS = [
+    { bg: 'rgba(251,191,36,0.2)', border: '#fbbf24', text: '#fbbf24', name: 'SUPERNOVA' },  // 0
+    { bg: 'rgba(168,85,247,0.2)', border: '#a855f7', text: '#a855f7', name: 'NEBULA' },     // 1
+    { bg: 'rgba(6,182,212,0.2)', border: '#06b6d4', text: '#06b6d4', name: 'STAR CLUSTER' }, // 2
+    { bg: 'rgba(59,130,246,0.2)', border: '#3b82f6', text: '#3b82f6', name: 'COSMOS' },     // 3
+    { bg: 'rgba(100,116,139,0.15)', border: '#64748b', text: '#94a3b8', name: 'STARDUST' }, // 4
+];
 
 // History Section
 const HistorySection: React.FC<{ winners: WinnerEntry[] }> = ({ winners }) => (
@@ -899,14 +915,30 @@ const HistorySection: React.FC<{ winners: WinnerEntry[] }> = ({ winners }) => (
         <div className="history-feed">
             {winners.length === 0 ? (
                 <div className="empty">No spins yet. Be the first!</div>
-            ) : winners.map((w, i) => (
-                <div key={i} className={`history-item ${i === 0 ? 'new' : ''}`}>
-                    <span className="history-wallet">{w.wallet.slice(0, 4)}...{w.wallet.slice(-4)}</span>
-                    <span className="history-won">won</span>
-                    <span className="history-amount">{w.amount.toFixed(3)} SOL</span>
-                    <span className="history-time">{formatTimeAgo(w.timestamp)}</span>
-                </div>
-            ))}
+            ) : winners.map((w, i) => {
+                const tierIdx = w.tier ?? 4; // Default to STARDUST
+                const tierStyle = TIER_COLORS[tierIdx] || TIER_COLORS[4];
+                const isNew = i === 0;
+                return (
+                    <div
+                        key={i}
+                        className={`history-item ${isNew ? 'new' : ''}`}
+                        style={{
+                            background: tierStyle.bg,
+                            borderLeft: `3px solid ${tierStyle.border}`,
+                            animation: isNew ? 'slideIn 0.3s ease-out' : undefined,
+                        }}
+                    >
+                        <span className="history-tier" style={{ color: tierStyle.text, fontWeight: 700, fontSize: '10px' }}>
+                            {tierStyle.name}
+                        </span>
+                        <span className="history-wallet">{w.wallet.slice(0, 4)}...{w.wallet.slice(-4)}</span>
+                        <span className="history-won">won</span>
+                        <span className="history-amount" style={{ color: tierStyle.text }}>{w.amount.toFixed(4)} SOL</span>
+                        <span className="history-time">{formatTimeAgo(w.timestamp)}</span>
+                    </div>
+                );
+            })}
         </div>
     </Section>
 );
@@ -938,6 +970,9 @@ function App() {
     const [phantomWallet, setPhantomWallet] = useState<any>(null);
     const [toasts, setToasts] = useState<Toast[]>([]);
     const [treasuryBalance, setTreasuryBalance] = useState<number>(0);
+
+    // Ref to store pending spin result (shown after wheel finishes)
+    const pendingSpinResult = React.useRef<{ tier: number, reward: number, signature: string } | null>(null);
 
     // Check if current user is admin
     const isAdmin = publicKey === ADMIN_AUTHORITY;
@@ -1145,6 +1180,7 @@ function App() {
                 wallet: w.wallet,
                 amount: w.rewardAmount / 1e9,
                 timestamp: w.timestamp,
+                tier: w.tier, // 0=SUPERNOVA, 1=NEBULA, 2=STAR CLUSTER, 3=COSMOS, 4=STARDUST
             })) || []);
         } catch (e) {
             console.error('Fetch winners failed:', e);
@@ -1551,17 +1587,11 @@ function App() {
             // Set target tier so the wheel animation lands on the correct segment
             setTargetTier(tier);
 
-            // 5-tier Galaxy naming
-            const tierNames = ["SUPERNOVA 💥", "NEBULA 🌌", "STAR CLUSTER ⭐", "COSMOS 🔮", "STARDUST ✨"];
-            const rewardSol = reward / 1e9;
+            // Store result to show toast AFTER wheel stops (in onSpinFinish)
+            pendingSpinResult.current = { tier, reward, signature };
 
+            // Dismiss the pending toast - success toast will show when wheel stops
             dismissToast(toastId);
-            if (reward > 0) {
-                const tierName = tierNames[tier] || `Tier ${tier}`;
-                addToast('success', `🎉 ${tierName}! You won ${rewardSol.toFixed(4)} SOL!`, signature);
-            } else {
-                addToast('success', `✨ STARDUST! You won ${rewardSol.toFixed(4)} SOL!`, signature);
-            }
 
             // Refresh balances
             fetchEarnings();
@@ -1613,6 +1643,19 @@ function App() {
                             onSpinFinish={() => {
                                 setSpinning(false);
                                 setTargetTier(null);
+
+                                // Show result toast now that wheel has finished
+                                if (pendingSpinResult.current) {
+                                    const { tier, reward, signature } = pendingSpinResult.current;
+                                    const tierNames = ["SUPERNOVA 💥", "NEBULA 🌌", "STAR CLUSTER ⭐", "COSMOS 🔮", "STARDUST ✨"];
+                                    const rewardSol = reward / 1e9;
+                                    const tierName = tierNames[tier] || `Tier ${tier}`;
+                                    addToast('success', `🎉 ${tierName}! You won ${rewardSol.toFixed(4)} SOL!`, signature);
+                                    pendingSpinResult.current = null;
+
+                                    // Refresh winners list after spin
+                                    fetchWinners();
+                                }
                             }}
                             spinCost={SPIN_COST}
                             isAdmin={isAdmin}

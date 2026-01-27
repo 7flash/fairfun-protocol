@@ -104,6 +104,9 @@ const redemptionWinners: RedemptionWinner[] = [];
 let totalSpins = 0;
 let totalDistributed = 0;
 
+// Track total winnings per wallet (for leaderboard)
+const walletWinnings: Map<string, number> = new Map();
+
 // Loaded config
 let config: LocalConfig;
 let authority: Keypair;
@@ -554,6 +557,7 @@ async function handler(req: Request): Promise<Response | null> {
                 unclaimed: (e.lifetimeEarned - e.claimed).toString(),
                 starBalance: e.starBalance.toString(),
                 lastUpdated: e.lastUpdated,
+                totalWon: (walletWinnings.get(e.wallet) || 0) / 1e9, // Total SOL won from wheel
             }));
 
         return json({
@@ -932,7 +936,8 @@ async function handler(req: Request): Promise<Response | null> {
         return json({
             winners: redemptionWinners.slice(-limit).reverse().map(w => ({
                 ...w,
-                rewardFormatted: (w.rewardAmount / 1e9).toFixed(3) + " SOL",
+                tier: w.rewardTier, // Frontend uses this for tier-colored display
+                rewardFormatted: (w.rewardAmount / 1e9).toFixed(4) + " SOL",
                 walletShort: w.wallet.slice(0, 4) + "..." + w.wallet.slice(-4),
                 timeAgo: formatTimeAgo(w.timestamp),
             })),
@@ -989,6 +994,10 @@ async function handler(req: Request): Promise<Response | null> {
             totalSpins++;
             totalDistributed += rewardAmount;
             REDEMPTION_CONFIG.poolBalance -= rewardAmount;
+
+            // Track wallet winnings for leaderboard
+            const currentWinnings = walletWinnings.get(wallet) || 0;
+            walletWinnings.set(wallet, currentWinnings + rewardAmount);
 
             // Record winner
             const winner: RedemptionWinner = {
