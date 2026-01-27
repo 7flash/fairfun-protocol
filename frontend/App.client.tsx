@@ -643,12 +643,27 @@ const GalaxyWheelSection: React.FC<{
 
     // When targetTier is set from parent (after tx confirms), transition to deceleration
     React.useEffect(() => {
-        if (targetTier !== null && spinning && spinPhase === 'constant') {
+        console.log('[Wheel] targetTier effect:', { targetTier, spinning, spinPhase });
+
+        if (targetTier === null || !spinning) return;
+
+        // Already decelerating, don't interfere
+        if (spinPhase === 'decelerating') return;
+
+        // If still idle, we need to wait for it to start accelerating first
+        if (spinPhase === 'idle') {
+            console.log('[Wheel] Waiting for spin to start...');
+            return;
+        }
+
+        // If accelerating or constant, start decelerating to target
+        if (spinPhase === 'accelerating' || spinPhase === 'constant') {
+            console.log('[Wheel] Starting deceleration to tier:', targetTier);
+
             const target = getTargetAngleForTier(targetTier);
             const currentRotation = pointerRotation;
             const fullRotations = 3 + Math.floor(Math.random() * 2);
 
-            // Target needs to be ahead of current position
             const targetRot = currentRotation + (fullRotations * 360) + target;
             setTargetRotation(targetRot);
             constantSpinStartRotation.current = currentRotation;
@@ -656,13 +671,12 @@ const GalaxyWheelSection: React.FC<{
             setSpinPhase('decelerating');
             spinStartTime.current = performance.now();
 
-            // Set result after decel
             setTimeout(() => {
                 setResult(WHEEL_CONFIG[targetTier]);
                 onSpinFinish();
             }, DECEL_DURATION);
         }
-    }, [targetTier, spinning, spinPhase, pointerRotation]);
+    }, [targetTier, spinning, spinPhase]);
 
     return (
         <Section label="GALAXY WHEEL" className="wheel-section" id="wheel">
@@ -1426,52 +1440,80 @@ function App() {
             setSpinning(true);
             updateToast(toastId, 'pending', '🎰 Wheel is spinning... Confirming transaction...');
 
-            // Try to confirm with timeout handling
+            // Try to confirm with a SHORT timeout (don't wait for block height expiry)
             let confirmed = false;
             let txError: any = null;
 
-            try {
-                const confirmation = await connection.confirmTransaction({
-                    signature,
-                    blockhash,
-                    lastValidBlockHeight,
-                }, 'confirmed');
+            // Confirm with 15 second timeout - don't wait forever for block height
+            const confirmWithTimeout = async () => {
+                const timeoutPromise = new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('Confirmation timeout')), 15000)
+                );
 
-                if (confirmation.value.err) {
-                    txError = new Error('Transaction failed on-chain');
-                } else {
-                    confirmed = true;
+                try {
+                    const result = await Promise.race([
+                        connection.confirmTransaction({
+                            signature,
+                            blockhash,
+                            lastValidBlockHeight,
+                        }, 'confirmed'),
+                        timeoutPromise
+                    ]) as any;
+
+                    if (result?.value?.err) {
+                        throw new Error('Transaction failed on-chain');
+                    }
+                    return true;
+                } catch (e: any) {
+                    // Timeout or block height - check status directly
+                    throw e;
                 }
+            };
+
+            try {
+                confirmed = await confirmWithTimeout();
             } catch (confirmErr: any) {
-                console.warn('Confirmation error:', confirmErr);
+                console.warn('Confirmation error/timeout:', confirmErr.message);
+                updateToast(toastId, 'pending', '⏳ Checking transaction status...');
 
-                // If block height exceeded, the tx might still have succeeded
-                // Check the transaction status directly
-                if (confirmErr.message?.includes('expired') || confirmErr.message?.includes('block height')) {
-                    updateToast(toastId, 'pending', '⏳ Checking transaction status...');
-
-                    // Wait a moment and check if transaction exists
-                    await new Promise(resolve => setTimeout(resolve, 2000));
+                // Poll for up to 10 seconds with getSignatureStatus
+                for (let i = 0; i < 10; i++) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
 
                     try {
-                        const txStatus = await connection.getSignatureStatus(signature);
-                        if (txStatus.value?.confirmationStatus === 'confirmed' ||
-                            txStatus.value?.confirmationStatus === 'finalized') {
+                        const status = await connection.getSignatureStatus(signature);
+                        console.log(`Status check ${i + 1}:`, status.value);
+
+                        if (status.value?.confirmationStatus === 'confirmed' ||
+                            status.value?.confirmationStatus === 'finalized') {
                             confirmed = true;
-                        } else if (txStatus.value?.err) {
-                            txError = new Error('Transaction failed on-chain');
-                        } else {
-                            // Still pending or unknown - treat as potential success
-                            console.log('Transaction status unclear:', txStatus);
-                            confirmed = true; // Optimistically assume success
+                            break;
                         }
-                    } catch (statusErr) {
-                        console.warn('Status check failed:', statusErr);
-                        // Can't determine status - check transaction directly
-                        confirmed = true; // Optimistically assume success
+                        if (status.value?.err) {
+                            txError = new Error('Transaction failed on-chain');
+                            break;
+                        }
+                    } catch (e) {
+                        console.warn('Status check failed:', e);
                     }
-                } else {
-                    txError = confirmErr;
+                }
+
+                // If still not confirmed after polling, check transaction directly
+                if (!confirmed && !txError) {
+                    try {
+                        const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+                        if (tx) {
+                            confirmed = true;
+                        }
+                    } catch (e) {
+                        console.warn('getTransaction failed:', e);
+                    }
+                }
+
+                // If we still can't determine, assume success (tx was sent)
+                if (!confirmed && !txError) {
+                    console.warn('Could not confirm tx status, assuming success');
+                    confirmed = true;
                 }
             }
 
@@ -1479,12 +1521,23 @@ function App() {
                 throw txError;
             }
 
-            // Get transaction logs to parse result
-            const txDetails = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+            // Get transaction logs to parse result (with retries for delayed RPC indexing)
+            let txDetails = null;
+            for (let attempt = 0; attempt < 5; attempt++) {
+                try {
+                    txDetails = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+                    if (txDetails) break;
+                } catch (e) {
+                    console.warn(`getTransaction attempt ${attempt + 1} failed:`, e);
+                }
+                // Wait before retry (RPC may need time to index)
+                await new Promise(resolve => setTimeout(resolve, 1500));
+            }
+
             const logs = txDetails?.meta?.logMessages || [];
 
             // Parse spin result from logs: "Spin #X: Tier Y - Won Z lamports"
-            let tier = 0;
+            let tier = 4; // Default to STARDUST (most common)
             let reward = 0;
             for (const log of logs) {
                 const match = log.match(/Spin #\d+: Tier (\d+) - Won (\d+) lamports/);
@@ -1498,14 +1551,16 @@ function App() {
             // Set target tier so the wheel animation lands on the correct segment
             setTargetTier(tier);
 
-            const tierNames = ["Nothing 😢", "Small Win ✨", "Medium Win 🎉", "JACKPOT 🏆"];
+            // 5-tier Galaxy naming
+            const tierNames = ["SUPERNOVA 💥", "NEBULA 🌌", "STAR CLUSTER ⭐", "COSMOS 🔮", "STARDUST ✨"];
             const rewardSol = reward / 1e9;
 
             dismissToast(toastId);
             if (reward > 0) {
-                addToast('success', `🎉 ${tierNames[tier]}! You won ${rewardSol.toFixed(4)} SOL!`, signature);
+                const tierName = tierNames[tier] || `Tier ${tier}`;
+                addToast('success', `🎉 ${tierName}! You won ${rewardSol.toFixed(4)} SOL!`, signature);
             } else {
-                addToast('info', `${tierNames[tier]} Better luck next time!`);
+                addToast('success', `✨ STARDUST! You won ${rewardSol.toFixed(4)} SOL!`, signature);
             }
 
             // Refresh balances
@@ -1522,7 +1577,7 @@ function App() {
             } else {
                 addToast('error', `Spin failed: ${e.message}`);
             }
-        } finally {
+            // Only set spinning=false on error - on success, the wheel's onSpinFinish callback handles it
             setSpinning(false);
         }
     };
