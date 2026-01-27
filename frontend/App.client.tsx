@@ -217,7 +217,11 @@ const MyWalletSection: React.FC<{
     );
 };
 
-// Galaxy Wheel Section - Traditional Pie Chart Wheel
+// Galaxy Wheel Section - Multi-Ring Dartboard Wheel
+// Each ring has a colored "win" zone and gray "pass through" zone
+// Colors are positioned sequentially (non-overlapping radially)
+// Outer = most common (1% reward), Inner = rarest (50% jackpot)
+
 interface WheelTier {
     label: string;
     color: string;
@@ -225,33 +229,48 @@ interface WheelTier {
     reward: number;
 }
 
-// Wheel tiers with probabilities (segment sizes match these percentages)
-// Total = 100%
+// Wheel tiers - NO "nothing" tier - you always win something
+// Probabilities must sum to 100%
+// Order: from OUTER ring (rarest/biggest) to INNER ring (most common/smallest)
 const WHEEL_CONFIG: WheelTier[] = [
-    { label: "NOTHING", color: "#475569", percent: 10, reward: 0 },
-    { label: "1%", color: "#10b981", percent: 75, reward: 1 },
-    { label: "10%", color: "#3b82f6", percent: 14, reward: 10 },
-    { label: "50%", color: "#f59e0b", percent: 1, reward: 50 },
+    { label: "50%", color: "#f59e0b", percent: 1, reward: 50 },    // Outer ring - 1% chance (JACKPOT!)
+    { label: "10%", color: "#3b82f6", percent: 14, reward: 10 },   // Middle ring - 14% chance
+    { label: "1%", color: "#10b981", percent: 85, reward: 1 },     // Inner ring - 85% chance (most common)
 ];
 
 const TOTAL_PERCENT = WHEEL_CONFIG.reduce((sum, t) => sum + t.percent, 0);
+const GRAY_COLOR = "#374151"; // Gray for "pass through" zones
 
-// Traditional Pie Chart Wheel SVG Component
-const PieChartWheel: React.FC<{
+// Dartboard Wheel SVG Component
+const DartboardWheel: React.FC<{
     rotation: number;
     isSpinning: boolean;
 }> = ({ rotation, isSpinning }) => {
-    const size = 300;
+    const size = 320;
     const center = size / 2;
-    const radius = size / 2 - 15;
-    const innerRadius = 35; // donut hole for center hub
+    const outerRadius = size / 2 - 15;
+    const hubRadius = 35;
 
-    // Generate arc path for a pie segment
+    // Calculate ring boundaries (equal ring widths)
+    const numRings = WHEEL_CONFIG.length;
+    const ringWidth = (outerRadius - hubRadius) / numRings;
+
+    // Generate arc path for a ring segment
     const createArcPath = (
         cx: number, cy: number,
         innerR: number, outerR: number,
         startAngle: number, endAngle: number
     ): string => {
+        // Handle full circle case
+        if (Math.abs(endAngle - startAngle) >= 359.99) {
+            return `M ${cx - outerR} ${cy} 
+                    A ${outerR} ${outerR} 0 1 1 ${cx + outerR} ${cy}
+                    A ${outerR} ${outerR} 0 1 1 ${cx - outerR} ${cy}
+                    M ${cx - innerR} ${cy}
+                    A ${innerR} ${innerR} 0 1 0 ${cx + innerR} ${cy}
+                    A ${innerR} ${innerR} 0 1 0 ${cx - innerR} ${cy}`;
+        }
+
         const startRad = (startAngle - 90) * (Math.PI / 180);
         const endRad = (endAngle - 90) * (Math.PI / 180);
 
@@ -274,47 +293,58 @@ const PieChartWheel: React.FC<{
                 Z`;
     };
 
-    // Helper to adjust color brightness for alternating segments
-    const adjustBrightness = (hex: string, percent: number): string => {
-        const num = parseInt(hex.replace('#', ''), 16);
-        const amt = Math.round(2.55 * percent);
-        const R = Math.max(0, Math.min(255, (num >> 16) + amt));
-        const G = Math.max(0, Math.min(255, ((num >> 8) & 0x00FF) + amt));
-        const B = Math.max(0, Math.min(255, (num & 0x0000FF) + amt));
-        return `#${(1 << 24 | R << 16 | G << 8 | B).toString(16).slice(1)}`;
-    };
-
-    // Build segments where each tier's arc angle = its probability percentage
+    // Build the rings - each ring has colored zone + gray zone
+    // Colored zones are positioned sequentially (non-overlapping)
     const segments: React.ReactNode[] = [];
-    let currentAngle = 0;
+    let cumulativeAngle = 0; // Track where each tier's colored zone ends
 
-    WHEEL_CONFIG.forEach((tier, tierIndex) => {
+    WHEEL_CONFIG.forEach((tier, ringIndex) => {
+        // Ring boundaries: outer rings first, inner rings last
+        const ringOuterR = outerRadius - ringIndex * ringWidth;
+        const ringInnerR = outerRadius - (ringIndex + 1) * ringWidth;
+
         const tierAngle = (tier.percent / TOTAL_PERCENT) * 360;
+        const colorStart = cumulativeAngle;
+        const colorEnd = cumulativeAngle + tierAngle;
 
-        // For tiers with large percentages, split into multiple alternating segments
-        // For small tiers (like 1% jackpot), keep as single segment
-        const minSegmentAngle = 15; // minimum 15° per visual segment
-        const numSubSegments = tier.percent >= 10 ? Math.max(1, Math.floor(tierAngle / minSegmentAngle)) : 1;
-        const subSegmentAngle = tierAngle / numSubSegments;
-
-        for (let i = 0; i < numSubSegments; i++) {
-            const startAngle = currentAngle + i * subSegmentAngle;
-            const endAngle = startAngle + subSegmentAngle;
-            const isAlternate = i % 2 === 1;
-            const segmentColor = isAlternate ? adjustBrightness(tier.color, -20) : tier.color;
-
+        // Add gray zone FIRST (from 0 to where this tier starts)
+        if (colorStart > 0.01) {
             segments.push(
                 <path
-                    key={`${tierIndex}-${i}`}
-                    d={createArcPath(center, center, innerRadius, radius, startAngle, endAngle)}
-                    fill={segmentColor}
+                    key={`gray-before-${ringIndex}`}
+                    d={createArcPath(center, center, ringInnerR, ringOuterR, 0, colorStart)}
+                    fill={GRAY_COLOR}
                     stroke="#0f172a"
-                    strokeWidth="1.5"
+                    strokeWidth="1"
                 />
             );
         }
 
-        currentAngle += tierAngle;
+        // Add colored "win" zone
+        segments.push(
+            <path
+                key={`color-${ringIndex}`}
+                d={createArcPath(center, center, ringInnerR, ringOuterR, colorStart, colorEnd)}
+                fill={tier.color}
+                stroke="#0f172a"
+                strokeWidth="1.5"
+            />
+        );
+
+        // Add gray zone AFTER (from where this tier ends to 360°)
+        if (colorEnd < 359.99) {
+            segments.push(
+                <path
+                    key={`gray-after-${ringIndex}`}
+                    d={createArcPath(center, center, ringInnerR, ringOuterR, colorEnd, 360)}
+                    fill={GRAY_COLOR}
+                    stroke="#0f172a"
+                    strokeWidth="1"
+                />
+            );
+        }
+
+        cumulativeAngle += tierAngle;
     });
 
     return (
@@ -322,46 +352,30 @@ const PieChartWheel: React.FC<{
             width={size}
             height={size}
             viewBox={`0 0 ${size} ${size}`}
-            style={{
-                transform: `rotate(${rotation}deg)`,
-                transition: isSpinning ? 'transform 4s cubic-bezier(0.17, 0.67, 0.12, 0.99)' : 'none'
-            }}
         >
-            {/* Outer glow ring */}
-            <circle
-                cx={center}
-                cy={center}
-                r={radius + 8}
-                fill="none"
-                stroke="#fbbf24"
-                strokeWidth="3"
-                opacity="0.4"
-            />
-
+            {/* Outer glow */}
+            <circle cx={center} cy={center} r={outerRadius + 8} fill="none" stroke="#fbbf24" strokeWidth="3" opacity="0.4" />
             {/* Outer border */}
-            <circle
-                cx={center}
-                cy={center}
-                r={radius + 2}
-                fill="none"
-                stroke="#fbbf24"
-                strokeWidth="2"
-            />
+            <circle cx={center} cy={center} r={outerRadius + 2} fill="none" stroke="#fbbf24" strokeWidth="2" />
 
-            {/* All segments */}
+            {/* All ring segments */}
             {segments}
 
-            {/* Inner border (around hub) */}
-            <circle
-                cx={center}
-                cy={center}
-                r={innerRadius}
-                fill="#0f172a"
-                stroke="#fbbf24"
-                strokeWidth="2"
-            />
+            {/* Ring separators */}
+            {WHEEL_CONFIG.map((_, idx) => (
+                <circle
+                    key={`ring-sep-${idx}`}
+                    cx={center}
+                    cy={center}
+                    r={outerRadius - (idx + 1) * ringWidth}
+                    fill="none"
+                    stroke="#1e293b"
+                    strokeWidth="2"
+                />
+            ))}
 
-            {/* Center hub text */}
+            {/* Center hub */}
+            <circle cx={center} cy={center} r={hubRadius} fill="#0f172a" stroke="#fbbf24" strokeWidth="2" />
             <text x={center} y={center - 4} textAnchor="middle" fill="#fbbf24" fontSize="9" fontWeight="800">GALAXY</text>
             <text x={center} y={center + 8} textAnchor="middle" fill="#fbbf24" fontSize="9" fontWeight="800">WHEEL</text>
         </svg>
@@ -382,14 +396,25 @@ const GalaxyWheelSection: React.FC<{
     const canSpin = available >= spinCost;
     const [fundAmount, setFundAmount] = React.useState("0.1");
 
-    // Spin state
+    // Animation state
     const [demoActive, setDemoActive] = React.useState(false);
     const [result, setResult] = React.useState<WheelTier | null>(null);
-    const [rotation, setRotation] = React.useState(0);
-    const [isAnimating, setIsAnimating] = React.useState(false);
-    const [pendingTier, setPendingTier] = React.useState<number | null>(null);
 
-    const isSpinning = demoActive || spinning || isAnimating;
+    // Three-stage pointer animation state
+    type SpinPhase = 'idle' | 'accelerating' | 'constant' | 'decelerating';
+    const [spinPhase, setSpinPhase] = React.useState<SpinPhase>('idle');
+    const [pointerRotation, setPointerRotation] = React.useState(0);
+    const [targetRotation, setTargetRotation] = React.useState(0);
+    const animationRef = React.useRef<number | null>(null);
+    const spinStartTime = React.useRef<number>(0);
+    const constantSpinStartRotation = React.useRef<number>(0);
+
+    const isSpinning = spinPhase !== 'idle';
+
+    // Animation constants
+    const ACCEL_DURATION = 800; // ms to accelerate
+    const BASE_SPEED = 720; // degrees per second at constant speed
+    const DECEL_DURATION = 2500; // ms to decelerate
 
     // Determine tier based on random weighted selection
     const selectTierByProbability = (): number => {
@@ -402,17 +427,79 @@ const GalaxyWheelSection: React.FC<{
         return 0;
     };
 
-    // Calculate rotation to land on a tier (pick a random segment in that tier's ring)
-    const getRotationForTier = (tierIndex: number): number => {
-        const tier = WHEEL_CONFIG[tierIndex];
-        const segmentAngle = 360 / tier.segments;
-        const randomSegment = Math.floor(Math.random() * tier.segments);
-        // Target angle that puts this segment at top (0 degrees = top)
-        const targetAngle = randomSegment * segmentAngle + segmentAngle / 2;
-        // Multiple full rotations + adjustment to land on target
-        const fullRotations = 5 + Math.floor(Math.random() * 3); // 5-7 full rotations
-        return fullRotations * 360 + (360 - targetAngle);
+    // Calculate target rotation to land on a tier's colored zone
+    const getTargetAngleForTier = (tierIndex: number): number => {
+        let cumulativeAngle = 0;
+        for (let i = 0; i < tierIndex; i++) {
+            cumulativeAngle += (WHEEL_CONFIG[i].percent / TOTAL_PERCENT) * 360;
+        }
+        const tierAngle = (WHEEL_CONFIG[tierIndex].percent / TOTAL_PERCENT) * 360;
+        const randomOffset = Math.random() * tierAngle;
+        return cumulativeAngle + randomOffset;
     };
+
+    // Animation loop
+    const animate = React.useCallback((timestamp: number) => {
+        const elapsed = timestamp - spinStartTime.current;
+
+        if (spinPhase === 'accelerating') {
+            // Ease-in: accelerate from 0 to base speed
+            const progress = Math.min(elapsed / ACCEL_DURATION, 1);
+            const easeIn = progress * progress; // quadratic ease-in
+            const rotation = constantSpinStartRotation.current + (easeIn * BASE_SPEED * (ACCEL_DURATION / 1000));
+            setPointerRotation(rotation);
+
+            if (progress >= 1) {
+                // Transition to constant phase
+                setSpinPhase('constant');
+                spinStartTime.current = timestamp;
+                constantSpinStartRotation.current = rotation;
+            }
+        } else if (spinPhase === 'constant') {
+            // Constant speed spin
+            const rotation = constantSpinStartRotation.current + (elapsed / 1000) * BASE_SPEED;
+            setPointerRotation(rotation);
+        } else if (spinPhase === 'decelerating') {
+            // Ease-out: decelerate to target
+            const progress = Math.min(elapsed / DECEL_DURATION, 1);
+            const easeOut = 1 - Math.pow(1 - progress, 3); // cubic ease-out
+            const startRot = constantSpinStartRotation.current;
+            const rotation = startRot + (targetRotation - startRot) * easeOut;
+            setPointerRotation(rotation);
+
+            if (progress >= 1) {
+                // Animation complete
+                setSpinPhase('idle');
+                setPointerRotation(targetRotation);
+                return;
+            }
+        }
+
+        if (spinPhase !== 'idle') {
+            animationRef.current = requestAnimationFrame(animate);
+        }
+    }, [spinPhase, targetRotation]);
+
+    // Start animation loop when phase changes
+    React.useEffect(() => {
+        if (spinPhase !== 'idle' && animationRef.current === null) {
+            spinStartTime.current = performance.now();
+            animationRef.current = requestAnimationFrame(animate);
+        }
+        return () => {
+            if (animationRef.current) {
+                cancelAnimationFrame(animationRef.current);
+                animationRef.current = null;
+            }
+        };
+    }, [spinPhase, animate]);
+
+    // Handle spin finish
+    React.useEffect(() => {
+        if (spinPhase === 'idle' && (demoActive || spinning) && result === null) {
+            // Check if we just finished decelerating
+        }
+    }, [spinPhase, demoActive, spinning, result]);
 
     // Handle demo spin
     const handleDemo = () => {
@@ -421,7 +508,7 @@ const GalaxyWheelSection: React.FC<{
         setDemoActive(true);
 
         const selectedTier = selectTierByProbability();
-        startSpin(selectedTier);
+        startAcceleration(selectedTier);
     };
 
     // Handle real spin trigger
@@ -429,35 +516,62 @@ const GalaxyWheelSection: React.FC<{
         if (!canSpin || isSpinning) return;
         setResult(null);
         onSpin();
+        // Start accelerating immediately, will wait in constant phase for result
+        startAcceleration(null);
     };
 
-    // Start the spin animation
-    const startSpin = (tierIndex: number) => {
-        setIsAnimating(true);
-        setPendingTier(tierIndex);
-        const newRotation = rotation + getRotationForTier(tierIndex);
-        setRotation(newRotation);
+    // Start the acceleration phase
+    const startAcceleration = (knownTier: number | null) => {
+        constantSpinStartRotation.current = pointerRotation;
+        spinStartTime.current = performance.now();
+        setSpinPhase('accelerating');
 
-        // Wait for animation to complete (4 seconds)
-        setTimeout(() => {
-            setIsAnimating(false);
-            setResult(WHEEL_CONFIG[tierIndex]);
-            setPendingTier(null);
+        if (knownTier !== null) {
+            // For demo, we already know the result - calculate target
+            const target = getTargetAngleForTier(knownTier);
+            // Add some full rotations during decel
+            const fullRotations = 3 + Math.floor(Math.random() * 2);
+            setTargetRotation(pointerRotation + (fullRotations * 360) + target);
 
-            if (demoActive) {
-                setDemoActive(false);
-            } else {
-                onSpinFinish();
-            }
-        }, 4000);
-    };
+            // Schedule transition to decel after accel + brief constant
+            setTimeout(() => {
+                if (animationRef.current) {
+                    constantSpinStartRotation.current = pointerRotation + BASE_SPEED * (ACCEL_DURATION / 1000);
+                }
+                setSpinPhase('decelerating');
+                spinStartTime.current = performance.now();
 
-    // When targetTier is set from parent (after tx confirms), start the wheel animation
-    React.useEffect(() => {
-        if (targetTier !== null && spinning && !isAnimating) {
-            startSpin(targetTier);
+                // Set result after decel
+                setTimeout(() => {
+                    setResult(WHEEL_CONFIG[knownTier]);
+                    setDemoActive(false);
+                }, DECEL_DURATION);
+            }, ACCEL_DURATION + 500); // Brief constant spin
         }
-    }, [targetTier, spinning, isAnimating]);
+    };
+
+    // When targetTier is set from parent (after tx confirms), transition to deceleration
+    React.useEffect(() => {
+        if (targetTier !== null && spinning && spinPhase === 'constant') {
+            const target = getTargetAngleForTier(targetTier);
+            const currentRotation = pointerRotation;
+            const fullRotations = 3 + Math.floor(Math.random() * 2);
+
+            // Target needs to be ahead of current position
+            const targetRot = currentRotation + (fullRotations * 360) + target;
+            setTargetRotation(targetRot);
+            constantSpinStartRotation.current = currentRotation;
+
+            setSpinPhase('decelerating');
+            spinStartTime.current = performance.now();
+
+            // Set result after decel
+            setTimeout(() => {
+                setResult(WHEEL_CONFIG[targetTier]);
+                onSpinFinish();
+            }, DECEL_DURATION);
+        }
+    }, [targetTier, spinning, spinPhase, pointerRotation]);
 
     return (
         <Section label="GALAXY WHEEL" className="wheel-section" id="wheel">
@@ -482,25 +596,47 @@ const GalaxyWheelSection: React.FC<{
                 </div>
             )}
 
-            {/* Wheel Container with Pointer */}
+            {/* Wheel Container with Rotating Pointer */}
             <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '24px' }}>
-                {/* Pointer */}
-                <div style={{
-                    fontSize: '36px',
-                    color: '#fbbf24',
-                    textShadow: '0 4px 12px rgba(0,0,0,0.8)',
-                    marginBottom: '-18px',
-                    zIndex: 30,
-                    filter: 'drop-shadow(0 0 10px rgba(251,191,36,0.6))'
-                }}>▼</div>
-
-                {/* Multi-Ring Wheel */}
+                {/* Outer rotating pointer ring */}
                 <div style={{
                     position: 'relative',
-                    borderRadius: '50%',
-                    boxShadow: '0 0 60px rgba(251,191,36,0.4), inset 0 0 30px rgba(0,0,0,0.5)'
+                    width: '360px',
+                    height: '360px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
                 }}>
-                    <PieChartWheel rotation={rotation} isSpinning={isAnimating} />
+                    {/* Rotating pointer */}
+                    <div style={{
+                        position: 'absolute',
+                        width: '100%',
+                        height: '100%',
+                        transform: `rotate(${pointerRotation}deg)`,
+                        zIndex: 30,
+                        pointerEvents: 'none'
+                    }}>
+                        {/* Pointer triangle at top */}
+                        <div style={{
+                            position: 'absolute',
+                            top: '0',
+                            left: '50%',
+                            transform: 'translateX(-50%)',
+                            fontSize: '32px',
+                            color: '#fbbf24',
+                            textShadow: '0 4px 12px rgba(0,0,0,0.8)',
+                            filter: 'drop-shadow(0 0 10px rgba(251,191,36,0.8))'
+                        }}>▼</div>
+                    </div>
+
+                    {/* Static Dartboard Wheel */}
+                    <div style={{
+                        position: 'absolute',
+                        borderRadius: '50%',
+                        boxShadow: '0 0 60px rgba(251,191,36,0.4), inset 0 0 30px rgba(0,0,0,0.5)'
+                    }}>
+                        <DartboardWheel rotation={0} isSpinning={false} />
+                    </div>
                 </div>
 
                 {/* Legend */}
