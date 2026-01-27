@@ -1,4 +1,6 @@
 import { serve, buildScript, buildStyle } from "@ments/web";
+import { readFile } from "fs/promises";
+import { join } from "path";
 
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:3005";
 const WHEEL_PROGRAM_ID = "3M12BfitAEYz14WJBMnjahEuSvhsWhjfGJXbzur26o2U";
@@ -7,11 +9,13 @@ const WHEEL_PROGRAM_ID = "3M12BfitAEYz14WJBMnjahEuSvhsWhjfGJXbzur26o2U";
 let scriptPath: string;
 let stylePath: string;
 let adminScriptPath: string;
+let wheelDemoScriptPath: string;
 
 async function init() {
   scriptPath = await buildScript("./App.client.tsx", true);
   stylePath = await buildStyle("./App.css");
   adminScriptPath = await buildScript("./Admin.client.tsx", true);
+  wheelDemoScriptPath = await buildScript("./WheelDemoClient.tsx", true);
 }
 
 // HTML template with links to cached assets
@@ -33,7 +37,8 @@ const html = (script: string, title: string = "Stardust Protocol") => `<!DOCTYPE
       "@coral-xyz/anchor": "https://esm.sh/@coral-xyz/anchor@0.29.0",
       "bs58": "https://esm.sh/bs58@5.0.0",
       "tweetnacl": "https://esm.sh/tweetnacl@1.0.3",
-      "buffer": "https://esm.sh/buffer@6.0.3"
+      "buffer": "https://esm.sh/buffer@6.0.3",
+      "react-custom-roulette": "https://esm.sh/react-custom-roulette@1.4.1?external=react,react-dom"
     }
   }
   </script>
@@ -67,6 +72,35 @@ async function handler(req: Request): Promise<Response | null> {
     });
   }
 
+  // Serve wheel demo page
+  if (url.pathname === "/wheel-demo") {
+    return new Response(html(wheelDemoScriptPath, "Galaxy Wheel Demo"), {
+      headers: { "Content-Type": "text/html" },
+    });
+  }
+
+  // Serve static assets from public folder
+  if (url.pathname.startsWith("/assets/")) {
+    try {
+      const filePath = join(import.meta.dir, "public", url.pathname);
+      const file = await readFile(filePath);
+      const ext = url.pathname.split('.').pop() || '';
+      const mimeTypes: Record<string, string> = {
+        'png': 'image/png',
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'gif': 'image/gif',
+        'svg': 'image/svg+xml',
+        'webp': 'image/webp',
+      };
+      return new Response(file, {
+        headers: { "Content-Type": mimeTypes[ext] || "application/octet-stream" },
+      });
+    } catch {
+      return new Response("Not found", { status: 404 });
+    }
+  }
+
   // Proxy API calls to backend
   if (url.pathname.startsWith("/api/")) {
     const backendUrl = BACKEND_URL + url.pathname + url.search;
@@ -92,3 +126,4 @@ console.log(`Stardust Frontend running on port ${process.env.BUN_PORT}`);
 console.log(`Backend: ${BACKEND_URL}`);
 console.log(`Wheel Program: ${WHEEL_PROGRAM_ID}`);
 console.log(`Admin page: http://localhost:${process.env.BUN_PORT}/admin`);
+console.log(`Wheel demo: http://localhost:${process.env.BUN_PORT}/wheel-demo`);

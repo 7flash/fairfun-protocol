@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { PublicKey, Connection, Transaction, TransactionInstruction, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
@@ -217,150 +217,393 @@ const MyWalletSection: React.FC<{
     );
 };
 
-// Galaxy Wheel Section
+// Galaxy Wheel Section - Traditional Pie Chart Wheel
+interface WheelTier {
+    label: string;
+    color: string;
+    percent: number; // probability of landing here
+    reward: number;
+}
+
+// Wheel tiers with probabilities (segment sizes match these percentages)
+// Total = 100%
+const WHEEL_CONFIG: WheelTier[] = [
+    { label: "NOTHING", color: "#475569", percent: 10, reward: 0 },
+    { label: "1%", color: "#10b981", percent: 75, reward: 1 },
+    { label: "10%", color: "#3b82f6", percent: 14, reward: 10 },
+    { label: "50%", color: "#f59e0b", percent: 1, reward: 50 },
+];
+
+const TOTAL_PERCENT = WHEEL_CONFIG.reduce((sum, t) => sum + t.percent, 0);
+
+// Traditional Pie Chart Wheel SVG Component
+const PieChartWheel: React.FC<{
+    rotation: number;
+    isSpinning: boolean;
+}> = ({ rotation, isSpinning }) => {
+    const size = 300;
+    const center = size / 2;
+    const radius = size / 2 - 15;
+    const innerRadius = 35; // donut hole for center hub
+
+    // Generate arc path for a pie segment
+    const createArcPath = (
+        cx: number, cy: number,
+        innerR: number, outerR: number,
+        startAngle: number, endAngle: number
+    ): string => {
+        const startRad = (startAngle - 90) * (Math.PI / 180);
+        const endRad = (endAngle - 90) * (Math.PI / 180);
+
+        const x1Outer = cx + outerR * Math.cos(startRad);
+        const y1Outer = cy + outerR * Math.sin(startRad);
+        const x2Outer = cx + outerR * Math.cos(endRad);
+        const y2Outer = cy + outerR * Math.sin(endRad);
+
+        const x1Inner = cx + innerR * Math.cos(endRad);
+        const y1Inner = cy + innerR * Math.sin(endRad);
+        const x2Inner = cx + innerR * Math.cos(startRad);
+        const y2Inner = cy + innerR * Math.sin(startRad);
+
+        const largeArc = endAngle - startAngle > 180 ? 1 : 0;
+
+        return `M ${x1Outer} ${y1Outer}
+                A ${outerR} ${outerR} 0 ${largeArc} 1 ${x2Outer} ${y2Outer}
+                L ${x1Inner} ${y1Inner}
+                A ${innerR} ${innerR} 0 ${largeArc} 0 ${x2Inner} ${y2Inner}
+                Z`;
+    };
+
+    // Helper to adjust color brightness for alternating segments
+    const adjustBrightness = (hex: string, percent: number): string => {
+        const num = parseInt(hex.replace('#', ''), 16);
+        const amt = Math.round(2.55 * percent);
+        const R = Math.max(0, Math.min(255, (num >> 16) + amt));
+        const G = Math.max(0, Math.min(255, ((num >> 8) & 0x00FF) + amt));
+        const B = Math.max(0, Math.min(255, (num & 0x0000FF) + amt));
+        return `#${(1 << 24 | R << 16 | G << 8 | B).toString(16).slice(1)}`;
+    };
+
+    // Build segments where each tier's arc angle = its probability percentage
+    const segments: React.ReactNode[] = [];
+    let currentAngle = 0;
+
+    WHEEL_CONFIG.forEach((tier, tierIndex) => {
+        const tierAngle = (tier.percent / TOTAL_PERCENT) * 360;
+
+        // For tiers with large percentages, split into multiple alternating segments
+        // For small tiers (like 1% jackpot), keep as single segment
+        const minSegmentAngle = 15; // minimum 15° per visual segment
+        const numSubSegments = tier.percent >= 10 ? Math.max(1, Math.floor(tierAngle / minSegmentAngle)) : 1;
+        const subSegmentAngle = tierAngle / numSubSegments;
+
+        for (let i = 0; i < numSubSegments; i++) {
+            const startAngle = currentAngle + i * subSegmentAngle;
+            const endAngle = startAngle + subSegmentAngle;
+            const isAlternate = i % 2 === 1;
+            const segmentColor = isAlternate ? adjustBrightness(tier.color, -20) : tier.color;
+
+            segments.push(
+                <path
+                    key={`${tierIndex}-${i}`}
+                    d={createArcPath(center, center, innerRadius, radius, startAngle, endAngle)}
+                    fill={segmentColor}
+                    stroke="#0f172a"
+                    strokeWidth="1.5"
+                />
+            );
+        }
+
+        currentAngle += tierAngle;
+    });
+
+    return (
+        <svg
+            width={size}
+            height={size}
+            viewBox={`0 0 ${size} ${size}`}
+            style={{
+                transform: `rotate(${rotation}deg)`,
+                transition: isSpinning ? 'transform 4s cubic-bezier(0.17, 0.67, 0.12, 0.99)' : 'none'
+            }}
+        >
+            {/* Outer glow ring */}
+            <circle
+                cx={center}
+                cy={center}
+                r={radius + 8}
+                fill="none"
+                stroke="#fbbf24"
+                strokeWidth="3"
+                opacity="0.4"
+            />
+
+            {/* Outer border */}
+            <circle
+                cx={center}
+                cy={center}
+                r={radius + 2}
+                fill="none"
+                stroke="#fbbf24"
+                strokeWidth="2"
+            />
+
+            {/* All segments */}
+            {segments}
+
+            {/* Inner border (around hub) */}
+            <circle
+                cx={center}
+                cy={center}
+                r={innerRadius}
+                fill="#0f172a"
+                stroke="#fbbf24"
+                strokeWidth="2"
+            />
+
+            {/* Center hub text */}
+            <text x={center} y={center - 4} textAnchor="middle" fill="#fbbf24" fontSize="9" fontWeight="800">GALAXY</text>
+            <text x={center} y={center + 8} textAnchor="middle" fill="#fbbf24" fontSize="9" fontWeight="800">WHEEL</text>
+        </svg>
+    );
+};
+
 const GalaxyWheelSection: React.FC<{
     available: number;
     spinning: boolean;
     onSpin: () => void;
+    targetTier: number | null;
+    onSpinFinish: () => void;
     isAdmin?: boolean;
     treasuryBalance?: number;
     onFundTreasury?: (amount: number) => void;
-}> = ({ available, spinning, onSpin, isAdmin, treasuryBalance, onFundTreasury }) => {
-    const canSpin = available >= SPIN_COST;
+    spinCost: number;
+}> = ({ available, spinning, onSpin, targetTier, onSpinFinish, isAdmin, treasuryBalance, onFundTreasury, spinCost }) => {
+    const canSpin = available >= spinCost;
     const [fundAmount, setFundAmount] = React.useState("0.1");
 
-    // Wheel segments - now showing actual treasury percentages
-    const segments = [
-        { label: "Nothing", color: "#94a3b8", percent: 10, reward: 0 },
-        { label: "1%", color: "#22c55e", percent: 75, reward: 1 },
-        { label: "10%", color: "#3b82f6", percent: 14, reward: 10 },
-        { label: "50%", color: "#fbbf24", percent: 1, reward: 50 },
-    ];
+    // Spin state
+    const [demoActive, setDemoActive] = React.useState(false);
+    const [result, setResult] = React.useState<WheelTier | null>(null);
+    const [rotation, setRotation] = React.useState(0);
+    const [isAnimating, setIsAnimating] = React.useState(false);
+    const [pendingTier, setPendingTier] = React.useState<number | null>(null);
+
+    const isSpinning = demoActive || spinning || isAnimating;
+
+    // Determine tier based on random weighted selection
+    const selectTierByProbability = (): number => {
+        const r = Math.random() * TOTAL_PERCENT;
+        let cumulative = 0;
+        for (let i = 0; i < WHEEL_CONFIG.length; i++) {
+            cumulative += WHEEL_CONFIG[i].percent;
+            if (r < cumulative) return i;
+        }
+        return 0;
+    };
+
+    // Calculate rotation to land on a tier (pick a random segment in that tier's ring)
+    const getRotationForTier = (tierIndex: number): number => {
+        const tier = WHEEL_CONFIG[tierIndex];
+        const segmentAngle = 360 / tier.segments;
+        const randomSegment = Math.floor(Math.random() * tier.segments);
+        // Target angle that puts this segment at top (0 degrees = top)
+        const targetAngle = randomSegment * segmentAngle + segmentAngle / 2;
+        // Multiple full rotations + adjustment to land on target
+        const fullRotations = 5 + Math.floor(Math.random() * 3); // 5-7 full rotations
+        return fullRotations * 360 + (360 - targetAngle);
+    };
+
+    // Handle demo spin
+    const handleDemo = () => {
+        if (isSpinning) return;
+        setResult(null);
+        setDemoActive(true);
+
+        const selectedTier = selectTierByProbability();
+        startSpin(selectedTier);
+    };
+
+    // Handle real spin trigger
+    const handleRealSpin = () => {
+        if (!canSpin || isSpinning) return;
+        setResult(null);
+        onSpin();
+    };
+
+    // Start the spin animation
+    const startSpin = (tierIndex: number) => {
+        setIsAnimating(true);
+        setPendingTier(tierIndex);
+        const newRotation = rotation + getRotationForTier(tierIndex);
+        setRotation(newRotation);
+
+        // Wait for animation to complete (4 seconds)
+        setTimeout(() => {
+            setIsAnimating(false);
+            setResult(WHEEL_CONFIG[tierIndex]);
+            setPendingTier(null);
+
+            if (demoActive) {
+                setDemoActive(false);
+            } else {
+                onSpinFinish();
+            }
+        }, 4000);
+    };
+
+    // When targetTier is set from parent (after tx confirms), start the wheel animation
+    React.useEffect(() => {
+        if (targetTier !== null && spinning && !isAnimating) {
+            startSpin(targetTier);
+        }
+    }, [targetTier, spinning, isAnimating]);
 
     return (
         <Section label="GALAXY WHEEL" className="wheel-section" id="wheel">
-            {/* Treasury Info - always visible */}
+            {/* Jackpot Pool Display */}
             {treasuryBalance !== undefined && (
-                <div className="treasury-info" style={{ textAlign: "center", marginBottom: 16, padding: 12, background: "rgba(251, 191, 36, 0.1)", borderRadius: 8, border: "1px solid var(--gold-primary)" }}>
-                    <div style={{ fontSize: 14, color: "var(--text-muted)" }}>Treasury Pool</div>
-                    <div style={{ fontSize: 24, fontWeight: "bold", color: "var(--gold-primary)" }}>{treasuryBalance.toFixed(4)} SOL</div>
-                    <div style={{ fontSize: 12, marginTop: 8, display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap" }}>
-                        {segments.slice(1).map((seg, i) => (
-                            <span key={i} style={{ color: seg.color }}>
-                                {seg.percent}% chance → {((treasuryBalance * seg.reward) / 100).toFixed(4)} SOL
+                <div style={{
+                    display: 'flex', flexDirection: 'column', alignItems: 'center',
+                    background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.3)',
+                    padding: '16px 32px', borderRadius: '16px', marginBottom: '24px', textAlign: 'center'
+                }}>
+                    <span style={{ fontSize: '12px', fontWeight: 600, color: '#fbbf24', letterSpacing: '2px' }}>🏆 JACKPOT POOL</span>
+                    <span style={{ fontSize: '32px', fontWeight: 800, color: '#fbbf24', textShadow: '0 0 30px rgba(251,191,36,0.5)' }}>
+                        {treasuryBalance.toFixed(4)} SOL
+                    </span>
+                    <div style={{ display: 'flex', gap: '16px', justifyContent: 'center', marginTop: '8px', fontSize: '12px', fontWeight: 600, flexWrap: 'wrap' }}>
+                        {WHEEL_CONFIG.filter(t => t.reward > 0).map((tier, i) => (
+                            <span key={i} style={{ color: tier.color }}>
+                                {tier.percent}% → {((treasuryBalance * tier.reward) / 100).toFixed(3)} SOL
                             </span>
                         ))}
                     </div>
                 </div>
             )}
 
-            <div className="wheel-container" style={{ display: "flex", alignItems: "center", gap: 32, flexWrap: "wrap", justifyContent: "center" }}>
-                <div className="wheel-wrapper">
-                    <div className="wheel-pointer">▼</div>
-                    <svg viewBox="0 0 200 200" className={`wheel-svg ${spinning ? 'spinning' : ''}`}>
-                        {(() => {
-                            // Calculate proportional angles
-                            let startAngle = -90; // Start from top
-                            return segments.map((seg, i) => {
-                                const sweepAngle = (seg.percent / 100) * 360;
-                                const endAngle = startAngle + sweepAngle;
-                                const startRad = (startAngle * Math.PI) / 180;
-                                const endRad = (endAngle * Math.PI) / 180;
-                                const x1 = 100 + 85 * Math.cos(startRad);
-                                const y1 = 100 + 85 * Math.sin(startRad);
-                                const x2 = 100 + 85 * Math.cos(endRad);
-                                const y2 = 100 + 85 * Math.sin(endRad);
-                                const largeArc = sweepAngle > 180 ? 1 : 0;
-                                const path = `M100,100 L${x1},${y1} A85,85 0 ${largeArc},1 ${x2},${y2} Z`;
+            {/* Wheel Container with Pointer */}
+            <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '24px' }}>
+                {/* Pointer */}
+                <div style={{
+                    fontSize: '36px',
+                    color: '#fbbf24',
+                    textShadow: '0 4px 12px rgba(0,0,0,0.8)',
+                    marginBottom: '-18px',
+                    zIndex: 30,
+                    filter: 'drop-shadow(0 0 10px rgba(251,191,36,0.6))'
+                }}>▼</div>
 
-                                // Text position in middle of arc
-                                const midAngle = startAngle + sweepAngle / 2;
-                                const midRad = (midAngle * Math.PI) / 180;
-                                const textX = 100 + 55 * Math.cos(midRad);
-                                const textY = 100 + 55 * Math.sin(midRad);
-
-                                // Calculate reward amount
-                                const rewardAmount = treasuryBalance ? ((treasuryBalance * seg.reward) / 100).toFixed(3) : "0";
-                                const displayText = seg.reward === 0 ? "0" : rewardAmount;
-
-                                const result = (
-                                    <g key={i}>
-                                        <path d={path} fill={seg.color} stroke="#0a0d0f" strokeWidth="2" />
-                                        {sweepAngle > 15 && (
-                                            <text x={textX} y={textY} fill="#fff" fontSize="10" fontWeight="bold" textAnchor="middle" dominantBaseline="middle">
-                                                {displayText}
-                                            </text>
-                                        )}
-                                    </g>
-                                );
-                                startAngle = endAngle;
-                                return result;
-                            });
-                        })()}
-                        <circle cx="100" cy="100" r="25" fill="#0a0d0f" stroke="#fbbf24" strokeWidth="3" />
-                        <text x="100" y="100" fill="#fbbf24" fontSize="14" textAnchor="middle" dominantBaseline="middle">SOL</text>
-                    </svg>
+                {/* Multi-Ring Wheel */}
+                <div style={{
+                    position: 'relative',
+                    borderRadius: '50%',
+                    boxShadow: '0 0 60px rgba(251,191,36,0.4), inset 0 0 30px rgba(0,0,0,0.5)'
+                }}>
+                    <PieChartWheel rotation={rotation} isSpinning={isAnimating} />
                 </div>
 
                 {/* Legend */}
-                <div className="wheel-legend" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {segments.map((seg, i) => {
-                        const rewardAmount = treasuryBalance ? ((treasuryBalance * seg.reward) / 100).toFixed(4) : "0.0000";
-                        return (
-                            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                                <div style={{ width: 16, height: 16, borderRadius: 4, background: seg.color }} />
-                                <div style={{ fontSize: 13 }}>
-                                    <span style={{ fontWeight: "bold" }}>{seg.percent}%</span>
-                                    <span style={{ color: "var(--text-muted)", marginLeft: 8 }}>
-                                        {seg.reward === 0 ? "Nothing" : `${rewardAmount} SOL`}
-                                    </span>
-                                </div>
-                            </div>
-                        );
-                    })}
-                </div>
-
-                <div className="wheel-info">
-                    <div className="wheel-cost">Cost: {SPIN_COST.toLocaleString()} ✨</div>
-                    <button
-                        className={`btn btn-gold spin-btn ${spinning ? 'spinning' : ''}`}
-                        onClick={onSpin}
-                        disabled={!canSpin || spinning}
-                    >
-                        {spinning ? '🎲 SPINNING...' : '🎲 SPIN NOW'}
-                    </button>
-                    {!canSpin && <div className="wheel-need">Need {(SPIN_COST - available).toLocaleString()} more ✨</div>}
+                <div style={{
+                    display: 'flex', gap: '16px', marginTop: '16px', justifyContent: 'center', flexWrap: 'wrap'
+                }}>
+                    {WHEEL_CONFIG.map((tier, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
+                            <div style={{ width: '12px', height: '12px', borderRadius: '3px', background: tier.color }} />
+                            <span style={{ color: '#94a3b8' }}>{tier.label}</span>
+                            <span style={{ color: tier.color, fontWeight: 600 }}>({tier.percent}%)</span>
+                        </div>
+                    ))}
                 </div>
             </div>
 
-            {/* Admin Controls - only visible to deployer */}
+            {/* Result */}
+            {result && (
+                <div style={{
+                    padding: '16px 32px', borderRadius: '12px', marginBottom: '20px',
+                    fontWeight: 700, fontSize: '18px', textAlign: 'center',
+                    border: `2px solid ${result.color}`,
+                    background: result.reward > 0 ? 'rgba(16, 185, 129, 0.15)' : 'rgba(100, 116, 139, 0.15)',
+                    color: result.reward > 0 ? '#10b981' : '#64748b'
+                }}>
+                    {result.reward > 0
+                        ? `🎉 You won ${result.reward}% = ${treasuryBalance ? ((treasuryBalance * result.reward) / 100).toFixed(4) : '?'} SOL!`
+                        : '😔 Better luck next time!'}
+                </div>
+            )}
+
+            {/* Controls */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+                <button
+                    className="btn btn-gold"
+                    onClick={handleRealSpin}
+                    disabled={!canSpin || isSpinning}
+                    style={{
+                        padding: '14px 40px',
+                        fontSize: '16px',
+                        fontWeight: 700,
+                        borderRadius: '50px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        background: 'linear-gradient(135deg, #fbbf24, #f59e0b)',
+                        border: 'none',
+                        color: '#0f172a',
+                        cursor: canSpin && !isSpinning ? 'pointer' : 'not-allowed',
+                        opacity: canSpin && !isSpinning ? 1 : 0.6,
+                        boxShadow: '0 4px 20px rgba(251, 191, 36, 0.4)'
+                    }}
+                >
+                    {isSpinning ? '✨ SPINNING...' : '🎰 SPIN WHEEL'}
+                    <span style={{ fontSize: '11px', opacity: 0.8, marginTop: '2px' }}>{spinCost.toLocaleString()} STARDUST</span>
+                </button>
+
+                <button
+                    onClick={handleDemo}
+                    disabled={isSpinning}
+                    style={{
+                        padding: '8px 20px',
+                        fontSize: '13px',
+                        background: 'transparent',
+                        border: '1px solid #475569',
+                        color: '#94a3b8',
+                        borderRadius: '20px',
+                        cursor: isSpinning ? 'not-allowed' : 'pointer',
+                        opacity: isSpinning ? 0.5 : 1
+                    }}
+                >
+                    🎮 DEMO SPIN
+                </button>
+
+                {!canSpin && !isSpinning && (
+                    <p style={{ color: '#ef4444', fontSize: '13px', margin: 0 }}>
+                        Need {(spinCost - available).toLocaleString()} more STARDUST
+                    </p>
+                )}
+            </div>
+
+            {/* Admin Panel */}
             {isAdmin && onFundTreasury && (
-                <div className="admin-panel" style={{ marginTop: 20, padding: 16, background: "rgba(34, 197, 94, 0.1)", borderRadius: 8, border: "1px solid var(--success)" }}>
-                    <div style={{ fontSize: 14, fontWeight: "bold", color: "var(--success)", marginBottom: 12 }}>🔐 Admin Controls</div>
-                    <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                        <label style={{ fontSize: 14 }}>Fund Treasury:</label>
-                        <input
-                            type="number"
-                            value={fundAmount}
-                            onChange={(e) => setFundAmount(e.target.value)}
-                            step="0.1"
-                            min="0.01"
-                            style={{ background: "var(--bg-tertiary)", border: "1px solid var(--border-light)", borderRadius: 6, padding: "6px 10px", color: "var(--text-primary)", width: 100 }}
-                        />
-                        <span>SOL</span>
-                        <button
-                            className="btn btn-gold"
-                            onClick={() => onFundTreasury(parseFloat(fundAmount))}
-                            style={{ padding: "6px 16px" }}
-                        >
-                            💰 Fund
-                        </button>
-                    </div>
+                <div style={{ marginTop: '24px', display: 'flex', justifyContent: 'center', gap: '8px' }}>
+                    <input
+                        type="number"
+                        value={fundAmount}
+                        onChange={(e) => setFundAmount(e.target.value)}
+                        style={{ padding: '10px 12px', borderRadius: '8px', border: '1px solid #334155', background: '#0f172a', color: 'white', width: '80px', fontSize: '14px' }}
+                    />
+                    <button
+                        className="btn btn-secondary"
+                        onClick={() => onFundTreasury(parseFloat(fundAmount))}
+                        style={{ padding: '10px 20px' }}
+                    >
+                        💰 Fund Treasury
+                    </button>
                 </div>
             )}
         </Section>
     );
 };
+
 
 // Leaders Section
 const LeadersSection: React.FC<{
@@ -439,6 +682,7 @@ function App() {
     const [winners, setWinners] = useState<WinnerEntry[]>([]);
     const [claiming, setClaiming] = useState(false);
     const [spinning, setSpinning] = useState(false);
+    const [targetTier, setTargetTier] = useState<number | null>(null);
     const [showLogin, setShowLogin] = useState(false);
     const [phantomWallet, setPhantomWallet] = useState<any>(null);
     const [toasts, setToasts] = useState<Toast[]>([]);
@@ -1014,6 +1258,9 @@ function App() {
                 }
             }
 
+            // Set target tier so the wheel animation lands on the correct segment
+            setTargetTier(tier);
+
             const tierNames = ["Nothing 😢", "Small Win ✨", "Medium Win 🎉", "JACKPOT 🏆"];
             const rewardSol = reward / 1e9;
 
@@ -1070,6 +1317,12 @@ function App() {
                             available={available}
                             spinning={spinning}
                             onSpin={handleSpin}
+                            targetTier={targetTier}
+                            onSpinFinish={() => {
+                                setSpinning(false);
+                                setTargetTier(null);
+                            }}
+                            spinCost={SPIN_COST}
                             isAdmin={isAdmin}
                             treasuryBalance={treasuryBalance}
                             onFundTreasury={async (amount) => {

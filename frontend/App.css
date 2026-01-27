@@ -497,6 +497,28 @@ body {
   margin-top: 12px;
 }
 
+/* Hide react-custom-roulette default pointer */
+.wheel-section img[src*="pointer"] {
+  display: none !important;
+}
+
+/* Hide any roulette pointer that might be outside our wheel container */
+[class*="roulette"]>img,
+[class*="wheel"]>img:not([src*="coins"]) {
+  display: none !important;
+}
+
+/* Force hide the library's pointer wrapper by position */
+.wheel-section div[style*="position: absolute"][style*="right"]>img,
+.wheel-section div[style*="position: absolute"][style*="transform"]>img:first-child {
+  display: none !important;
+}
+
+/* Hide stray positioned elements from the roulette library */
+.wheel-section>div>div>div>img {
+  display: none !important;
+}
+
 /* ============================================
    LEADERS SECTION
    ============================================ */
