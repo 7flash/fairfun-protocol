@@ -217,39 +217,76 @@ const MyWalletSection: React.FC<{
     );
 };
 
-// Galaxy Wheel Section - Multi-Ring Dartboard Wheel
-// Each ring has a colored "win" zone and gray "pass through" zone
-// Colors are positioned sequentially (non-overlapping radially)
-// Outer = most common (1% reward), Inner = rarest (50% jackpot)
+// Galaxy Wheel Section - Cosmic Multi-Ring Dartboard
+// Each ring has a cosmic "win" zone and dark space "pass through" zone
+// Outer = rarest/most epic (SUPERNOVA), Inner = most common (STARDUST)
 
 interface WheelTier {
     label: string;
     color: string;
-    percent: number; // probability of landing here
+    gradient: string; // CSS gradient for the tier
+    glowColor: string;
+    percent: number;
     reward: number;
 }
 
-// Wheel tiers - NO "nothing" tier - you always win something
-// Probabilities must sum to 100%
-// Order: from OUTER ring (rarest/biggest) to INNER ring (most common/smallest)
+// 5 Galaxy-themed tiers - from OUTER (rarest/epic) to INNER (common/simple)
+// Probabilities sum to 100%
 const WHEEL_CONFIG: WheelTier[] = [
-    { label: "50%", color: "#f59e0b", percent: 1, reward: 50 },    // Outer ring - 1% chance (JACKPOT!)
-    { label: "10%", color: "#3b82f6", percent: 14, reward: 10 },   // Middle ring - 14% chance
-    { label: "1%", color: "#10b981", percent: 85, reward: 1 },     // Inner ring - 85% chance (most common)
+    {
+        label: "SUPERNOVA",
+        color: "#fbbf24",
+        gradient: "linear-gradient(135deg, #ff6b00 0%, #ffd700 30%, #ff4500 60%, #ff8c00 100%)",
+        glowColor: "rgba(255, 183, 0, 0.8)",
+        percent: 0.5,
+        reward: 100
+    },
+    {
+        label: "NEBULA",
+        color: "#a855f7",
+        gradient: "linear-gradient(135deg, #7c3aed 0%, #ec4899 40%, #a855f7 70%, #6366f1 100%)",
+        glowColor: "rgba(168, 85, 247, 0.6)",
+        percent: 2,
+        reward: 40
+    },
+    {
+        label: "STAR CLUSTER",
+        color: "#06b6d4",
+        gradient: "linear-gradient(135deg, #0ea5e9 0%, #06b6d4 40%, #22d3ee 70%, #67e8f9 100%)",
+        glowColor: "rgba(6, 182, 212, 0.5)",
+        percent: 7.5,
+        reward: 15
+    },
+    {
+        label: "COSMOS",
+        color: "#3b82f6",
+        gradient: "linear-gradient(135deg, #1e3a8a 0%, #3b82f6 40%, #1d4ed8 70%, #2563eb 100%)",
+        glowColor: "rgba(59, 130, 246, 0.4)",
+        percent: 20,
+        reward: 4
+    },
+    {
+        label: "STARDUST",
+        color: "#475569",
+        gradient: "linear-gradient(135deg, #1e293b 0%, #334155 40%, #475569 70%, #64748b 100%)",
+        glowColor: "rgba(71, 85, 105, 0.3)",
+        percent: 70,
+        reward: 1
+    },
 ];
 
 const TOTAL_PERCENT = WHEEL_CONFIG.reduce((sum, t) => sum + t.percent, 0);
-const GRAY_COLOR = "#374151"; // Gray for "pass through" zones
+const SPACE_COLOR = "#0f0f1a"; // Deep space dark
 
-// Dartboard Wheel SVG Component
+// Galaxy Dartboard Wheel SVG Component
 const DartboardWheel: React.FC<{
     rotation: number;
     isSpinning: boolean;
 }> = ({ rotation, isSpinning }) => {
-    const size = 320;
+    const size = 360;
     const center = size / 2;
-    const outerRadius = size / 2 - 15;
-    const hubRadius = 35;
+    const outerRadius = size / 2 - 20;
+    const hubRadius = 40;
 
     // Calculate ring boundaries (equal ring widths)
     const numRings = WHEEL_CONFIG.length;
@@ -261,7 +298,6 @@ const DartboardWheel: React.FC<{
         innerR: number, outerR: number,
         startAngle: number, endAngle: number
     ): string => {
-        // Handle full circle case
         if (Math.abs(endAngle - startAngle) >= 359.99) {
             return `M ${cx - outerR} ${cy} 
                     A ${outerR} ${outerR} 0 1 1 ${cx + outerR} ${cy}
@@ -293,53 +329,66 @@ const DartboardWheel: React.FC<{
                 Z`;
     };
 
-    // Build the rings - each ring has colored zone + gray zone
-    // Colored zones are positioned sequentially (non-overlapping)
+    // Generate random stars for background
+    const stars: React.ReactNode[] = [];
+    for (let i = 0; i < 80; i++) {
+        const angle = Math.random() * 360;
+        const distance = hubRadius + Math.random() * (outerRadius - hubRadius);
+        const rad = (angle - 90) * (Math.PI / 180);
+        const x = center + distance * Math.cos(rad);
+        const y = center + distance * Math.sin(rad);
+        const starSize = 0.3 + Math.random() * 1.2;
+        const opacity = 0.3 + Math.random() * 0.7;
+        stars.push(
+            <circle key={`star-${i}`} cx={x} cy={y} r={starSize} fill="white" opacity={opacity} />
+        );
+    }
+
+    // Build the rings
     const segments: React.ReactNode[] = [];
-    let cumulativeAngle = 0; // Track where each tier's colored zone ends
+    let cumulativeAngle = 0;
 
     WHEEL_CONFIG.forEach((tier, ringIndex) => {
-        // Ring boundaries: outer rings first, inner rings last
         const ringOuterR = outerRadius - ringIndex * ringWidth;
         const ringInnerR = outerRadius - (ringIndex + 1) * ringWidth;
-
         const tierAngle = (tier.percent / TOTAL_PERCENT) * 360;
         const colorStart = cumulativeAngle;
         const colorEnd = cumulativeAngle + tierAngle;
 
-        // Add gray zone FIRST (from 0 to where this tier starts)
+        // Dark space zone (before colored zone)
         if (colorStart > 0.01) {
             segments.push(
                 <path
-                    key={`gray-before-${ringIndex}`}
+                    key={`space-before-${ringIndex}`}
                     d={createArcPath(center, center, ringInnerR, ringOuterR, 0, colorStart)}
-                    fill={GRAY_COLOR}
-                    stroke="#0f172a"
-                    strokeWidth="1"
+                    fill={SPACE_COLOR}
+                    stroke="#1a1a2e"
+                    strokeWidth="0.5"
                 />
             );
         }
 
-        // Add colored "win" zone
+        // Colored "win" zone with gradient reference
         segments.push(
             <path
                 key={`color-${ringIndex}`}
                 d={createArcPath(center, center, ringInnerR, ringOuterR, colorStart, colorEnd)}
-                fill={tier.color}
-                stroke="#0f172a"
-                strokeWidth="1.5"
+                fill={`url(#gradient-${ringIndex})`}
+                stroke={tier.color}
+                strokeWidth="1"
+                style={{ filter: `drop-shadow(0 0 ${4 + (numRings - ringIndex) * 2}px ${tier.glowColor})` }}
             />
         );
 
-        // Add gray zone AFTER (from where this tier ends to 360°)
+        // Dark space zone (after colored zone)
         if (colorEnd < 359.99) {
             segments.push(
                 <path
-                    key={`gray-after-${ringIndex}`}
+                    key={`space-after-${ringIndex}`}
                     d={createArcPath(center, center, ringInnerR, ringOuterR, colorEnd, 360)}
-                    fill={GRAY_COLOR}
-                    stroke="#0f172a"
-                    strokeWidth="1"
+                    fill={SPACE_COLOR}
+                    stroke="#1a1a2e"
+                    strokeWidth="0.5"
                 />
             );
         }
@@ -353,31 +402,66 @@ const DartboardWheel: React.FC<{
             height={size}
             viewBox={`0 0 ${size} ${size}`}
         >
-            {/* Outer glow */}
-            <circle cx={center} cy={center} r={outerRadius + 8} fill="none" stroke="#fbbf24" strokeWidth="3" opacity="0.4" />
-            {/* Outer border */}
-            <circle cx={center} cy={center} r={outerRadius + 2} fill="none" stroke="#fbbf24" strokeWidth="2" />
+            {/* Gradient definitions */}
+            <defs>
+                {WHEEL_CONFIG.map((tier, idx) => (
+                    <linearGradient key={`gradient-${idx}`} id={`gradient-${idx}`} x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stopColor={tier.gradient.match(/#[a-f0-9]{6}/gi)?.[0] || tier.color} />
+                        <stop offset="50%" stopColor={tier.gradient.match(/#[a-f0-9]{6}/gi)?.[1] || tier.color} />
+                        <stop offset="100%" stopColor={tier.gradient.match(/#[a-f0-9]{6}/gi)?.[2] || tier.color} />
+                    </linearGradient>
+                ))}
+                {/* Glow filters */}
+                {WHEEL_CONFIG.map((tier, idx) => (
+                    <filter key={`glow-${idx}`} id={`glow-${idx}`} x="-50%" y="-50%" width="200%" height="200%">
+                        <feGaussianBlur stdDeviation={3 + (numRings - idx)} result="blur" />
+                        <feMerge>
+                            <feMergeNode in="blur" />
+                            <feMergeNode in="SourceGraphic" />
+                        </feMerge>
+                    </filter>
+                ))}
+                {/* Radial gradient for cosmic background */}
+                <radialGradient id="cosmicBg" cx="50%" cy="50%" r="50%">
+                    <stop offset="0%" stopColor="#1a1a3e" />
+                    <stop offset="70%" stopColor="#0f0f1a" />
+                    <stop offset="100%" stopColor="#050510" />
+                </radialGradient>
+            </defs>
+
+            {/* Cosmic background circle */}
+            <circle cx={center} cy={center} r={outerRadius + 5} fill="url(#cosmicBg)" />
+
+            {/* Outer glow rings */}
+            <circle cx={center} cy={center} r={outerRadius + 12} fill="none" stroke="#fbbf24" strokeWidth="2" opacity="0.2" />
+            <circle cx={center} cy={center} r={outerRadius + 8} fill="none" stroke="#a855f7" strokeWidth="1.5" opacity="0.3" />
+            <circle cx={center} cy={center} r={outerRadius + 4} fill="none" stroke="#06b6d4" strokeWidth="1" opacity="0.4" />
+
+            {/* Starfield background (behind segments) */}
+            {stars}
 
             {/* All ring segments */}
             {segments}
 
-            {/* Ring separators */}
-            {WHEEL_CONFIG.map((_, idx) => (
+            {/* Ring separators with subtle glow */}
+            {WHEEL_CONFIG.map((tier, idx) => (
                 <circle
                     key={`ring-sep-${idx}`}
                     cx={center}
                     cy={center}
                     r={outerRadius - (idx + 1) * ringWidth}
                     fill="none"
-                    stroke="#1e293b"
-                    strokeWidth="2"
+                    stroke="#2a2a4e"
+                    strokeWidth="1.5"
+                    opacity="0.8"
                 />
             ))}
 
-            {/* Center hub */}
-            <circle cx={center} cy={center} r={hubRadius} fill="#0f172a" stroke="#fbbf24" strokeWidth="2" />
-            <text x={center} y={center - 4} textAnchor="middle" fill="#fbbf24" fontSize="9" fontWeight="800">GALAXY</text>
-            <text x={center} y={center + 8} textAnchor="middle" fill="#fbbf24" fontSize="9" fontWeight="800">WHEEL</text>
+            {/* Galaxy center hub with cosmic styling */}
+            <circle cx={center} cy={center} r={hubRadius + 2} fill="none" stroke="#a855f7" strokeWidth="2" opacity="0.5" />
+            <circle cx={center} cy={center} r={hubRadius} fill="url(#cosmicBg)" stroke="#fbbf24" strokeWidth="2" />
+            <text x={center} y={center - 6} textAnchor="middle" fill="#fbbf24" fontSize="10" fontWeight="800" style={{ textShadow: '0 0 10px rgba(251,191,36,0.8)' }}>GALAXY</text>
+            <text x={center} y={center + 8} textAnchor="middle" fill="#a855f7" fontSize="10" fontWeight="800" style={{ textShadow: '0 0 10px rgba(168,85,247,0.8)' }}>WHEEL</text>
         </svg>
     );
 };
@@ -516,8 +600,7 @@ const GalaxyWheelSection: React.FC<{
         if (!canSpin || isSpinning) return;
         setResult(null);
         onSpin();
-        // Start accelerating immediately, will wait in constant phase for result
-        startAcceleration(null);
+        // Animation will start when 'spinning' prop becomes true (after tx approved)
     };
 
     // Start the acceleration phase
@@ -549,6 +632,14 @@ const GalaxyWheelSection: React.FC<{
             }, ACCEL_DURATION + 500); // Brief constant spin
         }
     };
+
+    // Start spinning when transaction is approved (spinning prop becomes true)
+    React.useEffect(() => {
+        if (spinning && spinPhase === 'idle' && !demoActive) {
+            // Transaction was approved, start accelerating
+            startAcceleration(null);
+        }
+    }, [spinning, spinPhase, demoActive]);
 
     // When targetTier is set from parent (after tx confirms), transition to deceleration
     React.useEffect(() => {
@@ -601,8 +692,8 @@ const GalaxyWheelSection: React.FC<{
                 {/* Outer rotating pointer ring */}
                 <div style={{
                     position: 'relative',
-                    width: '360px',
-                    height: '360px',
+                    width: '400px',
+                    height: '400px',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center'
@@ -616,38 +707,48 @@ const GalaxyWheelSection: React.FC<{
                         zIndex: 30,
                         pointerEvents: 'none'
                     }}>
-                        {/* Pointer triangle at top */}
+                        {/* Cosmic pointer at top */}
                         <div style={{
                             position: 'absolute',
-                            top: '0',
+                            top: '-5px',
                             left: '50%',
                             transform: 'translateX(-50%)',
-                            fontSize: '32px',
+                            fontSize: '40px',
                             color: '#fbbf24',
-                            textShadow: '0 4px 12px rgba(0,0,0,0.8)',
-                            filter: 'drop-shadow(0 0 10px rgba(251,191,36,0.8))'
+                            textShadow: '0 0 20px rgba(255,183,0,1), 0 0 40px rgba(255,100,0,0.8), 0 4px 12px rgba(0,0,0,0.9)',
+                            filter: 'drop-shadow(0 0 15px rgba(251,191,36,0.9))'
                         }}>▼</div>
                     </div>
 
-                    {/* Static Dartboard Wheel */}
+                    {/* Static Galaxy Wheel */}
                     <div style={{
                         position: 'absolute',
                         borderRadius: '50%',
-                        boxShadow: '0 0 60px rgba(251,191,36,0.4), inset 0 0 30px rgba(0,0,0,0.5)'
+                        boxShadow: '0 0 80px rgba(168,85,247,0.3), 0 0 40px rgba(6,182,212,0.2), inset 0 0 40px rgba(0,0,0,0.6)'
                     }}>
                         <DartboardWheel rotation={0} isSpinning={false} />
                     </div>
                 </div>
 
-                {/* Legend */}
+                {/* Galaxy-themed Legend */}
                 <div style={{
-                    display: 'flex', gap: '16px', marginTop: '16px', justifyContent: 'center', flexWrap: 'wrap'
+                    display: 'flex', gap: '12px', marginTop: '20px', justifyContent: 'center', flexWrap: 'wrap',
+                    padding: '12px 20px', background: 'rgba(15,15,30,0.8)', borderRadius: '12px',
+                    border: '1px solid rgba(168,85,247,0.3)'
                 }}>
                     {WHEEL_CONFIG.map((tier, i) => (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
-                            <div style={{ width: '12px', height: '12px', borderRadius: '3px', background: tier.color }} />
-                            <span style={{ color: '#94a3b8' }}>{tier.label}</span>
-                            <span style={{ color: tier.color, fontWeight: 600 }}>({tier.percent}%)</span>
+                        <div key={i} style={{
+                            display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px',
+                            padding: '4px 8px', borderRadius: '6px',
+                            background: i === 0 ? 'rgba(251,191,36,0.15)' : 'transparent'
+                        }}>
+                            <div style={{
+                                width: '10px', height: '10px', borderRadius: '50%',
+                                background: tier.color,
+                                boxShadow: `0 0 6px ${tier.glowColor}`
+                            }} />
+                            <span style={{ color: tier.color, fontWeight: 700 }}>{tier.label}</span>
+                            <span style={{ color: '#64748b', fontSize: '9px' }}>({tier.percent}% → {tier.reward}%)</span>
                         </div>
                     ))}
                 </div>
