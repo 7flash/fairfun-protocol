@@ -53,6 +53,8 @@ const WheelDemo: React.FC = () => {
     const [result, setResult] = useState<WheelTier | null>(null);
     const [prizeNumber, setPrizeNumber] = useState(0);
     const [mustSpin, setMustSpin] = useState(false);
+    const [showRay, setShowRay] = useState(false);
+    const [showHighlight, setShowHighlight] = useState(false);
 
     const getSegmentForTier = (tier: number): number => {
         const segments: number[] = [];
@@ -65,6 +67,8 @@ const WheelDemo: React.FC = () => {
     const handleSpin = () => {
         if (mustSpin) return;
         setResult(null);
+        setShowRay(false);
+        setShowHighlight(false);
 
         const r = Math.random() * TOTAL_SEGMENTS;
         let cumulative = 0;
@@ -84,9 +88,24 @@ const WheelDemo: React.FC = () => {
 
     const handleStopSpinning = () => {
         setMustSpin(false);
-        const winningTier = tierIndices[prizeNumber];
-        setResult(WHEEL_CONFIG[winningTier]);
+
+        // Show ray animation first
+        setShowRay(true);
+
+        // After ray animation, show ring highlight
+        setTimeout(() => {
+            setShowHighlight(true);
+        }, 400);
+
+        // Finally show the result
+        setTimeout(() => {
+            const winningTier = tierIndices[prizeNumber];
+            setResult(WHEEL_CONFIG[winningTier]);
+        }, 1000);
     };
+
+    const winningTierIndex = tierIndices[prizeNumber];
+    const highlightColor = WHEEL_CONFIG[winningTierIndex]?.color || '#fbbf24';
 
     return (
         <div style={{
@@ -154,6 +173,40 @@ const WheelDemo: React.FC = () => {
                         }}
                     />
 
+                    {/* Ray animation from pointer to center */}
+                    {showRay && (
+                        <div style={{
+                            position: 'absolute',
+                            top: '0',
+                            left: '50%',
+                            width: '4px',
+                            height: '225px',
+                            background: `linear-gradient(to bottom, ${highlightColor} 0%, transparent 100%)`,
+                            transform: 'translateX(-50%)',
+                            zIndex: 15,
+                            animation: 'rayShoot 0.4s ease-out forwards',
+                            boxShadow: `0 0 20px ${highlightColor}`,
+                            borderRadius: '2px',
+                        }} />
+                    )}
+
+                    {/* Ring collision highlight */}
+                    {showHighlight && (
+                        <div style={{
+                            position: 'absolute',
+                            top: '50%',
+                            left: '50%',
+                            width: '100px',
+                            height: '100px',
+                            transform: 'translate(-50%, -50%)',
+                            zIndex: 16,
+                            border: `4px solid ${highlightColor}`,
+                            borderRadius: '50%',
+                            animation: 'ringPulse 0.6s ease-out forwards',
+                            boxShadow: `0 0 30px ${highlightColor}, inset 0 0 20px ${highlightColor}40`,
+                        }} />
+                    )}
+
                     {/* Pointer */}
                     <div style={{
                         position: 'absolute',
@@ -180,13 +233,16 @@ const WheelDemo: React.FC = () => {
                         width: '90px',
                         height: '90px',
                         background: '#0f172a',
-                        border: '4px solid #fbbf24',
+                        border: `4px solid ${showHighlight ? highlightColor : '#fbbf24'}`,
                         borderRadius: '50%',
                         zIndex: 10,
-                        boxShadow: '0 0 20px rgba(251,191,36,0.3)'
+                        boxShadow: showHighlight
+                            ? `0 0 30px ${highlightColor}, 0 0 60px ${highlightColor}40`
+                            : '0 0 20px rgba(251,191,36,0.3)',
+                        transition: 'all 0.3s ease'
                     }}>
-                        <span style={{ fontSize: '12px', fontWeight: 800, color: '#fbbf24' }}>GALAXY</span>
-                        <span style={{ fontSize: '12px', fontWeight: 800, color: '#fbbf24' }}>WHEEL</span>
+                        <span style={{ fontSize: '12px', fontWeight: 800, color: showHighlight ? highlightColor : '#fbbf24', transition: 'color 0.3s' }}>GALAXY</span>
+                        <span style={{ fontSize: '12px', fontWeight: 800, color: showHighlight ? highlightColor : '#fbbf24', transition: 'color 0.3s' }}>WHEEL</span>
                     </div>
                 </div>
 
@@ -200,7 +256,8 @@ const WheelDemo: React.FC = () => {
                         fontSize: '20px',
                         border: `2px solid ${result.color}`,
                         background: result.reward > 0 ? 'rgba(16, 185, 129, 0.15)' : 'rgba(100, 116, 139, 0.15)',
-                        color: result.reward > 0 ? '#10b981' : '#64748b'
+                        color: result.reward > 0 ? '#10b981' : '#64748b',
+                        animation: 'fadeSlideIn 0.3s ease-out'
                     }}>
                         {result.reward > 0
                             ? `🎉 You won ${result.reward}% = ${((treasuryBalance * result.reward) / 100).toFixed(4)} SOL!`
@@ -211,9 +268,9 @@ const WheelDemo: React.FC = () => {
                 {/* Button */}
                 <button
                     onClick={handleSpin}
-                    disabled={mustSpin}
+                    disabled={mustSpin || showRay}
                     style={{
-                        background: mustSpin
+                        background: (mustSpin || showRay)
                             ? 'linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)'
                             : 'linear-gradient(135deg, #fbbf24 0%, #d97706 100%)',
                         border: 'none',
@@ -222,8 +279,8 @@ const WheelDemo: React.FC = () => {
                         color: 'white',
                         fontSize: '20px',
                         fontWeight: 800,
-                        cursor: mustSpin ? 'not-allowed' : 'pointer',
-                        boxShadow: mustSpin
+                        cursor: (mustSpin || showRay) ? 'not-allowed' : 'pointer',
+                        boxShadow: (mustSpin || showRay)
                             ? '0 4px 24px rgba(139,92,246,0.4)'
                             : '0 4px 24px rgba(251,191,36,0.4)',
                         transition: 'all 0.2s',
@@ -231,10 +288,10 @@ const WheelDemo: React.FC = () => {
                         flexDirection: 'column',
                         alignItems: 'center',
                         margin: '0 auto',
-                        opacity: mustSpin ? 0.8 : 1
+                        opacity: (mustSpin || showRay) ? 0.8 : 1
                     }}
                 >
-                    {mustSpin ? '✨ SPINNING...' : '🎰 DEMO SPIN'}
+                    {mustSpin ? '✨ SPINNING...' : showRay ? '🎯 CALCULATING...' : '🎰 DEMO SPIN'}
                     <span style={{ fontSize: '12px', opacity: 0.9, marginTop: '4px' }}>No transaction required</span>
                 </button>
 
@@ -243,6 +300,24 @@ const WheelDemo: React.FC = () => {
                     Total segments: {TOTAL_SEGMENTS} (
                     {WHEEL_CONFIG.map((t, i) => `${t.percent}× ${t.label}`).join(' + ')})
                 </div>
+
+                {/* CSS Keyframes */}
+                <style>{`
+                    @keyframes rayShoot {
+                        0% { opacity: 0; height: 0; }
+                        50% { opacity: 1; height: 225px; }
+                        100% { opacity: 0.6; height: 225px; }
+                    }
+                    @keyframes ringPulse {
+                        0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+                        50% { transform: translate(-50%, -50%) scale(1.5); opacity: 1; }
+                        100% { transform: translate(-50%, -50%) scale(1); opacity: 0.8; }
+                    }
+                    @keyframes fadeSlideIn {
+                        0% { opacity: 0; transform: translateY(-10px); }
+                        100% { opacity: 1; transform: translateY(0); }
+                    }
+                `}</style>
             </div>
         </div>
     );

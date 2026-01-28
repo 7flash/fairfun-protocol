@@ -44,7 +44,7 @@ interface WinnerEntry {
 // CONSTANTS
 // ============================================
 const TOKEN_NAME = "$GXY";
-const TOKEN_PRICE_USD = 0.136;
+const TOKEN_PRICE_USD = 0.02; // ~$0.02 per GXY
 const SPIN_COST = 1_000; // 1K stardust (temporarily reduced for testing)
 const ADMIN_AUTHORITY = "77cQ99WQ2FWQT19kgpN2a9CfgYSfDqpomNVGtyYUrpAY";
 const WHEEL_PROGRAM_ID = "3M12BfitAEYz14WJBMnjahEuSvhsWhjfGJXbzur26o2U";
@@ -180,7 +180,7 @@ const MyWalletSection: React.FC<{
     claiming: boolean;
     onClaim: () => void;
 }> = ({ earnings, claiming, onClaim }) => {
-    const balance = earnings ? Number(BigInt(earnings.starBalance || "0")) / 1e9 : 0;
+    const balance = earnings ? Number(BigInt(earnings.starBalance || "0")) / 1e6 : 0; // GXY has 6 decimals
     const balanceUsd = balance * TOKEN_PRICE_USD;
     // Use stardustTokenBalance (actual current balance) instead of claimed (total ever claimed)
     const stardustBalance = earnings ? Number(BigInt(earnings.stardustTokenBalance || earnings.claimed || "0")) / 1e9 : 0;

@@ -167,37 +167,52 @@ class RpcRateLimitError extends Error {
 async function getTokenBalance(
     tokenAccountAddress: string
 ): Promise<bigint> {
-    try {
-        const account = await getAccount(
-            connection,
-            new PublicKey(tokenAccountAddress)
-        );
-        return account.amount;
-    } catch (e: any) {
-        // Check for rate limiting (429 errors)
-        const errorStr = String(e?.message || e);
-        if (errorStr.includes('429') || errorStr.includes('Too Many Requests') || errorStr.includes('rate limit')) {
-            throw new RpcRateLimitError();
+    return measure(async (m) => {
+        try {
+            const account = await m(
+                () => getAccount(connection, new PublicKey(tokenAccountAddress)),
+                { label: 'rpc_getAccount', account: tokenAccountAddress.slice(0, 8) }
+            );
+            return account.amount;
+        } catch (e: any) {
+            const errorStr = String(e?.message || e);
+
+            // Check for rate limiting (429 errors)
+            if (errorStr.includes('429') || errorStr.includes('Too Many Requests') || errorStr.includes('rate limit')) {
+                throw new RpcRateLimitError();
+            }
+
+            // Check for account not found (not an error - user may not have account)
+            if (errorStr.includes('could not find') || errorStr.includes('Account does not exist')) {
+                return 0n;
+            }
+
+            // Other RPC errors - throw to be logged by parent measure
+            throw new Error(`RPC error: ${errorStr}`);
         }
-        console.error(`Failed to get balance for ${tokenAccountAddress}:`, e);
-        return 0n;
-    }
+    }, { label: 'getTokenBalance', account: tokenAccountAddress.slice(0, 8) });
 }
 
 /**
  * Fetch real STAR token balance for a user
  */
 async function fetchUserStarBalance(walletPubkey: string): Promise<bigint> {
-    const starMint = new PublicKey(config.starTokenMint);
-    const wallet = new PublicKey(walletPubkey);
+    return measure(async (m) => {
+        const starMint = new PublicKey(config.starTokenMint);
+        const wallet = new PublicKey(walletPubkey);
 
-    try {
-        const ata = await getAssociatedTokenAddress(starMint, wallet);
-        return await getTokenBalance(ata.toBase58());
-    } catch (e) {
-        // User might not have a token account
-        return 0n;
-    }
+        const ata = await m(
+            () => getAssociatedTokenAddress(starMint, wallet),
+            { label: 'derive_star_ata', wallet: walletPubkey.slice(0, 8) }
+        );
+
+        const balance = await m(
+            () => getTokenBalance(ata.toBase58()),
+            { label: 'fetch_star_balance', ata: ata.toBase58().slice(0, 8) }
+        );
+
+        return balance;
+    }, { label: 'fetchUserStarBalance', wallet: walletPubkey.slice(0, 8) });
 }
 
 /**
@@ -206,7 +221,7 @@ async function fetchUserStarBalance(walletPubkey: string): Promise<bigint> {
  * (Token balance can change via transfers, but claimed amount is immutable)
  */
 async function fetchClaimedStardust(walletPubkey: string): Promise<bigint> {
-    try {
+    return measure(async (m) => {
         const wallet = new PublicKey(walletPubkey);
         const programId = new PublicKey(config.programId);
 
@@ -217,28 +232,26 @@ async function fetchClaimedStardust(walletPubkey: string): Promise<bigint> {
         );
 
         // Fetch the account data
-        const accountInfo = await connection.getAccountInfo(userClaimPda);
+        const accountInfo = await m(
+            () => connection.getAccountInfo(userClaimPda),
+            { label: 'rpc_getAccountInfo', pda: userClaimPda.toBase58().slice(0, 8) }
+        );
 
         if (!accountInfo || !accountInfo.data) {
-            // User hasn't claimed yet - no UserClaim PDA exists
-            return 0n;
+            return 0n; // User hasn't claimed yet
         }
 
         // Parse UserClaim account data:
         // [8 bytes discriminator] [32 bytes user] [8 bytes claimed_amount] [8 bytes timestamp] [1 byte bump]
-        // claimed_amount is at offset 40 (8 + 32)
         const data = accountInfo.data;
         if (data.length < 48) {
-            return 0n;
+            return 0n; // Invalid data
         }
 
         // Read u64 little-endian at offset 40
         const claimedAmount = data.readBigUInt64LE(40);
         return claimedAmount;
-    } catch (e) {
-        console.error(`Failed to fetch UserClaim for ${walletPubkey}:`, e);
-        return 0n;
-    }
+    }, { label: 'fetchClaimedStardust', wallet: walletPubkey.slice(0, 8) });
 }
 
 /**
@@ -255,44 +268,40 @@ const BALANCE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
  * Returns stale cached value if rate limited, or 0n if no cache
  */
 async function fetchStardustTokenBalance(walletPubkey: string): Promise<bigint> {
-    // Check cache first
-    const cached = stardustBalanceCache.get(walletPubkey);
-    if (cached && Date.now() - cached.timestamp < BALANCE_CACHE_TTL) {
-        return cached.balance;
-    }
+    return measure(async (m) => {
+        // Check cache first
+        const cached = stardustBalanceCache.get(walletPubkey);
+        if (cached && Date.now() - cached.timestamp < BALANCE_CACHE_TTL) {
+            return cached.balance; // Cache hit
+        }
 
-    const stardustMint = new PublicKey(config.stardustMint);
-    const wallet = new PublicKey(walletPubkey);
+        const stardustMint = new PublicKey(config.stardustMint);
+        const wallet = new PublicKey(walletPubkey);
 
-    try {
-        const ata = await getAssociatedTokenAddress(stardustMint, wallet);
-        const balance = await getTokenBalance(ata.toBase58());
+        const ata = await m(
+            () => getAssociatedTokenAddress(stardustMint, wallet),
+            { label: 'derive_stardust_ata', wallet: walletPubkey.slice(0, 8) }
+        );
+
+        const balance = await m(
+            () => getTokenBalance(ata.toBase58()),
+            { label: 'fetch_stardust_balance', ata: ata.toBase58().slice(0, 8) }
+        );
 
         // Cache the result
         stardustBalanceCache.set(walletPubkey, { balance, timestamp: Date.now() });
-
         return balance;
-    } catch (e: any) {
-        // On rate limit, return stale cached value if available
-        if (e instanceof RpcRateLimitError) {
-            if (cached) {
-                console.log(`Rate limited, using stale cache for ${walletPubkey}`);
-                return cached.balance;
-            }
-            throw e; // No cache, propagate error
-        }
-        // User might not have a stardust token account
-        return 0n;
-    }
+    }, { label: 'fetchStardustTokenBalance', wallet: walletPubkey.slice(0, 8), cached: !!stardustBalanceCache.get(walletPubkey) });
 }
 
 /**
- * Calculate stardust earnings based on STAR token holdings
+ * Calculate stardust earnings based on GXY token holdings
  * Rate: 1 stardust per $1 worth of tokens per hour
- * With STAR at ~$0.136 per token, 1 STAR = 0.136 stardust/hour = 0.00227 stardust/minute
- * We run every 60s, so per-period rate = 0.136 stardust per STAR token
+ * With GXY at ~$0.02 per token, 1 GXY = 0.02 stardust/hour = 0.000333 stardust/minute
+ * We run every 60s, so per-period rate = 0.02 stardust per GXY token
+ * Note: GXY has 6 decimals (not 9)
  */
-const STARDUST_RATE = BigInt(Math.floor(0.136 * 1e9)); // ~0.136 stardust per STAR per minute
+const STARDUST_RATE = BigInt(Math.floor(0.02 * 1e9)); // ~0.02 stardust per GXY per minute
 
 /**
  * Update earnings based on real STAR token balances
@@ -315,8 +324,8 @@ async function updateEarnings() {
                 `fetch_claimed_${user.id}`
             );
 
-            // Calculate earnings: (STAR balance / 1e9) * STARDUST_RATE
-            const starTokens = starBalance / BigInt(1e9);
+            // Calculate earnings: (STAR balance / 1e6) * STARDUST_RATE (GXY has 6 decimals)
+            const starTokens = starBalance / BigInt(1e6);
             const stardustThisPeriod = starTokens * STARDUST_RATE;
 
             const existing = earningsStore.get(user.publicKey);
@@ -330,9 +339,7 @@ async function updateEarnings() {
                 lastUpdated: now,
             });
 
-            console.log(
-                `  User ${user.id}: ${Number(starBalance) / 1e9} STAR -> +${Number(stardustThisPeriod) / 1e9} ✨ (claimed: ${Number(claimedOnChain) / 1e9})`
-            );
+            // Logged via measure labels
         }
 
         // Also update any registered wallets
@@ -342,7 +349,7 @@ async function updateEarnings() {
 
             const starBalance = await fetchUserStarBalance(wallet);
             const claimed = await fetchClaimedStardust(wallet); // Fetch on-chain claimed amount
-            const starTokens = starBalance / BigInt(1e9);
+            const starTokens = starBalance / BigInt(1e6); // GXY has 6 decimals
             const stardustThisPeriod = starTokens * STARDUST_RATE;
 
             earningsStore.set(wallet, {
@@ -354,9 +361,7 @@ async function updateEarnings() {
             });
         }
 
-        console.log(
-            `Updated earnings for ${earningsStore.size} holders (real balances)`
-        );
+        // Success - will be logged by measure with timing
     }, "update_earnings");
 }
 
@@ -435,7 +440,7 @@ try {
  * Load earnings from SQLite database into memory on startup
  */
 function loadFromDatabase() {
-    try {
+    measure(() => {
         const records = db.earnings.find({});
         let loadedCount = 0;
         for (const record of records) {
@@ -448,10 +453,8 @@ function loadFromDatabase() {
             });
             loadedCount++;
         }
-        console.log(`📂 Loaded ${loadedCount} earnings records from database`);
-    } catch (e: any) {
-        console.log("📂 No existing database found, starting fresh");
-    }
+        return loadedCount;
+    }, { label: 'load_from_database' });
 }
 
 /**
@@ -470,8 +473,8 @@ function flushToDatabase() {
             });
             flushedCount++;
         }
-        console.log(`💾 Flushed ${flushedCount} earnings records to database`);
-    }, "flush_to_database");
+        return flushedCount;
+    }, { label: 'flush_to_database', records: earningsStore.size });
 }
 
 // Load existing data from database on startup
@@ -627,10 +630,8 @@ async function handler(req: Request): Promise<Response | null> {
             stardustTokenBalance = claimed;
             rpcWarning = 'Balance data is being refreshed...';
 
-            // Trigger background refresh (non-blocking)
-            fetchStardustTokenBalance(wallet).catch(e => {
-                console.warn(`Background balance fetch failed for ${wallet}:`, e.message);
-            });
+            // Trigger background refresh (non-blocking) - errors tracked via measure
+            fetchStardustTokenBalance(wallet).catch(() => { });
         }
 
         return json({
@@ -725,7 +726,7 @@ async function handler(req: Request): Promise<Response | null> {
                     symbol: "$GXY",
                     amount: starTokens,
                     value: Math.round(starValueUsd),
-                    priceUsd: 0.136,
+                    priceUsd: 0.02,
                 },
                 {
                     symbol: "STARDUST",
@@ -751,7 +752,6 @@ async function handler(req: Request): Promise<Response | null> {
                 timestamp: now,
             });
         } catch (e: any) {
-            console.error("Treasury API error:", e);
             return json({ error: e.message }, 500);
         }
     }
@@ -785,7 +785,6 @@ async function handler(req: Request): Promise<Response | null> {
                 unclaimed: unclaimed.toString(),
             });
         } catch (e) {
-            console.error("Signature error:", e);
             return json({ error: "invalid request" }, 400);
         }
     }
@@ -811,7 +810,7 @@ async function handler(req: Request): Promise<Response | null> {
                         return json({ error: "transaction failed" }, 400);
                     }
                 } catch (e) {
-                    console.log("Could not verify tx, proceeding anyway");
+                    // Could not verify tx, proceeding anyway
                 }
 
                 earnings.claimed = earnings.lifetimeEarned;
@@ -889,11 +888,9 @@ async function handler(req: Request): Promise<Response | null> {
                     starBalance: newEarnings.starBalance.toString(),
                     lastUpdated: newEarnings.lastUpdated,
                 };
-                console.log(`💾 Saving to DB:`, JSON.stringify(dbRecord));
                 db.earnings.insert(dbRecord);
-                console.log(`💾 Saved new wallet ${wallet} to database`);
             } catch (dbErr: any) {
-                console.error(`❌ Failed to save wallet to DB:`, dbErr?.message || dbErr);
+                // DB error is non-fatal, earnings still in memory
             }
 
             return json({
@@ -1014,8 +1011,6 @@ async function handler(req: Request): Promise<Response | null> {
                 redemptionWinners.shift();
             }
 
-            console.log(`🎰 SPIN #${totalSpins}: ${wallet.slice(0, 8)}... won ${(rewardAmount / 1e9).toFixed(3)} SOL (tier ${rewardTier})`);
-
             return json({
                 success: true,
                 spinNumber: totalSpins,
@@ -1027,7 +1022,6 @@ async function handler(req: Request): Promise<Response | null> {
                 poolRemaining: REDEMPTION_CONFIG.poolBalance,
             });
         } catch (e: any) {
-            console.error("Spin error:", e);
             return json({ error: e.message || "spin failed" }, 500);
         }
     }
