@@ -44,7 +44,7 @@ interface WinnerEntry {
 // CONSTANTS
 // ============================================
 const TOKEN_NAME = "$GXY";
-const TOKEN_PRICE_USD = 0.02; // ~$0.02 per GXY
+const GXY_DECIMALS = 6; // GXY has 6 decimals (pump.fun token)
 const SPIN_COST = 1_000; // 1K stardust (temporarily reduced for testing)
 const ADMIN_AUTHORITY = "77cQ99WQ2FWQT19kgpN2a9CfgYSfDqpomNVGtyYUrpAY";
 const WHEEL_PROGRAM_ID = "3M12BfitAEYz14WJBMnjahEuSvhsWhjfGJXbzur26o2U";
@@ -179,9 +179,10 @@ const MyWalletSection: React.FC<{
     earnings: EarningsData | null;
     claiming: boolean;
     onClaim: () => void;
-}> = ({ earnings, claiming, onClaim }) => {
-    const balance = earnings ? Number(BigInt(earnings.starBalance || "0")) / 1e6 : 0; // GXY has 6 decimals
-    const balanceUsd = balance * TOKEN_PRICE_USD;
+    gxyPrice: number; // Dynamic price from treasury API
+}> = ({ earnings, claiming, onClaim, gxyPrice }) => {
+    const balance = earnings ? Number(BigInt(earnings.starBalance || "0")) / (10 ** GXY_DECIMALS) : 0;
+    const balanceUsd = balance * gxyPrice;
     // Use stardustTokenBalance (actual current balance) instead of claimed (total ever claimed)
     const stardustBalance = earnings ? Number(BigInt(earnings.stardustTokenBalance || earnings.claimed || "0")) / 1e9 : 0;
     const unclaimed = earnings ? Number(BigInt(earnings.unclaimed || "0")) / 1e9 : 0;
@@ -485,6 +486,9 @@ const GalaxyWheelSection: React.FC<{
     // Animation state
     const [demoActive, setDemoActive] = React.useState(false);
     const [result, setResult] = React.useState<WheelTier | null>(null);
+    const [showRay, setShowRay] = React.useState(false);
+    const [showHighlight, setShowHighlight] = React.useState(false);
+    const [currentTier, setCurrentTier] = React.useState<number | null>(null); // Tier being spun to (from demo or backend)
 
     // Three-stage pointer animation state
     type SpinPhase = 'idle' | 'accelerating' | 'constant' | 'decelerating';
@@ -591,9 +595,12 @@ const GalaxyWheelSection: React.FC<{
     const handleDemo = () => {
         if (isSpinning) return;
         setResult(null);
+        setShowRay(false);
+        setShowHighlight(false);
         setDemoActive(true);
 
         const selectedTier = selectTierByProbability();
+        setCurrentTier(selectedTier); // Store tier for ray animation
         startAcceleration(selectedTier);
     };
 
@@ -601,6 +608,8 @@ const GalaxyWheelSection: React.FC<{
     const handleRealSpin = () => {
         if (!canSpin || isSpinning) return;
         setResult(null);
+        setShowRay(false);
+        setShowHighlight(false);
         onSpin();
         // Animation will start when 'spinning' prop becomes true (after tx approved)
     };
@@ -626,10 +635,21 @@ const GalaxyWheelSection: React.FC<{
                 setSpinPhase('decelerating');
                 spinStartTime.current = performance.now();
 
-                // Set result after decel
+                // After decel, show ray animation first
                 setTimeout(() => {
-                    setResult(WHEEL_CONFIG[knownTier]);
-                    setDemoActive(false);
+                    // Show ray animation
+                    setShowRay(true);
+
+                    // After 400ms, show ring highlight
+                    setTimeout(() => {
+                        setShowHighlight(true);
+                    }, 400);
+
+                    // After 1s total, show result
+                    setTimeout(() => {
+                        setResult(WHEEL_CONFIG[knownTier]);
+                        setDemoActive(false);
+                    }, 1000);
                 }, DECEL_DURATION);
             }, ACCEL_DURATION + 500); // Brief constant spin
         }
@@ -674,8 +694,19 @@ const GalaxyWheelSection: React.FC<{
             spinStartTime.current = performance.now();
 
             setTimeout(() => {
-                setResult(WHEEL_CONFIG[targetTier]);
-                onSpinFinish();
+                // Show ray animation first
+                setShowRay(true);
+
+                // After 400ms, show ring highlight
+                setTimeout(() => {
+                    setShowHighlight(true);
+                }, 400);
+
+                // After 1s total, show result
+                setTimeout(() => {
+                    setResult(WHEEL_CONFIG[targetTier]);
+                    onSpinFinish();
+                }, 1000);
             }, DECEL_DURATION);
         }
     }, [targetTier, spinning, spinPhase]);
@@ -744,6 +775,40 @@ const GalaxyWheelSection: React.FC<{
                     }}>
                         <DartboardWheel rotation={0} isSpinning={false} />
                     </div>
+
+                    {/* Ray animation from pointer to center */}
+                    {showRay && (currentTier ?? targetTier) !== null && (
+                        <div style={{
+                            position: 'absolute',
+                            top: '0',
+                            left: '50%',
+                            width: '4px',
+                            height: '200px',
+                            background: `linear-gradient(to bottom, ${WHEEL_CONFIG[(currentTier ?? targetTier)!].color} 0%, transparent 100%)`,
+                            transform: 'translateX(-50%)',
+                            zIndex: 35,
+                            animation: 'rayShoot 0.4s ease-out forwards',
+                            boxShadow: `0 0 20px ${WHEEL_CONFIG[(currentTier ?? targetTier)!].color}`,
+                            borderRadius: '2px',
+                        }} />
+                    )}
+
+                    {/* Ring highlight on result */}
+                    {showHighlight && (currentTier ?? targetTier) !== null && (
+                        <div style={{
+                            position: 'absolute',
+                            top: '50%',
+                            left: '50%',
+                            width: '100px',
+                            height: '100px',
+                            transform: 'translate(-50%, -50%)',
+                            zIndex: 36,
+                            border: `4px solid ${WHEEL_CONFIG[(currentTier ?? targetTier)!].color}`,
+                            borderRadius: '50%',
+                            animation: 'ringPulse 0.6s ease-out forwards',
+                            boxShadow: `0 0 30px ${WHEEL_CONFIG[(currentTier ?? targetTier)!].color}, inset 0 0 20px ${WHEEL_CONFIG[(currentTier ?? targetTier)!].color}40`,
+                        }} />
+                    )}
                 </div>
 
                 {/* Galaxy-themed Legend */}
@@ -970,6 +1035,7 @@ function App() {
     const [phantomWallet, setPhantomWallet] = useState<any>(null);
     const [toasts, setToasts] = useState<Toast[]>([]);
     const [treasuryBalance, setTreasuryBalance] = useState<number>(0);
+    const [gxyPrice, setGxyPrice] = useState<number>(0.02); // Default fallback price
 
     // Ref to store pending spin result (shown after wheel finishes)
     const pendingSpinResult = React.useRef<{ tier: number, reward: number, signature: string } | null>(null);
@@ -1098,6 +1164,21 @@ function App() {
             .then((d: any) => setTreasuryBalance(d.balance || 0))
             .catch(err => {
                 console.error('Treasury fetch failed:', err);
+            });
+        // Fetch GXY price from treasury API (contains token prices)
+        fetch('/api/treasury')
+            .then(r => {
+                if (!r.ok) throw new Error(`Treasury prices fetch failed: ${r.status}`);
+                return r.json();
+            })
+            .then((d: any) => {
+                const gxyToken = d.tokens?.find((t: any) => t.symbol === '$GXY');
+                if (gxyToken?.priceUsd) {
+                    setGxyPrice(gxyToken.priceUsd);
+                }
+            })
+            .catch(err => {
+                console.error('GXY price fetch failed:', err);
             });
     }, [addToast]);
 
@@ -1590,6 +1671,13 @@ function App() {
             // Store result to show toast AFTER wheel stops (in onSpinFinish)
             pendingSpinResult.current = { tier, reward, signature };
 
+            // Record spin in backend for history display
+            fetch('/api/wheel/record-spin', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ wallet: publicKey, tier, reward, signature }),
+            }).catch(err => console.warn('Failed to record spin:', err));
+
             // Dismiss the pending toast - success toast will show when wheel stops
             dismissToast(toastId);
 
@@ -1634,6 +1722,7 @@ function App() {
                             earnings={earnings}
                             claiming={claiming}
                             onClaim={handleClaim}
+                            gxyPrice={gxyPrice}
                         />
                         <GalaxyWheelSection
                             available={available}

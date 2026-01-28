@@ -295,20 +295,93 @@ async function fetchStardustTokenBalance(walletPubkey: string): Promise<bigint> 
 }
 
 /**
- * Calculate stardust earnings based on GXY token holdings
- * Rate: 1 stardust per $1 worth of tokens per hour
- * With GXY at ~$0.02 per token, 1 GXY = 0.02 stardust/hour = 0.000333 stardust/minute
- * We run every 60s, so per-period rate = 0.02 stardust per GXY token
- * Note: GXY has 6 decimals (not 9)
+ * Dynamic GXY price cache
+ * Fetches from Jupiter/DexScreener and caches for 1 minute
  */
-const STARDUST_RATE = BigInt(Math.floor(0.02 * 1e9)); // ~0.02 stardust per GXY per minute
+let cachedGxyPrice: { price: number; timestamp: number } | null = null;
+const PRICE_CACHE_TTL = 60 * 1000; // 1 minute
+const GXY_MINT = "PKikg1HNZinFvMgqk76aBDY4fF1fgGYQ3tv9kKypump";
+const GXY_DECIMALS = 6; // GXY has 6 decimals
+
+/**
+ * Fetch current GXY price from Jupiter or DexScreener
+ */
+async function fetchGxyPrice(): Promise<number> {
+    return measure(async (): Promise<number> => {
+        // Check cache first
+        if (cachedGxyPrice && Date.now() - cachedGxyPrice.timestamp < PRICE_CACHE_TTL) {
+            return cachedGxyPrice.price;
+        }
+
+        // Try Jupiter Price API first
+        try {
+            const jupRes = await fetch(`https://price.jup.ag/v6/price?ids=${GXY_MINT}`);
+            if (jupRes.ok) {
+                const jupData = await jupRes.json() as { data?: Record<string, { price?: number }> };
+                const price = jupData.data?.[GXY_MINT]?.price;
+                if (typeof price === 'number' && price > 0) {
+                    cachedGxyPrice = { price, timestamp: Date.now() };
+                    return price;
+                }
+            }
+        } catch (e) {
+            // Jupiter failed, try DexScreener
+        }
+
+        // Fallback to DexScreener
+        try {
+            const dexRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${GXY_MINT}`);
+            if (dexRes.ok) {
+                const dexData = await dexRes.json() as { pairs?: { priceUsd?: string }[] };
+                const pair = dexData.pairs?.[0];
+                if (pair?.priceUsd) {
+                    const price = parseFloat(pair.priceUsd);
+                    if (price > 0) {
+                        cachedGxyPrice = { price, timestamp: Date.now() };
+                        return price;
+                    }
+                }
+            }
+        } catch (e) {
+            // DexScreener failed too
+        }
+
+        // Use cached price if available (even if stale), otherwise fallback
+        if (cachedGxyPrice) {
+            return cachedGxyPrice.price;
+        }
+
+        // Last resort fallback
+        return 0.02;
+    }, { label: 'fetchGxyPrice' });
+}
+
+/**
+ * Get cached GXY price (non-async, for display purposes)
+ */
+function getCachedGxyPrice(): number {
+    return cachedGxyPrice?.price || 0.02;
+}
 
 /**
  * Update earnings based on real STAR token balances
+ * Rate: 1 stardust per $1 worth of tokens per hour = price_usd stardust per token per hour
+ * We run every 60s (1 minute), so per-period = price_usd / 60 stardust per token
  */
 async function updateEarnings() {
     return measure(async (m) => {
         const now = Date.now();
+
+        // Fetch current GXY price before calculations
+        const gxyPriceUsd = await m(
+            () => fetchGxyPrice(),
+            'fetch_gxy_price'
+        );
+
+        // Calculate rate: price_usd stardust per token per hour, divided by 60 for per-minute
+        // Stardust has 9 decimals, so multiply by 1e9
+        // But we run every minute, so rate = (price / 60) * 1e9
+        const stardustRatePerTokenPerMinute = (gxyPriceUsd / 60) * 1e9;
 
         // Update test users from config
         for (const user of config.testUsers) {
@@ -324,9 +397,11 @@ async function updateEarnings() {
                 `fetch_claimed_${user.id}`
             );
 
-            // Calculate earnings: (STAR balance / 1e6) * STARDUST_RATE (GXY has 6 decimals)
-            const starTokens = starBalance / BigInt(1e6);
-            const stardustThisPeriod = starTokens * STARDUST_RATE;
+            // Convert raw balance to tokens (6 decimals)
+            const starTokens = Number(starBalance) / (10 ** GXY_DECIMALS);
+
+            // Calculate stardust earned this period
+            const stardustThisPeriod = BigInt(Math.floor(starTokens * stardustRatePerTokenPerMinute));
 
             const existing = earningsStore.get(user.publicKey);
             const newLifetime = (existing?.lifetimeEarned || 0n) + stardustThisPeriod;
@@ -338,8 +413,6 @@ async function updateEarnings() {
                 starBalance: starBalance,
                 lastUpdated: now,
             });
-
-            // Logged via measure labels
         }
 
         // Also update any registered wallets
@@ -348,21 +421,25 @@ async function updateEarnings() {
             if (config.testUsers.find((u) => u.publicKey === wallet)) continue;
 
             const starBalance = await fetchUserStarBalance(wallet);
-            const claimed = await fetchClaimedStardust(wallet); // Fetch on-chain claimed amount
-            const starTokens = starBalance / BigInt(1e6); // GXY has 6 decimals
-            const stardustThisPeriod = starTokens * STARDUST_RATE;
+            const claimed = await fetchClaimedStardust(wallet);
+
+            // Convert raw balance to tokens (6 decimals)
+            const starTokens = Number(starBalance) / (10 ** GXY_DECIMALS);
+
+            // Calculate stardust earned this period
+            const stardustThisPeriod = BigInt(Math.floor(starTokens * stardustRatePerTokenPerMinute));
 
             earningsStore.set(wallet, {
                 ...earnings,
                 lifetimeEarned: earnings.lifetimeEarned + stardustThisPeriod,
-                claimed, // Update from on-chain
+                claimed,
                 starBalance,
                 lastUpdated: now,
             });
         }
 
         // Success - will be logged by measure with timing
-    }, "update_earnings");
+    }, { label: "update_earnings" });
 }
 
 /**
@@ -676,11 +753,10 @@ async function handler(req: Request): Promise<Response | null> {
                 totalClaimed += e.claimed;
             }
 
-            // Calculate real values based on token holdings
-            // STAR price estimated at $136 per token
-            const starPriceUsd = 136;
-            const starTokens = Number(totalStarBalance) / 1e9;
-            const starValueUsd = starTokens * starPriceUsd;
+            // Calculate real values based on token holdings using dynamic price
+            const gxyPriceUsd = getCachedGxyPrice();
+            const starTokens = Number(totalStarBalance) / (10 ** GXY_DECIMALS);
+            const starValueUsd = starTokens * gxyPriceUsd;
 
             // Protocol treasury = accumulated stardust value (1 stardust = $0.001)
             const stardustValueUsd = (Number(totalStardust) / 1e9) * 0.001;
@@ -690,7 +766,7 @@ async function handler(req: Request): Promise<Response | null> {
 
             // Calculate APY based on earnings rate
             // APY = (Daily earnings * 365) / Total value * 100
-            const dailyEarnings = (starTokens * 136 * 86400) / 1000; // stardust value generated daily
+            const dailyEarnings = (starTokens * gxyPriceUsd * 24) / 1000; // stardust value generated daily
             const targetApy = 20; // 20% target APY
             const currentApy = totalValue > 0 ? (dailyEarnings * 365 / totalValue) * 100 : 0;
 
@@ -726,7 +802,7 @@ async function handler(req: Request): Promise<Response | null> {
                     symbol: "$GXY",
                     amount: starTokens,
                     value: Math.round(starValueUsd),
-                    priceUsd: 0.02,
+                    priceUsd: gxyPriceUsd,
                 },
                 {
                     symbol: "STARDUST",
@@ -1023,6 +1099,41 @@ async function handler(req: Request): Promise<Response | null> {
             });
         } catch (e: any) {
             return json({ error: e.message || "spin failed" }, 500);
+        }
+    }
+
+    // POST /api/wheel/record-spin - Record on-chain spin result for history
+    if (method === "POST" && path === "/api/wheel/record-spin") {
+        try {
+            const body = await req.json() as { wallet: string; tier: number; reward: number; signature: string };
+            const { wallet, tier, reward, signature } = body;
+
+            if (!wallet || tier === undefined) {
+                return json({ error: "wallet and tier required" }, 400);
+            }
+
+            // Record winner
+            const winner: RedemptionWinner = {
+                wallet,
+                rewardTier: tier,
+                rewardAmount: reward || 0,
+                timestamp: Date.now(),
+            };
+
+            redemptionWinners.push(winner);
+
+            // Keep only last 100 winners
+            if (redemptionWinners.length > 100) {
+                redemptionWinners.shift();
+            }
+
+            // Track wallet winnings
+            const currentWinnings = walletWinnings.get(wallet) || 0;
+            walletWinnings.set(wallet, currentWinnings + (reward || 0));
+
+            return json({ success: true });
+        } catch (e: any) {
+            return json({ error: e.message || "record failed" }, 500);
         }
     }
 
