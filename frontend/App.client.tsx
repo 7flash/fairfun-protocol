@@ -495,6 +495,10 @@ const GalaxyWheelSection: React.FC<{
 
     const isSpinning = spinPhase !== 'idle';
 
+    // Track highlighted tier during spin for legend highlighting
+    const [highlightedTier, setHighlightedTier] = React.useState<number | null>(null);
+
+
     // Animation constants
     const ACCEL_DURATION = 800; // ms to accelerate
     const BASE_SPEED = 720; // degrees per second at constant speed
@@ -710,40 +714,44 @@ const GalaxyWheelSection: React.FC<{
         }
     }, [targetTier, spinning, spinPhase]);
 
+    // Animate tier highlighting in legend based on pointer rotation
+    React.useEffect(() => {
+        if (!isSpinning) {
+            setHighlightedTier(null);
+            return;
+        }
+
+        // Calculate which tier the pointer is currently over based on rotation
+        const normalizedRotation = ((pointerRotation % 360) + 360) % 360;
+        let cumulativeAngle = 0;
+        for (let i = 0; i < WHEEL_CONFIG.length; i++) {
+            const tierAngle = (WHEEL_CONFIG[i].percent / TOTAL_PERCENT) * 360;
+            if (normalizedRotation < cumulativeAngle + tierAngle) {
+                setHighlightedTier(i);
+                return;
+            }
+            cumulativeAngle += tierAngle;
+        }
+        setHighlightedTier(0);
+    }, [pointerRotation, isSpinning]);
+
     return (
         <Section label="GALAXY WHEEL" className="wheel-section" id="wheel">
-            {/* Jackpot Pool Display */}
+            {/* Jackpot Header */}
             {treasuryBalance !== undefined && (
-                <div style={{
-                    display: 'flex', flexDirection: 'column', alignItems: 'center',
-                    background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.3)',
-                    padding: '16px 32px', borderRadius: '16px', marginBottom: '24px', textAlign: 'center'
-                }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '20px' }}>
                     <span style={{ fontSize: '12px', fontWeight: 600, color: '#fbbf24', letterSpacing: '2px' }}>🏆 JACKPOT POOL</span>
-                    <span style={{ fontSize: '32px', fontWeight: 800, color: '#fbbf24', textShadow: '0 0 30px rgba(251,191,36,0.5)' }}>
+                    <span style={{ fontSize: '36px', fontWeight: 800, color: '#fbbf24', textShadow: '0 0 30px rgba(251,191,36,0.5)' }}>
                         {treasuryBalance.toFixed(4)} SOL
                     </span>
-                    <div style={{ display: 'flex', gap: '16px', justifyContent: 'center', marginTop: '8px', fontSize: '12px', fontWeight: 600, flexWrap: 'wrap' }}>
-                        {WHEEL_CONFIG.filter(t => t.reward > 0).map((tier, i) => (
-                            <span key={i} style={{ color: tier.color }}>
-                                {tier.percent}% → {((treasuryBalance * tier.reward) / 100).toFixed(3)} SOL
-                            </span>
-                        ))}
-                    </div>
                 </div>
             )}
 
-            {/* Wheel Container with Rotating Pointer */}
-            <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '24px' }}>
-                {/* Outer rotating pointer ring */}
-                <div style={{
-                    position: 'relative',
-                    width: '400px',
-                    height: '400px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center'
-                }}>
+            {/* Side-by-side layout: Wheel left, Legend right */}
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start', gap: '32px', marginBottom: '24px', flexWrap: 'wrap' }}>
+
+                {/* LEFT: Wheel Container */}
+                <div style={{ position: 'relative', width: '340px', height: '340px', flexShrink: 0 }}>
                     {/* Rotating pointer */}
                     <div style={{
                         position: 'absolute',
@@ -753,15 +761,14 @@ const GalaxyWheelSection: React.FC<{
                         zIndex: 30,
                         pointerEvents: 'none'
                     }}>
-                        {/* Cosmic pointer at top */}
                         <div style={{
                             position: 'absolute',
                             top: '-5px',
                             left: '50%',
                             transform: 'translateX(-50%)',
-                            fontSize: '40px',
+                            fontSize: '36px',
                             color: '#fbbf24',
-                            textShadow: '0 0 20px rgba(255,183,0,1), 0 0 40px rgba(255,100,0,0.8), 0 4px 12px rgba(0,0,0,0.9)',
+                            textShadow: '0 0 20px rgba(255,183,0,1), 0 0 40px rgba(255,100,0,0.8)',
                             filter: 'drop-shadow(0 0 15px rgba(251,191,36,0.9))'
                         }}>▼</div>
                     </div>
@@ -769,70 +776,86 @@ const GalaxyWheelSection: React.FC<{
                     {/* Static Galaxy Wheel */}
                     <div style={{
                         position: 'absolute',
+                        top: '50%',
+                        left: '50%',
+                        transform: 'translate(-50%, -50%)',
                         borderRadius: '50%',
-                        boxShadow: '0 0 80px rgba(168,85,247,0.3), 0 0 40px rgba(6,182,212,0.2), inset 0 0 40px rgba(0,0,0,0.6)'
+                        boxShadow: '0 0 60px rgba(168,85,247,0.3), inset 0 0 40px rgba(0,0,0,0.6)'
                     }}>
                         <DartboardWheel rotation={0} isSpinning={false} />
                     </div>
 
-                    {/* Ray animation from pointer to center */}
+                    {/* Ray animation */}
                     {showRay && (currentTier ?? targetTier) !== null && (
                         <div style={{
-                            position: 'absolute',
-                            top: '0',
-                            left: '50%',
-                            width: '4px',
-                            height: '200px',
+                            position: 'absolute', top: '0', left: '50%', width: '4px', height: '170px',
                             background: `linear-gradient(to bottom, ${WHEEL_CONFIG[(currentTier ?? targetTier)!].color} 0%, transparent 100%)`,
-                            transform: 'translateX(-50%)',
-                            zIndex: 35,
+                            transform: 'translateX(-50%)', zIndex: 35,
                             animation: 'rayShoot 0.4s ease-out forwards',
                             boxShadow: `0 0 20px ${WHEEL_CONFIG[(currentTier ?? targetTier)!].color}`,
-                            borderRadius: '2px',
                         }} />
                     )}
 
-                    {/* Ring highlight on result */}
+                    {/* Ring highlight */}
                     {showHighlight && (currentTier ?? targetTier) !== null && (
                         <div style={{
-                            position: 'absolute',
-                            top: '50%',
-                            left: '50%',
-                            width: '100px',
-                            height: '100px',
-                            transform: 'translate(-50%, -50%)',
-                            zIndex: 36,
+                            position: 'absolute', top: '50%', left: '50%',
+                            width: '100px', height: '100px',
+                            transform: 'translate(-50%, -50%)', zIndex: 36,
                             border: `4px solid ${WHEEL_CONFIG[(currentTier ?? targetTier)!].color}`,
-                            borderRadius: '50%',
-                            animation: 'ringPulse 0.6s ease-out forwards',
-                            boxShadow: `0 0 30px ${WHEEL_CONFIG[(currentTier ?? targetTier)!].color}, inset 0 0 20px ${WHEEL_CONFIG[(currentTier ?? targetTier)!].color}40`,
+                            borderRadius: '50%', animation: 'ringPulse 0.6s ease-out forwards',
+                            boxShadow: `0 0 30px ${WHEEL_CONFIG[(currentTier ?? targetTier)!].color}`,
                         }} />
                     )}
                 </div>
 
-                {/* Galaxy-themed Legend */}
+                {/* RIGHT: Legend Panel */}
                 <div style={{
-                    display: 'flex', gap: '12px', marginTop: '20px', justifyContent: 'center', flexWrap: 'wrap',
-                    padding: '12px 20px', background: 'rgba(15,15,30,0.8)', borderRadius: '12px',
-                    border: '1px solid rgba(168,85,247,0.3)'
+                    background: 'rgba(15, 23, 42, 0.9)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: '16px',
+                    padding: '20px',
+                    minWidth: '280px'
                 }}>
+                    <div style={{ fontSize: '14px', fontWeight: 700, color: '#fbbf24', letterSpacing: '2px', textAlign: 'center', marginBottom: '16px' }}>
+                        PRIZE TIERS
+                    </div>
+
+                    {/* Header */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 100px', fontSize: '10px', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '1px', padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                        <span>Tier</span>
+                        <span style={{ textAlign: 'center' }}>Chance</span>
+                        <span style={{ textAlign: 'right' }}>Win</span>
+                    </div>
+
+                    {/* Tier Rows */}
                     {WHEEL_CONFIG.map((tier, i) => (
                         <div key={i} style={{
-                            display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px',
-                            padding: '4px 8px', borderRadius: '6px',
-                            background: i === 0 ? 'rgba(251,191,36,0.15)' : 'transparent'
+                            display: 'grid',
+                            gridTemplateColumns: '1fr 70px 100px',
+                            padding: '12px',
+                            marginTop: '6px',
+                            borderRadius: '8px',
+                            borderLeft: `4px solid ${tier.color}`,
+                            background: highlightedTier === i ? `${tier.color}33` : 'rgba(0,0,0,0.2)',
+                            transform: highlightedTier === i ? 'scale(1.02)' : 'scale(1)',
+                            boxShadow: highlightedTier === i ? `0 0 20px ${tier.color}40` : 'none',
+                            transition: 'all 0.1s ease'
                         }}>
-                            <div style={{
-                                width: '10px', height: '10px', borderRadius: '50%',
-                                background: tier.color,
-                                boxShadow: `0 0 6px ${tier.glowColor}`
-                            }} />
-                            <span style={{ color: tier.color, fontWeight: 700 }}>{tier.label}</span>
-                            <span style={{ color: '#64748b', fontSize: '9px' }}>({tier.percent}% → {tier.reward}%)</span>
+                            <span style={{ fontWeight: 700, color: tier.color }}>{tier.label}</span>
+                            <span style={{ color: '#94a3b8', textAlign: 'center' }}>{tier.percent}%</span>
+                            <span style={{ color: '#10b981', fontWeight: 600, textAlign: 'right' }}>
+                                {tier.reward === 0 ? '—' : `${((treasuryBalance || 0) * tier.reward / 100).toFixed(4)} SOL`}
+                            </span>
                         </div>
                     ))}
+
+                    <div style={{ marginTop: '16px', fontSize: '11px', color: '#64748b', textAlign: 'center' }}>
+                        ✨ Cost: {spinCost.toLocaleString()} Stardust
+                    </div>
                 </div>
             </div>
+
 
             {/* Result */}
             {result && (

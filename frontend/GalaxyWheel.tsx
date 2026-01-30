@@ -141,17 +141,78 @@ export const GalaxyWheelSection: React.FC<GalaxyWheelProps> = ({
         }
     };
 
+    // Track highlighted tier during spin (cycles to simulate cursor passing over segments)
+    const [highlightedTier, setHighlightedTier] = useState<number | null>(null);
     const [fundAmount, setFundAmount] = useState('1');
+
+    // Animate tier highlighting while spinning
+    React.useEffect(() => {
+        if (!mustSpin) {
+            setHighlightedTier(null);
+            return;
+        }
+
+        // Cycle through tiers while spinning (weighted by segment count for realism)
+        let frame = 0;
+        const interval = setInterval(() => {
+            // Simulate faster at start, slower at end
+            const speed = Math.max(50, 300 - frame * 5);
+            frame++;
+
+            // Pick tier based on cumulative segments
+            const segmentPos = (frame * 7) % TOTAL_SEGMENTS;
+            const tier = tierIndices[segmentPos];
+            setHighlightedTier(tier);
+        }, 80);
+
+        return () => clearInterval(interval);
+    }, [mustSpin]);
 
     return (
         <section className="wheel-section" id="wheel">
-            {/* Jackpot Display + Legend */}
+            {/* Jackpot Header */}
             {treasuryBalance !== undefined && (
-                <div className="jackpot-box">
+                <div className="jackpot-header">
                     <span className="jackpot-label">🏆 JACKPOT POOL</span>
                     <span className="jackpot-value">{treasuryBalance.toFixed(4)} SOL</span>
+                </div>
+            )}
 
-                    {/* Clear Legend */}
+            {/* Side-by-side layout: Wheel left, Legend right */}
+            <div className="wheel-layout">
+                {/* LEFT: Wheel */}
+                <div className="wheel-container">
+                    <Wheel
+                        mustStartSpinning={mustSpin}
+                        prizeNumber={prizeNumber}
+                        data={wheelData}
+                        onStopSpinning={handleStopSpinning}
+                        backgroundColors={WHEEL_CONFIG.map(t => t.color)}
+                        textColors={['white']}
+                        outerBorderColor="#1e293b"
+                        outerBorderWidth={8}
+                        innerBorderColor="#fbbf24"
+                        innerBorderWidth={4}
+                        innerRadius={15}
+                        radiusLineColor="#0f172a"
+                        radiusLineWidth={2}
+                        spinDuration={0.8}
+                        startingOptionIndex={0}
+                        pointerProps={{
+                            src: undefined,
+                            style: { display: 'none' }
+                        }}
+                    />
+                    <div className="wheel-pointer">▼</div>
+                    <div className="wheel-center">
+                        <span>GALAXY</span>
+                        <span>WHEEL</span>
+                    </div>
+                </div>
+
+                {/* RIGHT: Legend Table */}
+                <div className="legend-panel">
+                    <div className="legend-title">PRIZE TIERS</div>
                     <div className="wheel-legend">
                         <div className="legend-header">
                             <span>TIER</span>
@@ -159,66 +220,43 @@ export const GalaxyWheelSection: React.FC<GalaxyWheelProps> = ({
                             <span>WIN</span>
                         </div>
                         {WHEEL_CONFIG.map((tier, i) => (
-                            <div key={i} className="legend-row" style={{ borderLeft: `4px solid ${tier.color}` }}>
-                                <span className="legend-tier" style={{ color: tier.color }}>{tier.label}</span>
+                            <div
+                                key={i}
+                                className={`legend-row ${highlightedTier === i ? 'highlighted' : ''} ${result && result === tier ? 'winner' : ''}`}
+                                style={{
+                                    borderLeft: `4px solid ${tier.color}`,
+                                    background: highlightedTier === i ? `${tier.color}33` : undefined
+                                }}
+                            >
+                                <span className="legend-tier" style={{ color: tier.color }}>
+                                    {tier.label}
+                                </span>
                                 <span className="legend-chance">{tier.percent}%</span>
                                 <span className="legend-win">
                                     {tier.reward === 0
                                         ? '—'
-                                        : `${((treasuryBalance * tier.reward) / 100).toFixed(4)} SOL`
+                                        : `${((treasuryBalance || 0) * tier.reward / 100).toFixed(4)} SOL`
                                     }
                                 </span>
                             </div>
                         ))}
                     </div>
-
                     <div className="rules-note">
-                        ✨ Spin costs 1,000 Stardust • Rewards paid from treasury pool
+                        ✨ Cost: {spinCost.toLocaleString()} Stardust
                     </div>
-                </div>
-            )}
-
-
-            {/* Wheel */}
-            <div className="wheel-container">
-                <Wheel
-                    mustStartSpinning={mustSpin}
-                    prizeNumber={prizeNumber}
-                    data={wheelData}
-                    onStopSpinning={handleStopSpinning}
-                    backgroundColors={WHEEL_CONFIG.map(t => t.color)}
-                    textColors={['white']}
-                    outerBorderColor="#1e293b"
-                    outerBorderWidth={8}
-                    innerBorderColor="#fbbf24"
-                    innerBorderWidth={4}
-                    innerRadius={15}
-                    radiusLineColor="#0f172a"
-                    radiusLineWidth={2}
-                    spinDuration={0.8}
-                    startingOptionIndex={0}
-                    pointerProps={{
-                        src: undefined,
-                        style: { display: 'none' }
-                    }}
-                />
-                <div className="wheel-pointer">▼</div>
-                <div className="wheel-center">
-                    <span>GALAXY</span>
-                    <span>WHEEL</span>
                 </div>
             </div>
 
-            {/* Result */}
+            {/* Result (centered) */}
             {result && (
                 <div className={`result-box ${result.reward > 0 ? 'win' : 'lose'}`} style={{ borderColor: result.color }}>
                     {result.reward > 0
-                        ? `🎉 You won ${result.reward}% = ${treasuryBalance ? ((treasuryBalance * result.reward) / 100).toFixed(4) : '?'} SOL!`
-                        : '😔 Better luck next time!'}
+                        ? `🎉 ${result.label}! You won ${((treasuryBalance || 0) * result.reward / 100).toFixed(4)} SOL!`
+                        : `🌑 ${result.label} - Better luck next time!`}
                 </div>
             )}
 
-            {/* Controls */}
+            {/* Controls (centered below both) */}
             <div className="wheel-controls">
                 <button
                     className={`btn-main ${isSpinning || mustSpin ? 'active' : ''}`}
@@ -226,11 +264,10 @@ export const GalaxyWheelSection: React.FC<GalaxyWheelProps> = ({
                     disabled={!canSpin || isSpinning || mustSpin}
                 >
                     {isSpinning || mustSpin ? '✨ SPINNING...' : '🎰 SPIN WHEEL'}
-                    <span className="btn-cost">{spinCost.toLocaleString()} STARDUST</span>
                 </button>
 
                 <button className="btn-demo" onClick={handleDemo} disabled={isSpinning || mustSpin}>
-                    🎮 DEMO SPIN
+                    🎮 DEMO
                 </button>
 
                 {!canSpin && !isSpinning && !mustSpin && (
@@ -246,22 +283,21 @@ export const GalaxyWheelSection: React.FC<GalaxyWheelProps> = ({
                 </div>
             )}
 
+
+
             <style>{`
                 .wheel-section {
                     background: linear-gradient(180deg, #0f172a 0%, #020617 100%);
-                    padding: 40px 24px;
+                    padding: 32px 24px;
                     border-radius: 24px;
                     border: 1px solid rgba(251,191,36,0.2);
-                    text-align: center;
                 }
                 
-                .jackpot-box {
-                    display: inline-flex;
+                /* Jackpot Header */
+                .jackpot-header {
+                    display: flex;
                     flex-direction: column;
-                    background: rgba(251,191,36,0.1);
-                    border: 1px solid rgba(251,191,36,0.3);
-                    padding: 16px 32px;
-                    border-radius: 16px;
+                    align-items: center;
                     margin-bottom: 24px;
                 }
                 .jackpot-label { 
@@ -271,63 +307,29 @@ export const GalaxyWheelSection: React.FC<GalaxyWheelProps> = ({
                     letter-spacing: 2px; 
                 }
                 .jackpot-value { 
-                    font-size: 32px; 
+                    font-size: 36px; 
                     font-weight: 800; 
                     color: #fbbf24; 
                     text-shadow: 0 0 30px rgba(251,191,36,0.5); 
                 }
                 
-                /* Legend Styles */
-                .wheel-legend {
-                    margin-top: 16px;
-                    width: 100%;
-                }
-                .legend-header {
-                    display: grid;
-                    grid-template-columns: 1fr 80px 120px;
-                    font-size: 10px;
-                    font-weight: 600;
-                    color: #64748b;
-                    text-transform: uppercase;
-                    letter-spacing: 1px;
-                    padding: 8px 12px;
-                    border-bottom: 1px solid rgba(255,255,255,0.1);
-                }
-                .legend-row {
-                    display: grid;
-                    grid-template-columns: 1fr 80px 120px;
-                    padding: 10px 12px;
-                    font-size: 13px;
-                    background: rgba(0,0,0,0.2);
-                    margin-top: 4px;
-                    border-radius: 6px;
-                }
-                .legend-tier {
-                    font-weight: 700;
-                }
-                .legend-chance {
-                    color: #94a3b8;
-                    text-align: center;
-                }
-                .legend-win {
-                    color: #10b981;
-                    font-weight: 600;
-                    text-align: right;
-                }
-                .rules-note {
-                    margin-top: 16px;
-                    font-size: 11px;
-                    color: #64748b;
-                    text-align: center;
+                /* Side-by-side Layout */
+                .wheel-layout {
+                    display: flex;
+                    justify-content: center;
+                    align-items: flex-start;
+                    gap: 32px;
+                    margin-bottom: 24px;
                 }
                 
-
+                /* Wheel Container */
                 .wheel-container {
                     position: relative;
-                    width: 400px;
-                    height: 400px;
-                    margin: 0 auto 28px;
+                    width: 340px;
+                    height: 340px;
+                    flex-shrink: 0;
                 }
+
                 
                 .wheel-pointer {
                     position: absolute;
@@ -364,6 +366,79 @@ export const GalaxyWheelSection: React.FC<GalaxyWheelProps> = ({
                     line-height: 1.2;
                 }
                 
+                /* Legend Panel (right side) */
+                .legend-panel {
+                    background: rgba(15, 23, 42, 0.8);
+                    border: 1px solid rgba(255,255,255,0.1);
+                    border-radius: 16px;
+                    padding: 20px;
+                    min-width: 280px;
+                }
+                .legend-title {
+                    font-size: 14px;
+                    font-weight: 700;
+                    color: #fbbf24;
+                    letter-spacing: 2px;
+                    text-align: center;
+                    margin-bottom: 16px;
+                }
+                .wheel-legend {
+                    width: 100%;
+                }
+                .legend-header {
+                    display: grid;
+                    grid-template-columns: 1fr 70px 100px;
+                    font-size: 10px;
+                    font-weight: 600;
+                    color: #64748b;
+                    text-transform: uppercase;
+                    letter-spacing: 1px;
+                    padding: 8px 12px;
+                    border-bottom: 1px solid rgba(255,255,255,0.1);
+                }
+                .legend-row {
+                    display: grid;
+                    grid-template-columns: 1fr 70px 100px;
+                    padding: 12px;
+                    font-size: 13px;
+                    background: rgba(0,0,0,0.2);
+                    margin-top: 6px;
+                    border-radius: 8px;
+                    transition: all 0.1s ease;
+                }
+                .legend-row.highlighted {
+                    transform: scale(1.02);
+                    box-shadow: 0 0 20px rgba(251,191,36,0.3);
+                }
+                .legend-row.winner {
+                    background: rgba(16, 185, 129, 0.2);
+                    border: 2px solid #10b981;
+                    animation: winner-pulse 0.5s ease-in-out 3;
+                }
+                @keyframes winner-pulse {
+                    0%, 100% { transform: scale(1); }
+                    50% { transform: scale(1.03); }
+                }
+                .legend-tier {
+                    font-weight: 700;
+                }
+                .legend-chance {
+                    color: #94a3b8;
+                    text-align: center;
+                }
+                .legend-win {
+                    color: #10b981;
+                    font-weight: 600;
+                    text-align: right;
+                }
+                .rules-note {
+                    margin-top: 16px;
+                    font-size: 11px;
+                    color: #64748b;
+                    text-align: center;
+                }
+                
+
                 .result-box {
                     padding: 16px 32px;
                     border-radius: 12px;
