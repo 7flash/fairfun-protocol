@@ -2,8 +2,9 @@ import React, { useState } from 'react';
 import { Wheel } from 'react-custom-roulette';
 
 // Wheel tier configuration
-// Each tier appears on the wheel as multiple equal-sized segments
-// based on its probability (percent value becomes number of segments)
+// 4 tiers matching on-chain configuration exactly:
+// On-chain: probabilities [1000, 7500, 1400, 100] = [10%, 75%, 14%, 1%]
+// On-chain: reward_bps [0, 100, 1000, 5000] = [0%, 1%, 10%, 50%]
 interface WheelTier {
     label: string;
     color: string;
@@ -13,11 +14,12 @@ interface WheelTier {
 }
 
 const WHEEL_CONFIG: WheelTier[] = [
-    { label: "NOTHING", color: "#334155", percent: 10, reward: 0, image: "/assets/coins_nothing.png" },
-    { label: "1%", color: "#10b981", percent: 75, reward: 1, image: "/assets/coins_1_percent.png" },
-    { label: "10%", color: "#3b82f6", percent: 14, reward: 10, image: "/assets/coins_10_percent.png" },
-    { label: "50%", color: "#f59e0b", percent: 1, reward: 50, image: "/assets/coins_50_percent.png" },
+    { label: "VOID", color: "#475569", percent: 10, reward: 0, image: "/assets/coins_nothing.png" },
+    { label: "METEOR", color: "#3b82f6", percent: 75, reward: 1, image: "/assets/coins_1_percent.png" },
+    { label: "NEBULA", color: "#a855f7", percent: 14, reward: 10, image: "/assets/coins_10_percent.png" },
+    { label: "SUPERNOVA", color: "#fbbf24", percent: 1, reward: 50, image: "/assets/coins_50_percent.png" },
 ];
+
 
 interface GalaxyWheelProps {
     available: number;
@@ -143,20 +145,39 @@ export const GalaxyWheelSection: React.FC<GalaxyWheelProps> = ({
 
     return (
         <section className="wheel-section" id="wheel">
-            {/* Jackpot Display */}
+            {/* Jackpot Display + Legend */}
             {treasuryBalance !== undefined && (
                 <div className="jackpot-box">
                     <span className="jackpot-label">🏆 JACKPOT POOL</span>
                     <span className="jackpot-value">{treasuryBalance.toFixed(4)} SOL</span>
-                    <div className="prize-breakdown">
-                        {WHEEL_CONFIG.filter(t => t.reward > 0).map((tier, i) => (
-                            <span key={i} style={{ color: tier.color }}>
-                                {tier.percent}% → {((treasuryBalance * tier.reward) / 100).toFixed(3)} SOL
-                            </span>
+
+                    {/* Clear Legend */}
+                    <div className="wheel-legend">
+                        <div className="legend-header">
+                            <span>TIER</span>
+                            <span>CHANCE</span>
+                            <span>WIN</span>
+                        </div>
+                        {WHEEL_CONFIG.map((tier, i) => (
+                            <div key={i} className="legend-row" style={{ borderLeft: `4px solid ${tier.color}` }}>
+                                <span className="legend-tier" style={{ color: tier.color }}>{tier.label}</span>
+                                <span className="legend-chance">{tier.percent}%</span>
+                                <span className="legend-win">
+                                    {tier.reward === 0
+                                        ? '—'
+                                        : `${((treasuryBalance * tier.reward) / 100).toFixed(4)} SOL`
+                                    }
+                                </span>
+                            </div>
                         ))}
+                    </div>
+
+                    <div className="rules-note">
+                        ✨ Spin costs 1,000 Stardust • Rewards paid from treasury pool
                     </div>
                 </div>
             )}
+
 
             {/* Wheel */}
             <div className="wheel-container">
@@ -255,15 +276,52 @@ export const GalaxyWheelSection: React.FC<GalaxyWheelProps> = ({
                     color: #fbbf24; 
                     text-shadow: 0 0 30px rgba(251,191,36,0.5); 
                 }
-                .prize-breakdown {
-                    display: flex;
-                    gap: 16px;
-                    justify-content: center;
-                    margin-top: 8px;
-                    font-size: 12px;
+                
+                /* Legend Styles */
+                .wheel-legend {
+                    margin-top: 16px;
+                    width: 100%;
+                }
+                .legend-header {
+                    display: grid;
+                    grid-template-columns: 1fr 80px 120px;
+                    font-size: 10px;
                     font-weight: 600;
+                    color: #64748b;
+                    text-transform: uppercase;
+                    letter-spacing: 1px;
+                    padding: 8px 12px;
+                    border-bottom: 1px solid rgba(255,255,255,0.1);
+                }
+                .legend-row {
+                    display: grid;
+                    grid-template-columns: 1fr 80px 120px;
+                    padding: 10px 12px;
+                    font-size: 13px;
+                    background: rgba(0,0,0,0.2);
+                    margin-top: 4px;
+                    border-radius: 6px;
+                }
+                .legend-tier {
+                    font-weight: 700;
+                }
+                .legend-chance {
+                    color: #94a3b8;
+                    text-align: center;
+                }
+                .legend-win {
+                    color: #10b981;
+                    font-weight: 600;
+                    text-align: right;
+                }
+                .rules-note {
+                    margin-top: 16px;
+                    font-size: 11px;
+                    color: #64748b;
+                    text-align: center;
                 }
                 
+
                 .wheel-container {
                     position: relative;
                     width: 400px;

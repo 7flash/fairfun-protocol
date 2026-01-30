@@ -222,7 +222,7 @@ const MyWalletSection: React.FC<{
 
 // Galaxy Wheel Section - Cosmic Multi-Ring Dartboard
 // Each ring has a cosmic "win" zone and dark space "pass through" zone
-// Outer = rarest/most epic (SUPERNOVA), Inner = most common (STARDUST)
+// Outer = rarest/most epic (SUPERNOVA), Inner = most common (METEOR)
 
 interface WheelTier {
     label: string;
@@ -233,48 +233,41 @@ interface WheelTier {
     reward: number;
 }
 
-// 5 Galaxy-themed tiers - from OUTER (rarest/epic) to INNER (common/simple)
-// Probabilities sum to 100%
+// 4 Galaxy-themed tiers - MUST match on-chain configuration exactly!
+// On-chain: probabilities [1000, 7500, 1400, 100] = [10%, 75%, 14%, 1%]
+// On-chain: reward_bps [0, 100, 1000, 5000] = [0%, 1%, 10%, 50%]
 const WHEEL_CONFIG: WheelTier[] = [
     {
-        label: "SUPERNOVA",
-        color: "#fbbf24",
-        gradient: "linear-gradient(135deg, #ff6b00 0%, #ffd700 30%, #ff4500 60%, #ff8c00 100%)",
-        glowColor: "rgba(255, 183, 0, 0.8)",
-        percent: 0.5,
-        reward: 100
-    },
-    {
-        label: "NEBULA",
-        color: "#a855f7",
-        gradient: "linear-gradient(135deg, #7c3aed 0%, #ec4899 40%, #a855f7 70%, #6366f1 100%)",
-        glowColor: "rgba(168, 85, 247, 0.6)",
-        percent: 2,
-        reward: 40
-    },
-    {
-        label: "STAR CLUSTER",
-        color: "#06b6d4",
-        gradient: "linear-gradient(135deg, #0ea5e9 0%, #06b6d4 40%, #22d3ee 70%, #67e8f9 100%)",
-        glowColor: "rgba(6, 182, 212, 0.5)",
-        percent: 7.5,
-        reward: 15
-    },
-    {
-        label: "COSMOS",
-        color: "#3b82f6",
-        gradient: "linear-gradient(135deg, #1e3a8a 0%, #3b82f6 40%, #1d4ed8 70%, #2563eb 100%)",
-        glowColor: "rgba(59, 130, 246, 0.4)",
-        percent: 20,
-        reward: 4
-    },
-    {
-        label: "STARDUST",
+        label: "VOID",           // Tier 0: Nothing
         color: "#475569",
         gradient: "linear-gradient(135deg, #1e293b 0%, #334155 40%, #475569 70%, #64748b 100%)",
         glowColor: "rgba(71, 85, 105, 0.3)",
-        percent: 70,
-        reward: 1
+        percent: 10,             // 10% chance (on-chain: 1000/10000)
+        reward: 0                // 0% of treasury
+    },
+    {
+        label: "METEOR",         // Tier 1: Small win
+        color: "#3b82f6",
+        gradient: "linear-gradient(135deg, #1e3a8a 0%, #3b82f6 40%, #1d4ed8 70%, #2563eb 100%)",
+        glowColor: "rgba(59, 130, 246, 0.4)",
+        percent: 75,             // 75% chance (on-chain: 7500/10000)
+        reward: 1                // 1% of treasury
+    },
+    {
+        label: "NEBULA",         // Tier 2: Medium win
+        color: "#a855f7",
+        gradient: "linear-gradient(135deg, #7c3aed 0%, #ec4899 40%, #a855f7 70%, #6366f1 100%)",
+        glowColor: "rgba(168, 85, 247, 0.6)",
+        percent: 14,             // 14% chance (on-chain: 1400/10000)
+        reward: 10               // 10% of treasury
+    },
+    {
+        label: "SUPERNOVA",      // Tier 3: Jackpot!
+        color: "#fbbf24",
+        gradient: "linear-gradient(135deg, #ff6b00 0%, #ffd700 30%, #ff4500 60%, #ff8c00 100%)",
+        glowColor: "rgba(255, 183, 0, 0.8)",
+        percent: 1,              // 1% chance (on-chain: 100/10000)
+        reward: 50               // 50% of treasury
     },
 ];
 
@@ -1743,7 +1736,7 @@ function App() {
                                 // Show result toast now that wheel has finished
                                 if (pendingSpinResult.current) {
                                     const { tier, reward, signature } = pendingSpinResult.current;
-                                    const tierNames = ["SUPERNOVA 💥", "NEBULA 🌌", "STAR CLUSTER ⭐", "COSMOS 🔮", "STARDUST ✨"];
+                                    const tierNames = ["VOID 🌑", "METEOR ☄️", "NEBULA 🌌", "SUPERNOVA �"];
                                     const rewardSol = reward / 1e9;
                                     const tierName = tierNames[tier] || `Tier ${tier}`;
                                     addToast('success', `🎉 ${tierName}! You won ${rewardSol.toFixed(4)} SOL!`, signature);
