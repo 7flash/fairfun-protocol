@@ -278,7 +278,9 @@ const SPACE_COLOR = "#0f0f1a"; // Deep space dark
 const DartboardWheel: React.FC<{
     rotation: number;
     isSpinning: boolean;
-}> = ({ rotation, isSpinning }) => {
+    treasuryBalance?: number;
+    hoveredTier?: number | null;
+}> = ({ rotation, isSpinning, treasuryBalance = 0, hoveredTier = null }) => {
     const size = 360;
     const center = size / 2;
     const outerRadius = size / 2 - 20;
@@ -452,6 +454,72 @@ const DartboardWheel: React.FC<{
                     opacity="0.8"
                 />
             ))}
+            {/* Radial reward labels on each ring - arc text in dark space area */}
+            {WHEEL_CONFIG.map((tier, idx) => {
+                const ringMidRadius = outerRadius - idx * ringWidth - ringWidth / 2;
+
+                // Calculate SOL value based on treasury
+                const solValue = tier.reward > 0 ? (treasuryBalance * tier.reward / 100) : 0;
+                const rewardText = tier.reward === 0 ? '—' : `${solValue.toFixed(4)} SOL`;
+
+                // Highlight ring when hovered
+                const isHovered = hoveredTier === idx;
+
+                // Arc path for text - positioned in the dark space (bottom half)
+                // Reverse direction (counter-clockwise) so text reads right-side-up
+                const startAngle = 240;
+                const endAngle = 120;
+                const startRad = (startAngle - 90) * (Math.PI / 180);
+                const endRad = (endAngle - 90) * (Math.PI / 180);
+                const x1 = center + ringMidRadius * Math.cos(startRad);
+                const y1 = center + ringMidRadius * Math.sin(startRad);
+                const x2 = center + ringMidRadius * Math.cos(endRad);
+                const y2 = center + ringMidRadius * Math.sin(endRad);
+
+                // Create arc path for textPath (sweep-flag 0 for counter-clockwise)
+                const arcPathId = `arc-path-${idx}`;
+                const arcPath = `M ${x1} ${y1} A ${ringMidRadius} ${ringMidRadius} 0 0 0 ${x2} ${y2}`;
+
+                return (
+                    <g key={`label-group-${idx}`}>
+                        {/* Highlight ring when hovered */}
+                        {isHovered && (
+                            <circle
+                                cx={center}
+                                cy={center}
+                                r={ringMidRadius}
+                                fill="none"
+                                stroke={tier.color}
+                                strokeWidth="3"
+                                opacity="0.6"
+                                style={{ filter: `drop-shadow(0 0 10px ${tier.color})` }}
+                            />
+                        )}
+                        {/* Arc path definition */}
+                        <defs>
+                            <path id={arcPathId} d={arcPath} fill="none" />
+                        </defs>
+                        {/* Arc text */}
+                        <text
+                            fill={isHovered ? '#fff' : tier.color}
+                            fontSize={isHovered ? "12" : (idx === 3 ? "11" : "10")}
+                            fontWeight="700"
+                            style={{
+                                textShadow: `0 0 6px ${tier.color}, 0 0 12px ${tier.glowColor}`,
+                                transition: 'all 0.2s ease'
+                            }}
+                        >
+                            <textPath
+                                href={`#${arcPathId}`}
+                                startOffset="50%"
+                                textAnchor="middle"
+                            >
+                                {rewardText}
+                            </textPath>
+                        </text>
+                    </g>
+                );
+            })}
 
             {/* Galaxy center hub with cosmic styling */}
             <circle cx={center} cy={center} r={hubRadius + 2} fill="none" stroke="#a855f7" strokeWidth="2" opacity="0.5" />
@@ -497,6 +565,8 @@ const GalaxyWheelSection: React.FC<{
 
     // Track highlighted tier during spin for legend highlighting
     const [highlightedTier, setHighlightedTier] = React.useState<number | null>(null);
+    // Track hovered tier for legend-to-ring linking
+    const [hoveredTier, setHoveredTier] = React.useState<number | null>(null);
 
 
     // Animation constants
@@ -517,11 +587,13 @@ const GalaxyWheelSection: React.FC<{
 
     // Calculate target rotation to land on a tier's colored zone
     const getTargetAngleForTier = (tierIndex: number): number => {
+        // Bounds check - clamp to valid tier index
+        const safeIndex = Math.max(0, Math.min(tierIndex, WHEEL_CONFIG.length - 1));
         let cumulativeAngle = 0;
-        for (let i = 0; i < tierIndex; i++) {
+        for (let i = 0; i < safeIndex; i++) {
             cumulativeAngle += (WHEEL_CONFIG[i].percent / TOTAL_PERCENT) * 360;
         }
-        const tierAngle = (WHEEL_CONFIG[tierIndex].percent / TOTAL_PERCENT) * 360;
+        const tierAngle = (WHEEL_CONFIG[safeIndex].percent / TOTAL_PERCENT) * 360;
         const randomOffset = Math.random() * tierAngle;
         return cumulativeAngle + randomOffset;
     };
@@ -707,220 +779,242 @@ const GalaxyWheelSection: React.FC<{
 
                 // After 1s total, show result
                 setTimeout(() => {
-                    setResult(WHEEL_CONFIG[targetTier]);
+                    const safeTier = Math.max(0, Math.min(targetTier, WHEEL_CONFIG.length - 1));
+                    setResult(WHEEL_CONFIG[safeTier]);
                     onSpinFinish();
                 }, 1000);
             }, DECEL_DURATION);
         }
     }, [targetTier, spinning, spinPhase]);
 
-    // Animate tier highlighting in legend based on pointer rotation
+    // Cascade tier-by-tier animation when result is shown
     React.useEffect(() => {
-        if (!isSpinning) {
-            setHighlightedTier(null);
-            return;
-        }
+        if (result) {
+            const winningTierIndex = WHEEL_CONFIG.findIndex(t => t.label === result.label);
+            if (winningTierIndex < 0) return;
 
-        // Calculate which tier the pointer is currently over based on rotation
-        const normalizedRotation = ((pointerRotation % 360) + 360) % 360;
-        let cumulativeAngle = 0;
-        for (let i = 0; i < WHEEL_CONFIG.length; i++) {
-            const tierAngle = (WHEEL_CONFIG[i].percent / TOTAL_PERCENT) * 360;
-            if (normalizedRotation < cumulativeAngle + tierAngle) {
-                setHighlightedTier(i);
-                return;
-            }
-            cumulativeAngle += tierAngle;
+            // Start cascade from tier 0, highlighting each tier until we reach the winner
+            let currentCascade = 0;
+            setHighlightedTier(0);
+
+            const cascadeInterval = setInterval(() => {
+                currentCascade++;
+                if (currentCascade <= winningTierIndex) {
+                    setHighlightedTier(currentCascade);
+                } else {
+                    clearInterval(cascadeInterval);
+                    // Keep the winning tier highlighted
+                    setHighlightedTier(winningTierIndex);
+                }
+            }, 200); // 200ms per tier
+
+            return () => clearInterval(cascadeInterval);
+        } else {
+            setHighlightedTier(null);
         }
-        setHighlightedTier(0);
-    }, [pointerRotation, isSpinning]);
+    }, [result]);
 
     return (
         <Section label="GALAXY WHEEL" className="wheel-section" id="wheel">
-            {/* Jackpot Header */}
-            {treasuryBalance !== undefined && (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '20px' }}>
-                    <span style={{ fontSize: '12px', fontWeight: 600, color: '#fbbf24', letterSpacing: '2px' }}>🏆 JACKPOT POOL</span>
-                    <span style={{ fontSize: '36px', fontWeight: 800, color: '#fbbf24', textShadow: '0 0 30px rgba(251,191,36,0.5)' }}>
-                        {treasuryBalance.toFixed(4)} SOL
-                    </span>
-                </div>
-            )}
 
-            {/* Side-by-side layout: Wheel left, Legend right */}
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start', gap: '32px', marginBottom: '24px', flexWrap: 'wrap' }}>
+            {/* Explanation */}
+            <p style={{ textAlign: 'center', color: '#94a3b8', fontSize: '14px', margin: '0 0 24px 0' }}>
+                Spend <span style={{ color: '#fbbf24', fontWeight: 700 }}>{spinCost.toLocaleString()}</span> stardust to spin and win a percentage of the treasury!
+            </p>
 
-                {/* LEFT: Wheel Container */}
-                <div style={{ position: 'relative', width: '340px', height: '340px', flexShrink: 0 }}>
-                    {/* Rotating pointer */}
-                    <div style={{
-                        position: 'absolute',
-                        width: '100%',
-                        height: '100%',
-                        transform: `rotate(${pointerRotation}deg)`,
-                        zIndex: 30,
-                        pointerEvents: 'none'
-                    }}>
-                        <div style={{
-                            position: 'absolute',
-                            top: '-5px',
-                            left: '50%',
-                            transform: 'translateX(-50%)',
-                            fontSize: '36px',
-                            color: '#fbbf24',
-                            textShadow: '0 0 20px rgba(255,183,0,1), 0 0 40px rgba(255,100,0,0.8)',
-                            filter: 'drop-shadow(0 0 15px rgba(251,191,36,0.9))'
-                        }}>▼</div>
-                    </div>
-
-                    {/* Static Galaxy Wheel */}
-                    <div style={{
-                        position: 'absolute',
-                        top: '50%',
-                        left: '50%',
-                        transform: 'translate(-50%, -50%)',
-                        borderRadius: '50%',
-                        boxShadow: '0 0 60px rgba(168,85,247,0.3), inset 0 0 40px rgba(0,0,0,0.6)'
-                    }}>
-                        <DartboardWheel rotation={0} isSpinning={false} />
-                    </div>
-
-                    {/* Ray animation */}
-                    {showRay && (currentTier ?? targetTier) !== null && (
-                        <div style={{
-                            position: 'absolute', top: '0', left: '50%', width: '4px', height: '170px',
-                            background: `linear-gradient(to bottom, ${WHEEL_CONFIG[(currentTier ?? targetTier)!].color} 0%, transparent 100%)`,
-                            transform: 'translateX(-50%)', zIndex: 35,
-                            animation: 'rayShoot 0.4s ease-out forwards',
-                            boxShadow: `0 0 20px ${WHEEL_CONFIG[(currentTier ?? targetTier)!].color}`,
-                        }} />
-                    )}
-
-                    {/* Ring highlight */}
-                    {showHighlight && (currentTier ?? targetTier) !== null && (
-                        <div style={{
-                            position: 'absolute', top: '50%', left: '50%',
-                            width: '100px', height: '100px',
-                            transform: 'translate(-50%, -50%)', zIndex: 36,
-                            border: `4px solid ${WHEEL_CONFIG[(currentTier ?? targetTier)!].color}`,
-                            borderRadius: '50%', animation: 'ringPulse 0.6s ease-out forwards',
-                            boxShadow: `0 0 30px ${WHEEL_CONFIG[(currentTier ?? targetTier)!].color}`,
-                        }} />
-                    )}
-                </div>
-
-                {/* RIGHT: Legend Panel */}
+            {/* Wheel Container */}
+            <div style={{ position: 'relative', width: '360px', height: '360px', margin: '0 auto 24px' }}>
+                {/* Static Wheel */}
                 <div style={{
-                    background: 'rgba(15, 23, 42, 0.9)',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    borderRadius: '16px',
-                    padding: '20px',
-                    minWidth: '280px'
+                    position: 'absolute',
+                    top: '50%',
+                    left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    borderRadius: '50%',
+                    boxShadow: '0 0 60px rgba(168,85,247,0.3), inset 0 0 40px rgba(0,0,0,0.6)'
                 }}>
-                    <div style={{ fontSize: '14px', fontWeight: 700, color: '#fbbf24', letterSpacing: '2px', textAlign: 'center', marginBottom: '16px' }}>
-                        PRIZE TIERS
-                    </div>
+                    <DartboardWheel rotation={0} isSpinning={false} treasuryBalance={treasuryBalance} hoveredTier={hoveredTier} />
+                </div>
 
-                    {/* Header */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 100px', fontSize: '10px', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '1px', padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                        <span>Tier</span>
-                        <span style={{ textAlign: 'center' }}>Chance</span>
-                        <span style={{ textAlign: 'right' }}>Win</span>
-                    </div>
+                {/* Rotating Pointer - truly on outer edge (outside the wheel) */}
+                <div style={{
+                    position: 'absolute',
+                    top: '50%',
+                    left: '50%',
+                    width: '360px',
+                    height: '360px',
+                    transform: `translate(-50%, -50%) rotate(${pointerRotation}deg)`,
+                    zIndex: 30,
+                    pointerEvents: 'none'
+                }}>
+                    {/* Ball on the true outer edge - outside wheel completely */}
+                    <div style={{
+                        position: 'absolute',
+                        top: '-12px',
+                        left: '50%',
+                        transform: 'translateX(-50%)',
+                        width: '20px',
+                        height: '20px',
+                        borderRadius: '50%',
+                        background: 'radial-gradient(circle at 30% 30%, #fff, #fbbf24)',
+                        boxShadow: '0 0 20px rgba(251,191,36,1), 0 0 40px rgba(255,183,0,0.8), inset 0 0 5px rgba(255,255,255,0.5)',
+                        border: '2px solid #fff'
+                    }} />
+                </div>
 
-                    {/* Tier Rows */}
-                    {WHEEL_CONFIG.map((tier, i) => (
-                        <div key={i} style={{
-                            display: 'grid',
-                            gridTemplateColumns: '1fr 70px 100px',
-                            padding: '12px',
-                            marginTop: '6px',
+                {/* Ray animation */}
+                {showRay && (currentTier ?? targetTier) !== null && (
+                    <div style={{
+                        position: 'absolute', top: '50%', left: '50%', width: '4px', height: '180px',
+                        background: `linear-gradient(to top, transparent 0%, ${WHEEL_CONFIG[Math.min(currentTier ?? targetTier ?? 0, 3)].color} 100%)`,
+                        transform: `translate(-50%, -100%) rotate(${pointerRotation}deg)`,
+                        transformOrigin: 'bottom center',
+                        zIndex: 25,
+                        animation: 'rayShoot 0.4s ease-out forwards',
+                        boxShadow: `0 0 20px ${WHEEL_CONFIG[Math.min(currentTier ?? targetTier ?? 0, 3)].color}`,
+                    }} />
+                )}
+
+                {/* Ring highlight */}
+                {showHighlight && (currentTier ?? targetTier) !== null && (
+                    <div style={{
+                        position: 'absolute', top: '50%', left: '50%',
+                        width: '100px', height: '100px',
+                        transform: 'translate(-50%, -50%)', zIndex: 36,
+                        border: `4px solid ${WHEEL_CONFIG[Math.min(currentTier ?? targetTier ?? 0, 3)].color}`,
+                        borderRadius: '50%', animation: 'ringPulse 0.6s ease-out forwards',
+                        boxShadow: `0 0 30px ${WHEEL_CONFIG[Math.min(currentTier ?? targetTier ?? 0, 3)].color}`,
+                    }} />
+                )}
+            </div>
+
+            {/* Tier Legend - vertical column below wheel */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
+                {WHEEL_CONFIG.map((tier, i) => (
+                    <div
+                        key={i}
+                        onMouseEnter={() => setHoveredTier(i)}
+                        onMouseLeave={() => setHoveredTier(null)}
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '12px',
+                            padding: '8px 20px',
                             borderRadius: '8px',
-                            borderLeft: `4px solid ${tier.color}`,
-                            background: highlightedTier === i ? `${tier.color}33` : 'rgba(0,0,0,0.2)',
-                            transform: highlightedTier === i ? 'scale(1.02)' : 'scale(1)',
-                            boxShadow: highlightedTier === i ? `0 0 20px ${tier.color}40` : 'none',
-                            transition: 'all 0.1s ease'
-                        }}>
-                            <span style={{ fontWeight: 700, color: tier.color }}>{tier.label}</span>
-                            <span style={{ color: '#94a3b8', textAlign: 'center' }}>{tier.percent}%</span>
-                            <span style={{ color: '#10b981', fontWeight: 600, textAlign: 'right' }}>
-                                {tier.reward === 0 ? '—' : `${((treasuryBalance || 0) * tier.reward / 100).toFixed(4)} SOL`}
-                            </span>
-                        </div>
-                    ))}
+                            width: '200px',
+                            cursor: 'pointer',
+                            background: (highlightedTier === i || hoveredTier === i) ? `${tier.color}33` : 'rgba(255,255,255,0.03)',
+                            border: (highlightedTier === i || hoveredTier === i) ? `2px solid ${tier.color}` : '2px solid transparent',
+                            transition: 'all 0.2s ease',
+                            transform: (highlightedTier === i || hoveredTier === i) ? 'scale(1.05)' : 'scale(1)',
+                            boxShadow: (highlightedTier === i || hoveredTier === i) ? `0 0 20px ${tier.color}50` : 'none'
+                        }}
+                    >
+                        <div style={{
+                            width: '12px',
+                            height: '12px',
+                            borderRadius: '50%',
+                            background: tier.color,
+                            boxShadow: `0 0 8px ${tier.color}80`
+                        }} />
+                        <span style={{ color: tier.color, fontWeight: 700, fontSize: '14px', flex: 1 }}>{tier.label}</span>
+                        <span style={{ color: tier.reward === 0 ? '#475569' : '#94a3b8', fontSize: '13px', fontWeight: 600 }}>
+                            {tier.reward === 0 ? '—' : `${tier.reward}%`}
+                        </span>
+                    </div>
+                ))}
+            </div>
 
-                    <div style={{ marginTop: '16px', fontSize: '11px', color: '#64748b', textAlign: 'center' }}>
-                        ✨ Cost: {spinCost.toLocaleString()} Stardust
+            {/* Info Row (table-like) */}
+            <div style={{
+                display: 'flex',
+                justifyContent: 'center',
+                gap: '32px',
+                padding: '16px 0',
+                borderTop: '1px solid rgba(255,255,255,0.1)',
+                borderBottom: '1px solid rgba(255,255,255,0.1)',
+                marginBottom: '20px'
+            }}>
+                <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1px' }}>Treasury</div>
+                    <div style={{ fontSize: '20px', fontWeight: 800, color: '#fbbf24' }}>
+                        {treasuryBalance?.toFixed(4) || '—'} SOL
+                    </div>
+                </div>
+                <div style={{ width: '1px', background: 'rgba(255,255,255,0.1)' }} />
+                <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1px' }}>Spin Cost</div>
+                    <div style={{ fontSize: '20px', fontWeight: 800, color: '#a855f7' }}>
+                        {spinCost.toLocaleString()} ✨
                     </div>
                 </div>
             </div>
 
-
             {/* Result */}
             {result && (
                 <div style={{
-                    padding: '16px 32px', borderRadius: '12px', marginBottom: '20px',
-                    fontWeight: 700, fontSize: '18px', textAlign: 'center',
+                    padding: '12px 20px', borderRadius: '10px', marginBottom: '16px',
+                    fontWeight: 700, fontSize: '16px', textAlign: 'center',
                     border: `2px solid ${result.color}`,
                     background: result.reward > 0 ? 'rgba(16, 185, 129, 0.15)' : 'rgba(100, 116, 139, 0.15)',
                     color: result.reward > 0 ? '#10b981' : '#64748b'
                 }}>
                     {result.reward > 0
-                        ? `🎉 You won ${result.reward}% = ${treasuryBalance ? ((treasuryBalance * result.reward) / 100).toFixed(4) : '?'} SOL!`
-                        : '😔 Better luck next time!'}
+                        ? `🎉 ${result.label}! You won ${result.reward}% = ${treasuryBalance ? ((treasuryBalance * result.reward) / 100).toFixed(4) : '?'} SOL!`
+                        : `✨ ${result.label} — Better luck next time!`}
                 </div>
             )}
 
-            {/* Controls */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-                <button
-                    className="btn btn-gold"
-                    onClick={handleRealSpin}
-                    disabled={!canSpin || isSpinning}
-                    style={{
-                        padding: '14px 40px',
-                        fontSize: '16px',
-                        fontWeight: 700,
-                        borderRadius: '50px',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        background: 'linear-gradient(135deg, #fbbf24, #f59e0b)',
-                        border: 'none',
-                        color: '#0f172a',
-                        cursor: canSpin && !isSpinning ? 'pointer' : 'not-allowed',
-                        opacity: canSpin && !isSpinning ? 1 : 0.6,
-                        boxShadow: '0 4px 20px rgba(251, 191, 36, 0.4)'
-                    }}
-                >
-                    {isSpinning ? '✨ SPINNING...' : '🎰 SPIN WHEEL'}
-                    <span style={{ fontSize: '11px', opacity: 0.8, marginTop: '2px' }}>{spinCost.toLocaleString()} STARDUST</span>
-                </button>
+            {/* Full-width Spin Button */}
+            <button
+                onClick={handleRealSpin}
+                disabled={!canSpin || isSpinning}
+                style={{
+                    width: '100%',
+                    padding: '16px',
+                    fontSize: '18px',
+                    fontWeight: 800,
+                    borderRadius: '12px',
+                    border: 'none',
+                    background: canSpin && !isSpinning
+                        ? 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)'
+                        : 'linear-gradient(135deg, #475569, #334155)',
+                    color: canSpin && !isSpinning ? '#0f172a' : '#94a3b8',
+                    cursor: canSpin && !isSpinning ? 'pointer' : 'not-allowed',
+                    boxShadow: canSpin && !isSpinning
+                        ? '0 4px 20px rgba(251, 191, 36, 0.4)'
+                        : 'none',
+                    transition: 'all 0.2s ease'
+                }}
+            >
+                {isSpinning ? '✨ SPINNING...' : '🚀 SPIN THE WHEEL'}
+            </button>
 
-                <button
-                    onClick={handleDemo}
-                    disabled={isSpinning}
-                    style={{
-                        padding: '8px 20px',
-                        fontSize: '13px',
-                        background: 'transparent',
-                        border: '1px solid #475569',
-                        color: '#94a3b8',
-                        borderRadius: '20px',
-                        cursor: isSpinning ? 'not-allowed' : 'pointer',
-                        opacity: isSpinning ? 0.5 : 1
-                    }}
-                >
-                    🎮 DEMO SPIN
-                </button>
+            {/* Demo button - subtle */}
+            <button
+                onClick={handleDemo}
+                disabled={isSpinning}
+                style={{
+                    width: '100%',
+                    marginTop: '10px',
+                    padding: '10px',
+                    fontSize: '13px',
+                    background: 'transparent',
+                    border: '1px solid #334155',
+                    color: '#64748b',
+                    borderRadius: '8px',
+                    cursor: isSpinning ? 'not-allowed' : 'pointer',
+                    opacity: isSpinning ? 0.5 : 1
+                }}
+            >
+                Demo Spin (Free)
+            </button>
 
-                {!canSpin && !isSpinning && (
-                    <p style={{ color: '#ef4444', fontSize: '13px', margin: 0 }}>
-                        Need {(spinCost - available).toLocaleString()} more STARDUST
-                    </p>
-                )}
-            </div>
+            {!canSpin && !isSpinning && (
+                <p style={{ color: '#ef4444', fontSize: '13px', margin: '12px 0 0 0', textAlign: 'center' }}>
+                    Need {(spinCost - available).toLocaleString()} more STARDUST
+                </p>
+            )}
 
             {/* Admin Panel */}
             {isAdmin && onFundTreasury && (
