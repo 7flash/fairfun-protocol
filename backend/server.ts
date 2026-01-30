@@ -1103,21 +1103,75 @@ async function handler(req: Request): Promise<Response | null> {
     }
 
     // POST /api/wheel/record-spin - Record on-chain spin result for history
+    // Verifies the transaction on-chain before recording
     if (method === "POST" && path === "/api/wheel/record-spin") {
         try {
-            const body = await req.json() as { wallet: string; tier: number; reward: number; signature: string };
-            const { wallet, tier, reward, signature } = body;
+            const body = await req.json() as { wallet: string; signature: string };
+            const { wallet, signature } = body;
 
-            if (!wallet || tier === undefined) {
-                return json({ error: "wallet and tier required" }, 400);
+            if (!wallet || !signature) {
+                return json({ error: "wallet and signature required" }, 400);
             }
 
-            // Record winner
+            // Check if this signature was already recorded (prevent duplicates)
+            if (redemptionWinners.find(w => w.txSignature === signature)) {
+                return json({ error: "spin already recorded" }, 409);
+            }
+
+            // Verify the transaction on-chain
+            let txDetails = null;
+            for (let attempt = 0; attempt < 3; attempt++) {
+                try {
+                    txDetails = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+                    if (txDetails) break;
+                } catch (e) {
+                    console.warn(`[record-spin] getTransaction attempt ${attempt + 1} failed:`, e);
+                }
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+
+            if (!txDetails) {
+                return json({ error: "transaction not found - please wait and retry" }, 404);
+            }
+
+            // Verify transaction succeeded
+            if (txDetails.meta?.err) {
+                return json({ error: "transaction failed on-chain" }, 400);
+            }
+
+            // Verify it's our wheel program
+            const WHEEL_PROGRAM = "3M12BfitAEYz14WJBMnjahEuSvhsWhjfGJXbzur26o2U";
+            const accountKeys = txDetails.transaction.message.staticAccountKeys?.map(k => k.toBase58()) || [];
+            if (!accountKeys.includes(WHEEL_PROGRAM)) {
+                return json({ error: "not a valid wheel spin transaction" }, 400);
+            }
+
+            // Parse the result from on-chain logs
+            const logs = txDetails.meta?.logMessages || [];
+            let tier = -1;
+            let reward = 0;
+
+            for (const log of logs) {
+                // Parse: "Spin #X: Tier Y - Won Z lamports"
+                const match = log.match(/Spin #\d+: Tier (\d+) - Won (\d+) lamports/);
+                if (match) {
+                    tier = parseInt(match[1]);
+                    reward = parseInt(match[2]);
+                    break;
+                }
+            }
+
+            if (tier < 0) {
+                return json({ error: "could not parse spin result from transaction" }, 400);
+            }
+
+            // Record winner with verified data
             const winner: RedemptionWinner = {
                 wallet,
                 rewardTier: tier,
-                rewardAmount: reward || 0,
-                timestamp: Date.now(),
+                rewardAmount: reward,
+                timestamp: txDetails.blockTime ? txDetails.blockTime * 1000 : Date.now(),
+                txSignature: signature,
             };
 
             redemptionWinners.push(winner);
@@ -1129,10 +1183,18 @@ async function handler(req: Request): Promise<Response | null> {
 
             // Track wallet winnings
             const currentWinnings = walletWinnings.get(wallet) || 0;
-            walletWinnings.set(wallet, currentWinnings + (reward || 0));
+            walletWinnings.set(wallet, currentWinnings + reward);
 
-            return json({ success: true });
+            console.log(`[record-spin] Verified and recorded: wallet=${wallet.slice(0, 8)}, tier=${tier}, reward=${reward / 1e9} SOL, sig=${signature.slice(0, 8)}`);
+
+            return json({
+                success: true,
+                verified: true,
+                tier,
+                reward,
+            });
         } catch (e: any) {
+            console.error('[record-spin] Error:', e);
             return json({ error: e.message || "record failed" }, 500);
         }
     }

@@ -498,6 +498,7 @@ const GalaxyWheelSection: React.FC<{
     const animationRef = React.useRef<number | null>(null);
     const spinStartTime = React.useRef<number>(0);
     const constantSpinStartRotation = React.useRef<number>(0);
+    const hasStartedSpin = React.useRef<boolean>(false); // Tracks if we've started a spin for current spinning=true cycle
 
     const isSpinning = spinPhase !== 'idle';
 
@@ -657,9 +658,14 @@ const GalaxyWheelSection: React.FC<{
 
     // Start spinning when transaction is approved (spinning prop becomes true)
     React.useEffect(() => {
-        if (spinning && spinPhase === 'idle' && !demoActive) {
-            // Transaction was approved, start accelerating
+        if (spinning && spinPhase === 'idle' && !demoActive && !hasStartedSpin.current) {
+            // Transaction was approved, start accelerating (only once per spin cycle)
+            hasStartedSpin.current = true;
             startAcceleration(null);
+        }
+        // Reset guard when spinning cycle ends
+        if (!spinning) {
+            hasStartedSpin.current = false;
         }
     }, [spinning, spinPhase, demoActive]);
 
@@ -1672,10 +1678,11 @@ function App() {
             pendingSpinResult.current = { tier, reward, signature };
 
             // Record spin in backend for history display
+            // Backend verifies transaction on-chain and parses tier/reward from logs
             fetch('/api/wheel/record-spin', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ wallet: publicKey, tier, reward, signature }),
+                body: JSON.stringify({ wallet: publicKey, signature }),
             }).catch(err => console.warn('Failed to record spin:', err));
 
             // Dismiss the pending toast - success toast will show when wheel stops
