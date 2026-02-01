@@ -718,7 +718,7 @@ async function handler(req: Request): Promise<Response | null> {
             unclaimed: unclaimed.toString(),
             isCapped, // Frontend can show "1M MAX" indicator
             starBalance: earnings?.starBalance.toString() || "0",
-            stardustTokenBalance: stardustTokenBalance.toString(), // Actual current stardust token balance
+            stardustTokenBalance: (stardustTokenBalance ?? 0n).toString(), // Actual current stardust token balance
             lastUpdated: earnings?.lastUpdated || null,
             rpcWarning, // Frontend can show toast if this is set
         });

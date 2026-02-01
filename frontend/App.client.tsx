@@ -689,6 +689,8 @@ const GalaxyWheelSection: React.FC<{
         constantSpinStartRotation.current = pointerRotation;
         spinStartTime.current = performance.now();
         setSpinPhase('accelerating');
+        // Show ray immediately during spin
+        setShowRay(true);
 
         if (knownTier !== null) {
             // For demo, we already know the result - calculate target
@@ -705,21 +707,16 @@ const GalaxyWheelSection: React.FC<{
                 setSpinPhase('decelerating');
                 spinStartTime.current = performance.now();
 
-                // After decel, show ray animation first
+                // After decel, animations complete
                 setTimeout(() => {
-                    // Show ray animation
-                    setShowRay(true);
+                    // Ray already showing, just add ring highlight
+                    setShowHighlight(true);
 
-                    // After 400ms, show ring highlight
-                    setTimeout(() => {
-                        setShowHighlight(true);
-                    }, 400);
-
-                    // After 1s total, show result
+                    // After 500ms, show result
                     setTimeout(() => {
                         setResult(WHEEL_CONFIG[knownTier]);
                         setDemoActive(false);
-                    }, 1000);
+                    }, 500);
                 }, DECEL_DURATION);
             }, ACCEL_DURATION + 500); // Brief constant spin
         }
@@ -767,22 +764,18 @@ const GalaxyWheelSection: React.FC<{
 
             setSpinPhase('decelerating');
             spinStartTime.current = performance.now();
+            // Show ray immediately during deceleration
+            setShowRay(true);
 
             setTimeout(() => {
-                // Show ray animation first
-                setShowRay(true);
+                // After decel, show ring highlight and result
+                setShowHighlight(true);
 
-                // After 400ms, show ring highlight
-                setTimeout(() => {
-                    setShowHighlight(true);
-                }, 400);
-
-                // After 1s total, show result
                 setTimeout(() => {
                     const safeTier = Math.max(0, Math.min(targetTier, WHEEL_CONFIG.length - 1));
                     setResult(WHEEL_CONFIG[safeTier]);
                     onSpinFinish();
-                }, 1000);
+                }, 500);
             }, DECEL_DURATION);
         }
     }, [targetTier, spinning, spinPhase]);
@@ -1339,8 +1332,16 @@ function App() {
             setEarnings(data);
         } catch (e: any) {
             console.error('Fetch earnings failed:', e);
+
+            // Handle JSON parse errors (likely receiving HTML from 404/500 or downtime)
+            if (e.message?.includes('Unexpected token') || e.message?.includes('JSON')) {
+                // Do not toast, just log warning as this is likely temporary connection issue
+                console.warn("Received invalid JSON (likely HTML), backend may be unavailable.");
+                return;
+            }
+
             // Only show toast for non-network errors (avoid spamming on connectivity issues)
-            if (!e.message?.includes('fetch')) {
+            if (!e.message?.includes('fetch') && !e.message?.includes('Network request failed')) {
                 addToast('error', `Failed to fetch balances: ${e.message}`);
             }
         }
@@ -1571,8 +1572,8 @@ function App() {
                 wheelProgramId
             );
 
-            // Stardust mint - now correctly set on-chain after fix
-            const stardustMint = new PublicKey(config?.stardustMint || "XG3VfC9e8hzjaeQutPHrCs1YE6jwbdCqhfRpY8miWo5");
+            // Stardust mint - FORCE CORRECT MAINNET MINT (ignore config which might be stale)
+            const stardustMint = new PublicKey("XG3VfC9e8hzjaeQutPHrCs1YE6jwbdCqhfRpY8miWo5");
 
             // Get user's stardust token account
             const userStardustAta = await getAssociatedTokenAddress(stardustMint, userPubkey);
@@ -1770,13 +1771,21 @@ function App() {
             const logs = txDetails?.meta?.logMessages || [];
 
             // Parse spin result from logs: "Spin #X: Tier Y - Won Z lamports"
-            let tier = 4; // Default to STARDUST (most common)
+            // On-chain tiers are 0-indexed: 0=VOID, 1=METEOR, 2=NEBULA, 3=SUPERNOVA
+            let tier = 1; // Default to METEOR (most common at 75%)
             let reward = 0;
+            console.log('[Spin] Transaction logs:', logs);
             for (const log of logs) {
                 const match = log.match(/Spin #\d+: Tier (\d+) - Won (\d+) lamports/);
                 if (match) {
                     tier = parseInt(match[1]);
                     reward = parseInt(match[2]);
+                    console.log('[Spin] Parsed result - Tier:', tier, 'Reward:', reward, 'lamports');
+                    // Validate tier is in range 0-3
+                    if (tier < 0 || tier > 3) {
+                        console.warn('[Spin] Invalid tier', tier, '- clamping to valid range');
+                        tier = Math.max(0, Math.min(tier, 3));
+                    }
                     break;
                 }
             }
