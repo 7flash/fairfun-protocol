@@ -233,41 +233,50 @@ interface WheelTier {
     reward: number;
 }
 
-// 4 Galaxy-themed tiers - MUST match on-chain configuration exactly!
-// On-chain: probabilities [1000, 7500, 1400, 100] = [10%, 75%, 14%, 1%]
-// On-chain: reward_bps [0, 100, 1000, 5000] = [0%, 1%, 10%, 50%]
+// 5 Galaxy-themed tiers - MUST match on-chain configuration exactly!
+// From scripts/update-wheel-config.ts:
+// On-chain: probabilities [50, 200, 750, 2000, 7000] = [0.5%, 2%, 7.5%, 20%, 70%]
+// On-chain: reward_bps [10000, 4000, 1500, 400, 100] = [100%, 40%, 15%, 4%, 1%]
 const WHEEL_CONFIG: WheelTier[] = [
     {
-        label: "VOID",           // Tier 0: Nothing
-        color: "#475569",
-        gradient: "linear-gradient(135deg, #1e293b 0%, #334155 40%, #475569 70%, #64748b 100%)",
-        glowColor: "rgba(71, 85, 105, 0.3)",
-        percent: 10,             // 10% chance (on-chain: 1000/10000)
-        reward: 0                // 0% of treasury
-    },
-    {
-        label: "METEOR",         // Tier 1: Small win
-        color: "#3b82f6",
-        gradient: "linear-gradient(135deg, #1e3a8a 0%, #3b82f6 40%, #1d4ed8 70%, #2563eb 100%)",
-        glowColor: "rgba(59, 130, 246, 0.4)",
-        percent: 75,             // 75% chance (on-chain: 7500/10000)
-        reward: 1                // 1% of treasury
-    },
-    {
-        label: "NEBULA",         // Tier 2: Medium win
-        color: "#a855f7",
-        gradient: "linear-gradient(135deg, #7c3aed 0%, #ec4899 40%, #a855f7 70%, #6366f1 100%)",
-        glowColor: "rgba(168, 85, 247, 0.6)",
-        percent: 14,             // 14% chance (on-chain: 1400/10000)
-        reward: 10               // 10% of treasury
-    },
-    {
-        label: "SUPERNOVA",      // Tier 3: Jackpot!
+        label: "SUPERNOVA",      // Tier 0: JACKPOT! 100% of treasury
         color: "#fbbf24",
         gradient: "linear-gradient(135deg, #ff6b00 0%, #ffd700 30%, #ff4500 60%, #ff8c00 100%)",
         glowColor: "rgba(255, 183, 0, 0.8)",
-        percent: 1,              // 1% chance (on-chain: 100/10000)
-        reward: 50               // 50% of treasury
+        percent: 0.5,            // 0.5% chance (on-chain: 50/10000)
+        reward: 100              // 100% of treasury
+    },
+    {
+        label: "NEBULA",         // Tier 1: 40% of treasury
+        color: "#a855f7",
+        gradient: "linear-gradient(135deg, #7c3aed 0%, #ec4899 40%, #a855f7 70%, #6366f1 100%)",
+        glowColor: "rgba(168, 85, 247, 0.6)",
+        percent: 2,              // 2% chance (on-chain: 200/10000)
+        reward: 40               // 40% of treasury
+    },
+    {
+        label: "METEORS",        // Tier 2: 15% of treasury
+        color: "#3b82f6",
+        gradient: "linear-gradient(135deg, #1e3a8a 0%, #3b82f6 40%, #1d4ed8 70%, #2563eb 100%)",
+        glowColor: "rgba(59, 130, 246, 0.4)",
+        percent: 7.5,            // 7.5% chance (on-chain: 750/10000)
+        reward: 15               // 15% of treasury
+    },
+    {
+        label: "COSMOS",         // Tier 3: 4% of treasury
+        color: "#10b981",
+        gradient: "linear-gradient(135deg, #065f46 0%, #10b981 40%, #059669 70%, #34d399 100%)",
+        glowColor: "rgba(16, 185, 129, 0.5)",
+        percent: 20,             // 20% chance (on-chain: 2000/10000)
+        reward: 4                // 4% of treasury
+    },
+    {
+        label: "VOID",           // Tier 4: 1% of treasury (most common)
+        color: "#94a3b8",
+        gradient: "linear-gradient(135deg, #334155 0%, #64748b 40%, #94a3b8 70%, #cbd5e1 100%)",
+        glowColor: "rgba(148, 163, 184, 0.3)",
+        percent: 70,             // 70% chance (on-chain: 7000/10000)
+        reward: 1                // 1% of treasury
     },
 ];
 
@@ -347,8 +356,10 @@ const DartboardWheel: React.FC<{
     let cumulativeAngle = 0;
 
     WHEEL_CONFIG.forEach((tier, ringIndex) => {
-        const ringOuterR = outerRadius - ringIndex * ringWidth;
-        const ringInnerR = outerRadius - (ringIndex + 1) * ringWidth;
+        // Reverse the order: tier 0 (SUPERNOVA) is innermost, tier 4 (STARDUST) is outermost
+        const reversedIndex = numRings - 1 - ringIndex;
+        const ringOuterR = outerRadius - reversedIndex * ringWidth;
+        const ringInnerR = outerRadius - (reversedIndex + 1) * ringWidth;
         const tierAngle = (tier.percent / TOTAL_PERCENT) * 360;
         const colorStart = cumulativeAngle;
         const colorEnd = cumulativeAngle + tierAngle;
@@ -540,7 +551,8 @@ const GalaxyWheelSection: React.FC<{
     treasuryBalance?: number;
     onFundTreasury?: (amount: number) => void;
     spinCost: number;
-}> = ({ available, spinning, onSpin, targetTier, onSpinFinish, isAdmin, treasuryBalance, onFundTreasury, spinCost }) => {
+    actualReward?: number; // Actual reward in lamports from transaction
+}> = ({ available, spinning, onSpin, targetTier, onSpinFinish, isAdmin, treasuryBalance, onFundTreasury, spinCost, actualReward }) => {
     const canSpin = available >= spinCost;
     const [fundAmount, setFundAmount] = React.useState("0.1");
 
@@ -551,15 +563,20 @@ const GalaxyWheelSection: React.FC<{
     const [showHighlight, setShowHighlight] = React.useState(false);
     const [currentTier, setCurrentTier] = React.useState<number | null>(null); // Tier being spun to (from demo or backend)
 
-    // Three-stage pointer animation state
-    type SpinPhase = 'idle' | 'accelerating' | 'constant' | 'decelerating';
+    // 5-Stage Deceleration Animation System
+    // Each stage runs at a reduced speed for a calculated duration
+    // Final stage precisely lands at target tier center
+    type SpinPhase = 'idle' | 'accelerating' | 'constant'
+        | 'decel_1' | 'decel_2' | 'decel_3' | 'decel_4' | 'decel_5';
     const [spinPhase, setSpinPhase] = React.useState<SpinPhase>('idle');
     const [pointerRotation, setPointerRotation] = React.useState(0);
     const [targetRotation, setTargetRotation] = React.useState(0);
     const animationRef = React.useRef<number | null>(null);
     const spinStartTime = React.useRef<number>(0);
     const constantSpinStartRotation = React.useRef<number>(0);
-    const hasStartedSpin = React.useRef<boolean>(false); // Tracks if we've started a spin for current spinning=true cycle
+    const hasStartedSpin = React.useRef<boolean>(false);
+    const phaseStartRotation = React.useRef<number>(0);
+    const pendingResultTier = React.useRef<number | null>(null); // Track tier for animation-synced reveal
 
     const isSpinning = spinPhase !== 'idle';
 
@@ -571,8 +588,12 @@ const GalaxyWheelSection: React.FC<{
 
     // Animation constants
     const ACCEL_DURATION = 800; // ms to accelerate
-    const BASE_SPEED = 720; // degrees per second at constant speed
-    const DECEL_DURATION = 2500; // ms to decelerate
+    const BASE_SPEED = 720; // degrees per second at constant speed (2 rotations/sec)
+
+    // 5-stage deceleration speeds (degrees per second) - progressively slower
+    const DECEL_SPEEDS = [540, 360, 180, 90, 36]; // 75%, 50%, 25%, 12.5%, 5% of base
+    // Duration per deceleration stage (except final which is calculated)
+    const DECEL_STAGE_DURATIONS = [600, 600, 800, 1000, 0]; // ms (last is calculated)
 
     // Determine tier based on random weighted selection
     const selectTierByProbability = (): number => {
@@ -585,7 +606,7 @@ const GalaxyWheelSection: React.FC<{
         return 0;
     };
 
-    // Calculate target rotation to land on a tier's colored zone
+    // Calculate target rotation to land on a tier's colored zone CENTER
     const getTargetAngleForTier = (tierIndex: number): number => {
         // Bounds check - clamp to valid tier index
         const safeIndex = Math.max(0, Math.min(tierIndex, WHEEL_CONFIG.length - 1));
@@ -594,8 +615,18 @@ const GalaxyWheelSection: React.FC<{
             cumulativeAngle += (WHEEL_CONFIG[i].percent / TOTAL_PERCENT) * 360;
         }
         const tierAngle = (WHEEL_CONFIG[safeIndex].percent / TOTAL_PERCENT) * 360;
-        const randomOffset = Math.random() * tierAngle;
-        return cumulativeAngle + randomOffset;
+        // Land in center of tier (with small random offset for variety)
+        const centerOffset = tierAngle / 2 + (Math.random() - 0.5) * (tierAngle * 0.3);
+        return cumulativeAngle + centerOffset;
+    };
+
+    // Calculate how much the wheel will travel in stages 1-4
+    const calculatePreFinalRotation = (): number => {
+        let rotation = 0;
+        for (let i = 0; i < 4; i++) {
+            rotation += DECEL_SPEEDS[i] * (DECEL_STAGE_DURATIONS[i] / 1000);
+        }
+        return rotation;
     };
 
     // Animation loop
@@ -605,33 +636,52 @@ const GalaxyWheelSection: React.FC<{
         if (spinPhase === 'accelerating') {
             // Ease-in: accelerate from 0 to base speed
             const progress = Math.min(elapsed / ACCEL_DURATION, 1);
-            const easeIn = progress * progress; // quadratic ease-in
+            const easeIn = progress * progress;
             const rotation = constantSpinStartRotation.current + (easeIn * BASE_SPEED * (ACCEL_DURATION / 1000));
             setPointerRotation(rotation);
 
             if (progress >= 1) {
-                // Transition to constant phase
                 setSpinPhase('constant');
                 spinStartTime.current = timestamp;
                 constantSpinStartRotation.current = rotation;
             }
         } else if (spinPhase === 'constant') {
-            // Constant speed spin
             const rotation = constantSpinStartRotation.current + (elapsed / 1000) * BASE_SPEED;
             setPointerRotation(rotation);
-        } else if (spinPhase === 'decelerating') {
-            // Ease-out: decelerate to target
-            const progress = Math.min(elapsed / DECEL_DURATION, 1);
-            const easeOut = 1 - Math.pow(1 - progress, 3); // cubic ease-out
-            const startRot = constantSpinStartRotation.current;
-            const rotation = startRot + (targetRotation - startRot) * easeOut;
+        } else if (spinPhase.startsWith('decel_')) {
+            const stageNum = parseInt(spinPhase.split('_')[1]) - 1; // 0-4
+            const speed = DECEL_SPEEDS[stageNum];
+            const duration = stageNum < 4 ? DECEL_STAGE_DURATIONS[stageNum] :
+                // Final stage: calculate duration to reach target
+                Math.max(0, (targetRotation - phaseStartRotation.current) / speed * 1000);
+
+            const progress = Math.min(elapsed / duration, 1);
+            const rotation = phaseStartRotation.current + (progress * speed * (duration / 1000));
             setPointerRotation(rotation);
 
             if (progress >= 1) {
-                // Animation complete
-                setSpinPhase('idle');
-                setPointerRotation(targetRotation);
-                return;
+                if (stageNum < 4) {
+                    // Move to next deceleration stage
+                    const nextPhase = `decel_${stageNum + 2}` as SpinPhase;
+                    phaseStartRotation.current = rotation;
+                    spinStartTime.current = timestamp;
+                    setSpinPhase(nextPhase);
+                } else {
+                    // Animation complete - trigger result reveal synchronously
+                    setSpinPhase('idle');
+                    setPointerRotation(targetRotation);
+
+                    // Show result immediately when animation finishes
+                    if (pendingResultTier.current !== null) {
+                        setShowHighlight(true);
+                        const safeTier = Math.max(0, Math.min(pendingResultTier.current, WHEEL_CONFIG.length - 1));
+                        setResult(WHEEL_CONFIG[safeTier]);
+                        setDemoActive(false); // Reset demo state
+                        onSpinFinish();
+                        pendingResultTier.current = null;
+                    }
+                    return;
+                }
             }
         }
 
@@ -644,11 +694,11 @@ const GalaxyWheelSection: React.FC<{
     React.useEffect(() => {
         if (spinPhase !== 'idle' && animationRef.current === null) {
             spinStartTime.current = performance.now();
-            animationRef.current = requestAnimationFrame(animate);
+            animationRef.current = window.requestAnimationFrame(animate);
         }
         return () => {
             if (animationRef.current) {
-                cancelAnimationFrame(animationRef.current);
+                window.cancelAnimationFrame(animationRef.current);
                 animationRef.current = null;
             }
         };
@@ -695,29 +745,24 @@ const GalaxyWheelSection: React.FC<{
         if (knownTier !== null) {
             // For demo, we already know the result - calculate target
             const target = getTargetAngleForTier(knownTier);
-            // Add some full rotations during decel
+            // Calculate pre-final rotation amount to set proper target
+            const preFinalRotation = calculatePreFinalRotation();
+            // Add full rotations + pre-final stages + extra for final stage
             const fullRotations = 3 + Math.floor(Math.random() * 2);
-            setTargetRotation(pointerRotation + (fullRotations * 360) + target);
+            setTargetRotation(pointerRotation + (fullRotations * 360) + preFinalRotation + target);
 
             // Schedule transition to decel after accel + brief constant
             setTimeout(() => {
                 if (animationRef.current) {
                     constantSpinStartRotation.current = pointerRotation + BASE_SPEED * (ACCEL_DURATION / 1000);
                 }
-                setSpinPhase('decelerating');
+                // Store the tier for animation-synced reveal
+                pendingResultTier.current = knownTier;
+                // Start 5-stage deceleration
+                phaseStartRotation.current = constantSpinStartRotation.current;
+                setSpinPhase('decel_1');
                 spinStartTime.current = performance.now();
-
-                // After decel, animations complete
-                setTimeout(() => {
-                    // Ray already showing, just add ring highlight
-                    setShowHighlight(true);
-
-                    // After 500ms, show result
-                    setTimeout(() => {
-                        setResult(WHEEL_CONFIG[knownTier]);
-                        setDemoActive(false);
-                    }, 500);
-                }, DECEL_DURATION);
+                // Result will be shown by animation loop when it completes
             }, ACCEL_DURATION + 500); // Brief constant spin
         }
     };
@@ -741,8 +786,8 @@ const GalaxyWheelSection: React.FC<{
 
         if (targetTier === null || !spinning) return;
 
-        // Already decelerating, don't interfere
-        if (spinPhase === 'decelerating') return;
+        // Already in any decel stage, don't interfere
+        if (spinPhase.startsWith('decel_')) return;
 
         // If still idle, we need to wait for it to start accelerating first
         if (spinPhase === 'idle') {
@@ -750,33 +795,29 @@ const GalaxyWheelSection: React.FC<{
             return;
         }
 
-        // If accelerating or constant, start decelerating to target
+        // If accelerating or constant, start 5-stage deceleration to target
         if (spinPhase === 'accelerating' || spinPhase === 'constant') {
-            console.log('[Wheel] Starting deceleration to tier:', targetTier);
+            console.log('[Wheel] Starting 5-stage deceleration to tier:', targetTier);
 
             const target = getTargetAngleForTier(targetTier);
             const currentRotation = pointerRotation;
+            // Calculate pre-final rotation amount
+            const preFinalRotation = calculatePreFinalRotation();
             const fullRotations = 3 + Math.floor(Math.random() * 2);
 
-            const targetRot = currentRotation + (fullRotations * 360) + target;
+            const targetRot = currentRotation + (fullRotations * 360) + preFinalRotation + target;
             setTargetRotation(targetRot);
-            constantSpinStartRotation.current = currentRotation;
 
-            setSpinPhase('decelerating');
+            // Store the tier for animation-synced reveal
+            pendingResultTier.current = targetTier;
+
+            // Start first decel stage
+            phaseStartRotation.current = currentRotation;
+            setSpinPhase('decel_1');
             spinStartTime.current = performance.now();
-            // Show ray immediately during deceleration
+            // Show ray during deceleration
             setShowRay(true);
-
-            setTimeout(() => {
-                // After decel, show ring highlight and result
-                setShowHighlight(true);
-
-                setTimeout(() => {
-                    const safeTier = Math.max(0, Math.min(targetTier, WHEEL_CONFIG.length - 1));
-                    setResult(WHEEL_CONFIG[safeTier]);
-                    onSpinFinish();
-                }, 500);
-            }, DECEL_DURATION);
+            // Result will be shown by the animation loop when it completes
         }
     }, [targetTier, spinning, spinPhase]);
 
@@ -953,7 +994,10 @@ const GalaxyWheelSection: React.FC<{
                     color: result.reward > 0 ? '#10b981' : '#64748b'
                 }}>
                     {result.reward > 0
-                        ? `🎉 ${result.label}! You won ${result.reward}% = ${treasuryBalance ? ((treasuryBalance * result.reward) / 100).toFixed(4) : '?'} SOL!`
+                        ? `🎉 ${result.label}! You won ${result.reward}% = ${actualReward !== undefined
+                            ? (actualReward / 1e9).toFixed(4)
+                            : (treasuryBalance ? ((treasuryBalance * result.reward) / 100).toFixed(4) : '?')
+                        } SOL!`
                         : `✨ ${result.label} — Better luck next time!`}
                 </div>
             )}
@@ -1015,7 +1059,7 @@ const GalaxyWheelSection: React.FC<{
                     <input
                         type="number"
                         value={fundAmount}
-                        onChange={(e) => setFundAmount(e.target.value)}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFundAmount(e.target.value)}
                         style={{ padding: '10px 12px', borderRadius: '8px', border: '1px solid #334155', background: '#0f172a', color: 'white', width: '80px', fontSize: '14px' }}
                     />
                     <button
@@ -1044,7 +1088,7 @@ const LeadersSection: React.FC<{
                     <th>#</th>
                     <th>Wallet</th>
                     <th>Stardust</th>
-                    <th style={{ color: '#fbbf24' }}>🏆 Won</th>
+                    <th style={{ color: '#fbbf24' }}>WINNING (SOL)</th>
                 </tr>
             </thead>
             <tbody>
@@ -1070,13 +1114,14 @@ const LeadersSection: React.FC<{
     </Section>
 );
 
-// Tier colors for history items
+// Tier colors for history items - MUST match WHEEL_CONFIG order:
+// 0=SUPERNOVA, 1=NEBULA, 2=METEORS, 3=COSMOS, 4=VOID
 const TIER_COLORS = [
-    { bg: 'rgba(251,191,36,0.2)', border: '#fbbf24', text: '#fbbf24', name: 'SUPERNOVA' },  // 0
-    { bg: 'rgba(168,85,247,0.2)', border: '#a855f7', text: '#a855f7', name: 'NEBULA' },     // 1
-    { bg: 'rgba(6,182,212,0.2)', border: '#06b6d4', text: '#06b6d4', name: 'STAR CLUSTER' }, // 2
-    { bg: 'rgba(59,130,246,0.2)', border: '#3b82f6', text: '#3b82f6', name: 'COSMOS' },     // 3
-    { bg: 'rgba(100,116,139,0.15)', border: '#64748b', text: '#94a3b8', name: 'STARDUST' }, // 4
+    { bg: 'rgba(251,191,36,0.2)', border: '#fbbf24', text: '#fbbf24', name: 'SUPERNOVA' },     // 0 - 0.5%, 100% reward
+    { bg: 'rgba(168,85,247,0.2)', border: '#a855f7', text: '#a855f7', name: 'NEBULA' },        // 1 - 2%, 40% reward
+    { bg: 'rgba(59,130,246,0.2)', border: '#3b82f6', text: '#3b82f6', name: 'METEORS' },       // 2 - 7.5%, 15% reward
+    { bg: 'rgba(16,185,129,0.2)', border: '#10b981', text: '#10b981', name: 'COSMOS' },        // 3 - 20%, 4% reward
+    { bg: 'rgba(148,163,184,0.15)', border: '#94a3b8', text: '#94a3b8', name: 'VOID' },         // 4 - 70%, 1% reward
 ];
 
 // History Section
@@ -1090,8 +1135,9 @@ const HistorySection: React.FC<{ winners: WinnerEntry[] }> = ({ winners }) => (
             {winners.length === 0 ? (
                 <div className="empty">No spins yet. Be the first!</div>
             ) : winners.map((w, i) => {
-                const tierIdx = w.tier ?? 4; // Default to STARDUST
-                const tierStyle = TIER_COLORS[tierIdx] || TIER_COLORS[4];
+                // Clamp tier to valid range 0-4 (SUPERNOVA, NEBULA, METEORS, COSMOS, VOID)
+                const tierIdx = Math.max(0, Math.min(w.tier ?? 4, TIER_COLORS.length - 1));
+                const tierStyle = TIER_COLORS[tierIdx];
                 const isNew = i === 0;
                 return (
                     <div
@@ -1145,6 +1191,7 @@ function App() {
     const [toasts, setToasts] = useState<Toast[]>([]);
     const [treasuryBalance, setTreasuryBalance] = useState<number>(0);
     const [gxyPrice, setGxyPrice] = useState<number>(0.02); // Default fallback price
+    const [actualReward, setActualReward] = useState<number | undefined>(undefined);
 
     // Ref to store pending spin result (shown after wheel finishes)
     const pendingSpinResult = React.useRef<{ tier: number, reward: number, signature: string } | null>(null);
@@ -1378,7 +1425,7 @@ function App() {
                 wallet: w.wallet,
                 amount: w.rewardAmount / 1e9,
                 timestamp: w.timestamp,
-                tier: w.tier, // 0=SUPERNOVA, 1=NEBULA, 2=STAR CLUSTER, 3=COSMOS, 4=STARDUST
+                tier: w.tier, // 0=SUPERNOVA, 1=NEBULA, 2=METEORS, 3=COSMOS, 4=VOID
             })) || []);
         } catch (e) {
             console.error('Fetch winners failed:', e);
@@ -1795,6 +1842,7 @@ function App() {
 
             // Store result to show toast AFTER wheel stops (in onSpinFinish)
             pendingSpinResult.current = { tier, reward, signature };
+            setActualReward(reward); // Pass actual reward to wheel for display
 
             // Record spin in backend for history display
             // Backend verifies transaction on-chain and parses tier/reward from logs
@@ -1862,7 +1910,7 @@ function App() {
                                 // Show result toast now that wheel has finished
                                 if (pendingSpinResult.current) {
                                     const { tier, reward, signature } = pendingSpinResult.current;
-                                    const tierNames = ["VOID 🌑", "METEOR ☄️", "NEBULA 🌌", "SUPERNOVA �"];
+                                    const tierNames = ["SUPERNOVA ⭐", "NEBULA 🌌", "METEORS 💫", "COSMOS 🌍", "VOID ✨"];
                                     const rewardSol = reward / 1e9;
                                     const tierName = tierNames[tier] || `Tier ${tier}`;
                                     addToast('success', `🎉 ${tierName}! You won ${rewardSol.toFixed(4)} SOL!`, signature);
@@ -1871,8 +1919,10 @@ function App() {
                                     // Refresh winners list after spin
                                     fetchWinners();
                                 }
+                                setActualReward(undefined); // Reset for next spin
                             }}
                             spinCost={SPIN_COST}
+                            actualReward={actualReward}
                             isAdmin={isAdmin}
                             treasuryBalance={treasuryBalance}
                             onFundTreasury={async (amount) => {
