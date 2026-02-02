@@ -378,10 +378,9 @@ async function updateEarnings() {
             'fetch_gxy_price'
         );
 
-        // Calculate rate: price_usd stardust per token per hour, divided by 60 for per-minute
-        // Stardust has 9 decimals, so multiply by 1e9
-        // But we run every minute, so rate = (price / 60) * 1e9
-        const stardustRatePerTokenPerMinute = (gxyPriceUsd / 60) * 1e9;
+        // Calculate rate: 1 stardust per 1 USD worth of token PER MINUTE.
+        // This is 60x faster than previous "per hour" rate, matching user expectation of getting 9 stardust/min for $9 holding.
+        const stardustRatePerTokenPerMinute = gxyPriceUsd * 1e9;
 
         // Update test users from config
         for (const user of config.testUsers) {
