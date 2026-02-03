@@ -489,16 +489,21 @@ function createSignatureData(
 }
 
 // Initialize
+const SOLANA_RPC_URL = process.env.SOLANA_RPC;
+if (!SOLANA_RPC_URL) {
+    console.error("❌ SOLANA_RPC environment variable is required!");
+    console.error("   Make sure .config.toml has SOLANA_RPC defined and bgr is running.");
+    process.exit(1);
+}
+
 try {
     config = loadConfig();
     const secretKeyBytes = Buffer.from(config.authority.secretKey, "base64");
     authority = Keypair.fromSecretKey(new Uint8Array(secretKeyBytes));
-    connection = new Connection(
-        process.env.SOLANA_RPC || "https://mainnet.helius-rpc.com/?api-key=093c9b83-eb11-418c-8aeb-b96bf06c848e",
-        "confirmed"
-    );
+    connection = new Connection(SOLANA_RPC_URL, "confirmed");
 
     console.log("✅ Loaded config from local-config.json");
+    console.log(`   RPC: ${SOLANA_RPC_URL.replace(/api-key=[^&]+/, 'api-key=***')}`);
     console.log(`   Authority: ${authority.publicKey.toBase58()}`);
     console.log(`   Star Token: ${config.starTokenMint}`);
     console.log(`   Stardust Mint: ${config.stardustMint}`);
@@ -599,7 +604,7 @@ async function handler(req: Request): Promise<Response | null> {
             stardustMint: config.stardustMint,
             statePda: config.statePda,
             starTokenMint: config.starTokenMint,
-            rpcUrl: process.env.SOLANA_RPC || "https://mainnet.helius-rpc.com/?api-key=15319bf4-5b40-4958-ac8d-6313aa55eb92",
+            rpcUrl: SOLANA_RPC_URL,
         });
     }
 

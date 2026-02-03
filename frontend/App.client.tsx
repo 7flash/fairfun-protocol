@@ -1467,9 +1467,12 @@ function App() {
             console.log('Backend signature data:', sigData);
 
             // 2. Build the transaction
-            // Use RPC URL from config (loaded from backend's environment)
-            const rpcUrl = config.rpcUrl || 'https://mainnet.helius-rpc.com/?api-key=093c9b83-eb11-418c-8aeb-b96bf06c848e';
-            const connection = new Connection(rpcUrl, {
+            // Use RPC URL from config (required - comes from backend's SOLANA_RPC env)
+            if (!config.rpcUrl) {
+                addToast('error', 'Configuration error: RPC URL not available. Please refresh the page.');
+                return;
+            }
+            const connection = new Connection(config.rpcUrl, {
                 commitment: 'confirmed',
                 wsEndpoint: undefined, // Disable WebSocket, use HTTP polling
             });
@@ -1604,10 +1607,13 @@ function App() {
         const toastId = addToast('pending', '⏳ Preparing spin transaction...');
 
         try {
-            // Use RPC URL from config
-            const rpcUrl = config?.rpcUrl || 'https://mainnet.helius-rpc.com/?api-key=093c9b83-eb11-418c-8aeb-b96bf06c848e';
-            console.log("Using RPC URL:", rpcUrl);
-            const connection = new Connection(rpcUrl, "confirmed");
+            // Use RPC URL from config (required - comes from backend's SOLANA_RPC env)
+            if (!config?.rpcUrl) {
+                addToast('error', 'Configuration error: RPC URL not available. Please refresh the page.');
+                return;
+            }
+            console.log("Using RPC URL:", config.rpcUrl);
+            const connection = new Connection(config.rpcUrl, "confirmed");
             const userPubkey = new PublicKey(publicKey);
             const wheelProgramId = new PublicKey(WHEEL_PROGRAM_ID);
 
