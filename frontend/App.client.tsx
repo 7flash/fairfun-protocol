@@ -467,7 +467,9 @@ const DartboardWheel: React.FC<{
             ))}
             {/* Radial reward labels on each ring - arc text in dark space area */}
             {WHEEL_CONFIG.map((tier, idx) => {
-                const ringMidRadius = outerRadius - idx * ringWidth - ringWidth / 2;
+                // Reverse index match segments: 0 (Supernova) is innermost
+                const reversedIndex = numRings - 1 - idx;
+                const ringMidRadius = outerRadius - reversedIndex * ringWidth - ringWidth / 2;
 
                 // Calculate SOL value based on treasury
                 const solValue = tier.reward > 0 ? (treasuryBalance * tier.reward / 100) : 0;
@@ -1024,7 +1026,7 @@ const GalaxyWheelSection: React.FC<{
                     transition: 'all 0.2s ease'
                 }}
             >
-                {isSpinning ? '✨ SPINNING...' : '🚀 SPIN THE WHEEL'}
+                {isSpinning ? '✨ SPINNING...' : '🚀 SPIN IT NOW!!!'}
             </button>
 
             {/* Demo button - subtle */}
