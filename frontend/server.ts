@@ -13,7 +13,7 @@ let wheelDemoScriptPath: string;
 
 async function init() {
   console.log("Initializing frontend build...");
-  scriptPath = await buildScript("./AppV2.client.tsx", true);
+  scriptPath = await buildScript("./App.client.tsx", true);
   stylePath = await buildStyle("./App.css");
   adminScriptPath = await buildScript("./Admin.client.tsx", true);
   wheelDemoScriptPath = await buildScript("./WheelDemoClient.tsx", true);
