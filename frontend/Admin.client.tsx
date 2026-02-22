@@ -1,330 +1,398 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { createRoot } from "react-dom/client";
-import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
 
-// Config
-const WHEEL_PROGRAM_ID = new PublicKey("3M12BfitAEYz14WJBMnjahEuSvhsWhjfGJXbzur26o2U");
-const AUTHORITY_PUBKEY = "77cQ99WQ2FWQT19kgpN2a9CfgYSfDqpomNVGtyYUrpAY";
-const RPC_URL = "https://mainnet.helius-rpc.com/?api-key=093c9b83-eb11-418c-8aeb-b96bf06c848e";
+const API_BASE = "http://localhost:3005";
 
-// PDAs
-const [STATE_PDA] = PublicKey.findProgramAddressSync([Buffer.from("wheel_state")], WHEEL_PROGRAM_ID);
-const [POOL_PDA] = PublicKey.findProgramAddressSync([Buffer.from("wheel_pool")], WHEEL_PROGRAM_ID);
-
-interface WheelState {
-    authority: string;
-    stardustMint: string;
-    costPerSpin: number;
-    numTiers: number;
-    probabilities: number[];
-    rewardBps: number[];
-    totalSpins: number;
-    totalDistributed: number;
+// ============================================
+// TYPES
+// ============================================
+interface SpinResult {
+    success: boolean;
+    spinNumber: number;
+    wallet: string;
+    walletShort: string;
+    tier: number;
+    tierName: string;
+    rewardAmount: number;
+    rewardFormatted: string;
+    probabilities: string[];
+    stardustTotal: string;
+    txSignature: string;
+    queuePosition: number;
+    nextHolder: string;
 }
 
+interface QueueEntry {
+    position: number;
+    wallet: string;
+    walletShort: string;
+    lifetimeEarned: string;
+    starBalance: string;
+    isCurrent: boolean;
+}
+
+interface WheelConfig {
+    tiers: { name: string; reward: number; rewardFormatted: string; baseProbability: string }[];
+    poolBalance: number;
+    poolBalanceFormatted: string;
+    totalSpins: number;
+    totalDistributed: number;
+    totalDistributedFormatted: string;
+    queueLength: number;
+    currentIndex: number;
+}
+
+interface HistoryEntry {
+    wallet: string;
+    walletShort: string;
+    rewardTier: number;
+    rewardAmount: number;
+    rewardFormatted: string;
+    tierName: string;
+    timeAgo: string;
+    stardustTotal: string;
+}
+
+const TIER_COLORS = ["#94a3b8", "#3b82f6", "#a855f7", "#f97316", "#fbbf24"];
+const TIER_EMOJIS = ["⬛", "☄️", "🌌", "✨", "💥"];
+
+// ============================================
+// ADMIN PAGE
+// ============================================
 function AdminPage() {
-    const [connected, setConnected] = useState(false);
-    const [publicKey, setPublicKey] = useState<string | null>(null);
-    const [phantomWallet, setPhantomWallet] = useState<any>(null);
-    const [unauthorized, setUnauthorized] = useState(false);
-
-    const [wheelState, setWheelState] = useState<WheelState | null>(null);
-    const [poolBalance, setPoolBalance] = useState(0);
-    const [loading, setLoading] = useState(true);
-
-    const [fundAmount, setFundAmount] = useState("0.1");
-    const [newSpinCost, setNewSpinCost] = useState("1000");
+    const [config, setConfig] = useState<WheelConfig | null>(null);
+    const [queue, setQueue] = useState<QueueEntry[]>([]);
+    const [history, setHistory] = useState<HistoryEntry[]>([]);
+    const [lastSpin, setLastSpin] = useState<SpinResult | null>(null);
+    const [spinning, setSpinning] = useState(false);
+    const [autoSpin, setAutoSpin] = useState(false);
+    const [autoSpinInterval, setAutoSpinInterval] = useState(3); // seconds between spins
+    const [fundAmount, setFundAmount] = useState("1");
     const [status, setStatus] = useState("");
 
-    // Connect wallet
-    const handleConnect = async () => {
+    // Fetch config
+    const fetchConfig = useCallback(async () => {
         try {
-            const phantom = (window as any).phantom?.solana;
-            if (!phantom) {
-                alert("Please install Phantom wallet");
-                return;
-            }
-            const { publicKey } = await phantom.connect();
-            const pubkeyStr = publicKey.toString();
-            setPublicKey(pubkeyStr);
-            setPhantomWallet(phantom);
-            setConnected(true);
-
-            // Check if authorized
-            if (pubkeyStr !== AUTHORITY_PUBKEY) {
-                setUnauthorized(true);
-            }
-        } catch (e) {
-            console.error(e);
-        }
-    };
-
-    // Fetch wheel state
-    const fetchWheelState = async () => {
-        try {
-            const connection = new Connection(RPC_URL, "confirmed");
-
-            // Get pool balance
-            const balance = await connection.getBalance(POOL_PDA);
-            setPoolBalance(balance / LAMPORTS_PER_SOL);
-
-            // Get wheel state account
-            const stateInfo = await connection.getAccountInfo(STATE_PDA);
-            if (!stateInfo) {
-                setWheelState(null);
-                setLoading(false);
-                return;
-            }
-
-            // Parse state (skip 8 byte discriminator)
-            const data = stateInfo.data;
-            let offset = 8;
-
-            const authority = new PublicKey(data.slice(offset, offset + 32)).toBase58();
-            offset += 32;
-
-            const stardustMint = new PublicKey(data.slice(offset, offset + 32)).toBase58();
-            offset += 32;
-
-            const costPerSpin = Number(data.readBigUInt64LE(offset)) / 1e9;
-            offset += 8;
-
-            const numTiers = data.readUInt8(offset);
-            offset += 1;
-
-            const probabilities: number[] = [];
-            for (let i = 0; i < 10; i++) {
-                probabilities.push(data.readUInt16LE(offset));
-                offset += 2;
-            }
-
-            const rewardBps: number[] = [];
-            for (let i = 0; i < 10; i++) {
-                rewardBps.push(data.readUInt16LE(offset));
-                offset += 2;
-            }
-
-            const totalSpins = Number(data.readBigUInt64LE(offset));
-            offset += 8;
-
-            const totalDistributed = Number(data.readBigUInt64LE(offset)) / LAMPORTS_PER_SOL;
-
-            setWheelState({
-                authority,
-                stardustMint,
-                costPerSpin,
-                numTiers,
-                probabilities: probabilities.slice(0, numTiers),
-                rewardBps: rewardBps.slice(0, numTiers),
-                totalSpins,
-                totalDistributed,
-            });
-
-            setNewSpinCost(costPerSpin.toString());
-            setLoading(false);
-        } catch (e) {
-            console.error("Failed to fetch wheel state:", e);
-            setLoading(false);
-        }
-    };
-
-    useEffect(() => {
-        fetchWheelState();
-        const interval = setInterval(fetchWheelState, 10000);
-        return () => clearInterval(interval);
+            const res = await fetch(`${API_BASE}/api/wheel/config`);
+            const data = await res.json();
+            setConfig(data);
+        } catch (e) { /* ignore */ }
     }, []);
 
-    // Fund treasury
-    const handleFundTreasury = async () => {
-        if (!phantomWallet || !publicKey) return;
-
-        setStatus("Funding treasury...");
+    // Fetch queue
+    const fetchQueue = useCallback(async () => {
         try {
-            const connection = new Connection(RPC_URL, "confirmed");
-            const amountLamports = BigInt(Math.floor(parseFloat(fundAmount) * LAMPORTS_PER_SOL));
+            const res = await fetch(`${API_BASE}/api/admin/queue`);
+            const data = await res.json();
+            setQueue(data.queue);
+        } catch (e) { /* ignore */ }
+    }, []);
 
-            // Discriminator for fund_pool: sha256("global:fund_pool")[:8]
-            const discriminator = Buffer.from([0x24, 0x39, 0xe9, 0xb0, 0xb5, 0x14, 0x57, 0x9f]);
+    // Fetch history
+    const fetchHistory = useCallback(async () => {
+        try {
+            const res = await fetch(`${API_BASE}/api/wheel/history?limit=30`);
+            const data = await res.json();
+            setHistory(data.spins);
+        } catch (e) { /* ignore */ }
+    }, []);
 
-            const data = Buffer.alloc(8 + 8);
-            discriminator.copy(data, 0);
-            data.writeBigUInt64LE(amountLamports, 8);
-
-            const fundIx = new TransactionInstruction({
-                programId: WHEEL_PROGRAM_ID,
-                keys: [
-                    { pubkey: POOL_PDA, isSigner: false, isWritable: true },
-                    { pubkey: new PublicKey(publicKey), isSigner: true, isWritable: true },
-                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                ],
-                data,
-            });
-
-            const tx = new Transaction().add(fundIx);
-            const { blockhash } = await connection.getLatestBlockhash();
-            tx.recentBlockhash = blockhash;
-            tx.feePayer = new PublicKey(publicKey);
-
-            const { signature } = await phantomWallet.signAndSendTransaction(tx);
-            await connection.confirmTransaction(signature, "confirmed");
-
-            setStatus(`✅ Funded! TX: ${signature.slice(0, 20)}...`);
-            fetchWheelState();
+    // Spin next
+    const spinNext = useCallback(async () => {
+        setSpinning(true);
+        try {
+            const res = await fetch(`${API_BASE}/api/admin/spin-next`, { method: "POST" });
+            const data = await res.json();
+            if (data.success) {
+                setLastSpin(data);
+                setStatus("");
+                // Refresh data
+                fetchConfig();
+                fetchQueue();
+                fetchHistory();
+            } else {
+                setStatus(`❌ ${data.error}`);
+                setAutoSpin(false); // stop auto-spin on error
+            }
         } catch (e: any) {
             setStatus(`❌ Error: ${e.message}`);
+            setAutoSpin(false);
+        }
+        setSpinning(false);
+    }, [fetchConfig, fetchQueue, fetchHistory]);
+
+    // Fund pool
+    const handleFundPool = async () => {
+        try {
+            const res = await fetch(`${API_BASE}/api/admin/fund-pool`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ amount: parseFloat(fundAmount) }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                setStatus(`✅ Added ${fundAmount} SOL to pool`);
+                fetchConfig();
+            } else {
+                setStatus(`❌ ${data.error}`);
+            }
+        } catch (e: any) {
+            setStatus(`❌ ${e.message}`);
         }
     };
 
-    // Update spin cost
-    const handleUpdateSpinCost = async () => {
-        if (!phantomWallet || !publicKey) return;
-
-        setStatus("Updating spin cost...");
-        try {
-            const connection = new Connection(RPC_URL, "confirmed");
-            const costLamports = BigInt(Math.floor(parseFloat(newSpinCost) * 1e9));
-
-            // Discriminator for set_spin_cost: sha256("global:set_spin_cost")[:8]
-            const discriminator = Buffer.from([0xd0, 0x2d, 0xd5, 0x5f, 0xd6, 0x1f, 0x55, 0x2f]);
-
-            const data = Buffer.alloc(8 + 8);
-            discriminator.copy(data, 0);
-            data.writeBigUInt64LE(costLamports, 8);
-
-            const ix = new TransactionInstruction({
-                programId: WHEEL_PROGRAM_ID,
-                keys: [
-                    { pubkey: STATE_PDA, isSigner: false, isWritable: true },
-                    { pubkey: new PublicKey(publicKey), isSigner: true, isWritable: false },
-                ],
-                data,
-            });
-
-            const tx = new Transaction().add(ix);
-            const { blockhash } = await connection.getLatestBlockhash();
-            tx.recentBlockhash = blockhash;
-            tx.feePayer = new PublicKey(publicKey);
-
-            const { signature } = await phantomWallet.signAndSendTransaction(tx);
-            await connection.confirmTransaction(signature, "confirmed");
-
-            setStatus(`✅ Spin cost updated! TX: ${signature.slice(0, 20)}...`);
-            fetchWheelState();
-        } catch (e: any) {
-            setStatus(`❌ Error: ${e.message}`);
-        }
+    // Reset queue
+    const handleResetQueue = async () => {
+        const res = await fetch(`${API_BASE}/api/admin/reset-queue`, { method: "POST" });
+        const data = await res.json();
+        setStatus(`Queue reset — ${data.queueLength} holders`);
+        fetchQueue();
+        fetchConfig();
     };
 
-    if (unauthorized) {
-        return (
-            <div style={{ padding: 40, fontFamily: "monospace", background: "#0f1419", color: "#fff", minHeight: "100vh" }}>
-                <h1>🚫 Unauthorized</h1>
-                <p>Connected wallet: {publicKey}</p>
-                <p>Required authority: {AUTHORITY_PUBKEY}</p>
-            </div>
-        );
-    }
+    // Initial fetch
+    useEffect(() => {
+        fetchConfig();
+        fetchQueue();
+        fetchHistory();
+        const interval = setInterval(() => {
+            fetchConfig();
+            fetchHistory();
+        }, 5000);
+        return () => clearInterval(interval);
+    }, [fetchConfig, fetchQueue, fetchHistory]);
+
+    // Auto-spin loop
+    useEffect(() => {
+        if (!autoSpin) return;
+        const interval = setInterval(spinNext, autoSpinInterval * 1000);
+        return () => clearInterval(interval);
+    }, [autoSpin, autoSpinInterval, spinNext]);
 
     return (
-        <div style={{ padding: 40, fontFamily: "system-ui", background: "#0f1419", color: "#fff", minHeight: "100vh" }}>
-            <h1>🎡 Galaxy Wheel Admin</h1>
+        <div style={{ padding: 24, fontFamily: "system-ui, -apple-system", background: "#0a0e17", color: "#e2e8f0", minHeight: "100vh" }}>
+            {/* Header */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
+                <h1 style={{ margin: 0, fontSize: 28, background: "linear-gradient(135deg, #fbbf24, #f59e0b)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+                    🎰 Galaxy Wheel — Admin Control
+                </h1>
+                {config && (
+                    <div style={{ textAlign: "right", fontSize: 13, color: "#94a3b8" }}>
+                        <div>Pool: <span style={{ color: "#fbbf24", fontWeight: "bold" }}>{config.poolBalanceFormatted}</span></div>
+                        <div>Spins: {config.totalSpins} · Distributed: {config.totalDistributedFormatted}</div>
+                        <div>Queue: {config.queueLength} holders · Position: {config.currentIndex + 1}/{config.queueLength}</div>
+                    </div>
+                )}
+            </div>
 
-            {!connected ? (
-                <button onClick={handleConnect} style={buttonStyle}>Connect Wallet</button>
-            ) : (
-                <div style={{ marginBottom: 20, color: "#22c55e" }}>✅ Connected: {publicKey?.slice(0, 8)}...</div>
-            )}
+            {/* Main Grid */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
 
-            {loading ? (
-                <p>Loading...</p>
-            ) : wheelState ? (
-                <>
+                {/* Left Column: Spin Controls */}
+                <div>
+                    {/* Spin Button */}
                     <div style={cardStyle}>
-                        <h2>📊 Current State</h2>
-                        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                            <tbody>
-                                <tr style={rowStyle}><td>Authority</td><td>{wheelState.authority.slice(0, 12)}...</td></tr>
-                                <tr style={rowStyle}><td>Spin Cost</td><td>{wheelState.costPerSpin.toLocaleString()} stardust</td></tr>
-                                <tr style={rowStyle}><td>Treasury Balance</td><td style={{ color: "#fbbf24", fontWeight: "bold" }}>{poolBalance.toFixed(4)} SOL</td></tr>
-                                <tr style={rowStyle}><td>Total Spins</td><td>{wheelState.totalSpins.toLocaleString()}</td></tr>
-                                <tr style={rowStyle}><td>Total Distributed</td><td>{wheelState.totalDistributed.toFixed(4)} SOL</td></tr>
-                            </tbody>
-                        </table>
+                        <h2 style={{ marginTop: 0, fontSize: 18 }}>🎡 Spin Controls</h2>
+                        <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+                            <button
+                                onClick={spinNext}
+                                disabled={spinning}
+                                style={{
+                                    ...buttonStyle,
+                                    opacity: spinning ? 0.6 : 1,
+                                    flex: 1,
+                                    fontSize: 16,
+                                    padding: "12px 20px",
+                                }}
+                            >
+                                {spinning ? "⏳ Spinning..." : "🎰 Spin Next Holder"}
+                            </button>
+                            <button
+                                onClick={() => setAutoSpin(!autoSpin)}
+                                style={{
+                                    ...buttonStyle,
+                                    background: autoSpin ? "linear-gradient(135deg, #ef4444, #dc2626)" : "linear-gradient(135deg, #22c55e, #16a34a)",
+                                    flex: 1,
+                                }}
+                            >
+                                {autoSpin ? "⏹ Stop Auto-Spin" : "▶️ Auto-Spin"}
+                            </button>
+                        </div>
+                        {autoSpin && (
+                            <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, color: "#94a3b8" }}>
+                                <span>Interval:</span>
+                                <input
+                                    type="number"
+                                    value={autoSpinInterval}
+                                    onChange={e => setAutoSpinInterval(Math.max(1, parseInt(e.target.value) || 3))}
+                                    style={{ ...inputStyle, width: 60 }}
+                                    min={1}
+                                />
+                                <span>seconds</span>
+                                <span style={{ marginLeft: "auto", color: "#22c55e", animation: "pulse 1s infinite" }}>● LIVE</span>
+                            </div>
+                        )}
+
+                        <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+                            <button onClick={handleResetQueue} style={{ ...smallButton, background: "#374151" }}>🔄 Reset Queue</button>
+                        </div>
                     </div>
 
-                    <div style={cardStyle}>
-                        <h2>🎯 Tier Configuration ({wheelState.numTiers} tiers)</h2>
-                        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                            <thead>
-                                <tr style={rowStyle}>
-                                    <th>Tier</th>
-                                    <th>Probability</th>
-                                    <th>Reward</th>
-                                    <th>Current Value</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {wheelState.probabilities.map((prob, i) => (
-                                    <tr key={i} style={rowStyle}>
-                                        <td>{i}</td>
-                                        <td>{(prob / 100).toFixed(1)}%</td>
-                                        <td>{(wheelState.rewardBps[i] / 100).toFixed(1)}% of treasury</td>
-                                        <td style={{ color: "#22c55e" }}>{((poolBalance * wheelState.rewardBps[i]) / 10000).toFixed(4)} SOL</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-
-                    {connected && (
-                        <>
-                            <div style={cardStyle}>
-                                <h2>💰 Fund Treasury</h2>
-                                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                                    <input
-                                        type="number"
-                                        value={fundAmount}
-                                        onChange={e => setFundAmount(e.target.value)}
-                                        style={inputStyle}
-                                        step="0.1"
-                                    />
-                                    <span>SOL</span>
-                                    <button onClick={handleFundTreasury} style={buttonStyle}>Fund Treasury</button>
-                                </div>
+                    {/* Last Spin Result */}
+                    {lastSpin && (
+                        <div style={{
+                            ...cardStyle,
+                            border: `2px solid ${TIER_COLORS[lastSpin.tier]}`,
+                            boxShadow: `0 0 20px ${TIER_COLORS[lastSpin.tier]}40`,
+                        }}>
+                            <h2 style={{ marginTop: 0, fontSize: 18 }}>
+                                {TIER_EMOJIS[lastSpin.tier]} Last Spin #{lastSpin.spinNumber}
+                            </h2>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 14 }}>
+                                <div>Holder: <span style={{ color: "#94a3b8", fontFamily: "monospace" }}>{lastSpin.walletShort}</span></div>
+                                <div>Tier: <span style={{ color: TIER_COLORS[lastSpin.tier], fontWeight: "bold" }}>{lastSpin.tierName}</span></div>
+                                <div>Reward: <span style={{ color: "#22c55e", fontWeight: "bold" }}>{lastSpin.rewardFormatted}</span></div>
+                                <div>Stardust: {BigInt(lastSpin.stardustTotal) > 0n ? (Number(BigInt(lastSpin.stardustTotal)) / 1e9).toFixed(0) : "0"}</div>
+                                <div>Probabilities: <span style={{ fontSize: 11, color: "#94a3b8" }}>{lastSpin.probabilities.join(", ")}</span></div>
+                                <div>Next: <span style={{ fontFamily: "monospace" }}>{lastSpin.nextHolder}</span></div>
                             </div>
-
-                            <div style={cardStyle}>
-                                <h2>⚙️ Update Spin Cost</h2>
-                                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                                    <input
-                                        type="number"
-                                        value={newSpinCost}
-                                        onChange={e => setNewSpinCost(e.target.value)}
-                                        style={inputStyle}
-                                        step="100"
-                                    />
-                                    <span>stardust</span>
-                                    <button onClick={handleUpdateSpinCost} style={buttonStyle}>Update Cost</button>
-                                </div>
+                            <div style={{ marginTop: 8, fontSize: 11, color: "#6b7280" }}>
+                                TX: <a
+                                    href={`https://solscan.io/tx/${lastSpin.txSignature}`}
+                                    target="_blank"
+                                    rel="noopener"
+                                    style={{ color: "#60a5fa", textDecoration: "underline" }}
+                                >{lastSpin.txSignature.slice(0, 20)}...</a>
                             </div>
-                        </>
+                        </div>
                     )}
 
-                    {status && <div style={{ marginTop: 20, padding: 10, background: "#1a202c", borderRadius: 8 }}>{status}</div>}
-                </>
-            ) : (
-                <p>Wheel not initialized</p>
-            )}
+                    {/* Fund Pool */}
+                    <div style={cardStyle}>
+                        <h2 style={{ marginTop: 0, fontSize: 18 }}>💰 Fund Pool</h2>
+                        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                            <input
+                                type="number"
+                                value={fundAmount}
+                                onChange={e => setFundAmount(e.target.value)}
+                                style={inputStyle}
+                                step="0.1"
+                            />
+                            <span style={{ color: "#94a3b8" }}>SOL</span>
+                            <button onClick={handleFundPool} style={buttonStyle}>Add to Pool</button>
+                        </div>
+                    </div>
 
-            <div style={{ marginTop: 40, fontSize: 12, color: "#6b7280" }}>
-                <p>Program ID: {WHEEL_PROGRAM_ID.toBase58()}</p>
-                <p>State PDA: {STATE_PDA.toBase58()}</p>
-                <p>Pool PDA: {POOL_PDA.toBase58()}</p>
+                    {/* Tier Config */}
+                    {config && (
+                        <div style={cardStyle}>
+                            <h2 style={{ marginTop: 0, fontSize: 18 }}>🎯 Tier Configuration</h2>
+                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                                <thead>
+                                    <tr style={rowStyle}>
+                                        <th style={{ textAlign: "left", padding: "6px 0" }}>Tier</th>
+                                        <th>Base Prob</th>
+                                        <th>Reward</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {config.tiers.map((tier, i) => (
+                                        <tr key={i} style={rowStyle}>
+                                            <td style={{ padding: "6px 0" }}>
+                                                <span style={{ color: TIER_COLORS[i] }}>{TIER_EMOJIS[i]} {tier.name}</span>
+                                            </td>
+                                            <td style={{ textAlign: "center" }}>{tier.baseProbability}</td>
+                                            <td style={{ textAlign: "center", color: "#22c55e" }}>{tier.rewardFormatted}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+
+                {/* Right Column: Queue & History */}
+                <div>
+                    {/* Holder Queue */}
+                    <div style={cardStyle}>
+                        <h2 style={{ marginTop: 0, fontSize: 18 }}>📋 Holder Queue ({queue.length} shown)</h2>
+                        <div style={{ maxHeight: 300, overflowY: "auto" }}>
+                            {queue.length === 0 ? (
+                                <p style={{ color: "#6b7280", fontSize: 13 }}>No holders in queue. Register wallets first.</p>
+                            ) : (
+                                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                                    <thead>
+                                        <tr style={rowStyle}>
+                                            <th style={{ textAlign: "left", padding: "4px 0" }}>#</th>
+                                            <th style={{ textAlign: "left" }}>Wallet</th>
+                                            <th>Stardust</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {queue.map((entry, i) => (
+                                            <tr key={i} style={{
+                                                ...rowStyle,
+                                                background: entry.isCurrent ? "#fbbf2420" : "transparent",
+                                                fontWeight: entry.isCurrent ? "bold" : "normal",
+                                            }}>
+                                                <td style={{ padding: "4px 0" }}>
+                                                    {entry.isCurrent ? "▶" : entry.position + 1}
+                                                </td>
+                                                <td style={{ fontFamily: "monospace" }}>{entry.walletShort}</td>
+                                                <td style={{ textAlign: "center", fontSize: 11 }}>
+                                                    {BigInt(entry.lifetimeEarned) > 0n ? (Number(BigInt(entry.lifetimeEarned)) / 1e9).toFixed(0) : "0"}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Spin History */}
+                    <div style={cardStyle}>
+                        <h2 style={{ marginTop: 0, fontSize: 18 }}>📜 Recent Spins</h2>
+                        <div style={{ maxHeight: 400, overflowY: "auto" }}>
+                            {history.length === 0 ? (
+                                <p style={{ color: "#6b7280", fontSize: 13 }}>No spins yet. Click "Spin Next" to start.</p>
+                            ) : (
+                                history.map((spin, i) => (
+                                    <div key={i} style={{
+                                        display: "flex",
+                                        justifyContent: "space-between",
+                                        alignItems: "center",
+                                        padding: "6px 0",
+                                        borderBottom: "1px solid #1e293b",
+                                        fontSize: 13,
+                                    }}>
+                                        <span style={{ fontFamily: "monospace", color: "#94a3b8" }}>{spin.walletShort}</span>
+                                        <span style={{ color: TIER_COLORS[spin.rewardTier], fontWeight: "bold" }}>
+                                            {TIER_EMOJIS[spin.rewardTier]} {spin.tierName}
+                                        </span>
+                                        <span style={{ color: "#22c55e" }}>{spin.rewardFormatted}</span>
+                                        <span style={{ color: "#6b7280", fontSize: 11 }}>{spin.timeAgo}</span>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+                </div>
             </div>
+
+            {/* Status Bar */}
+            {status && (
+                <div style={{ marginTop: 16, padding: 10, background: "#1a202c", borderRadius: 8, fontSize: 13 }}>
+                    {status}
+                </div>
+            )}
         </div>
     );
 }
 
+// ============================================
+// STYLES
+// ============================================
 const buttonStyle: React.CSSProperties = {
     background: "linear-gradient(135deg, #fbbf24, #f59e0b)",
     border: "none",
@@ -333,30 +401,42 @@ const buttonStyle: React.CSSProperties = {
     color: "#000",
     fontWeight: "bold",
     cursor: "pointer",
+    fontSize: 14,
+};
+
+const smallButton: React.CSSProperties = {
+    border: "1px solid #4b5563",
+    padding: "6px 14px",
+    borderRadius: 6,
+    color: "#e2e8f0",
+    cursor: "pointer",
+    fontSize: 12,
 };
 
 const cardStyle: React.CSSProperties = {
-    background: "#1a202c",
-    padding: 20,
+    background: "#111827",
+    padding: 16,
     borderRadius: 12,
-    marginTop: 20,
-    border: "1px solid #2d3748",
+    marginBottom: 16,
+    border: "1px solid #1e293b",
 };
 
 const rowStyle: React.CSSProperties = {
-    borderBottom: "1px solid #2d3748",
+    borderBottom: "1px solid #1e293b",
 };
 
 const inputStyle: React.CSSProperties = {
-    background: "#0f1419",
-    border: "1px solid #2d3748",
+    background: "#0a0e17",
+    border: "1px solid #374151",
     padding: "8px 12px",
     borderRadius: 6,
     color: "#fff",
-    width: 120,
+    width: 100,
 };
 
-// Mount
+// ============================================
+// MOUNT
+// ============================================
 const root = document.getElementById("root");
 if (root) {
     createRoot(root).render(<AdminPage />);

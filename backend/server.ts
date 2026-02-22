@@ -65,47 +65,174 @@ interface HolderEarnings {
 const earningsStore = new Map<string, HolderEarnings>();
 
 // ============================================
-// REDEMPTION SYSTEM
+// ADMIN-CONTROLLED WHEEL SYSTEM
 // ============================================
-interface RedemptionWinner {
+
+// Tier names for display
+const TIER_NAMES = ["VOID", "METEOR", "NEBULA", "QUASAR", "SUPERNOVA"];
+
+// Base probabilities (out of 10000) — adjusted per holder based on stardust
+const BASE_PROBABILITIES = [5000, 3000, 1500, 450, 50]; // 50%, 30%, 15%, 4.5%, 0.5%
+
+// SOL rewards per tier (in lamports)
+const TIER_REWARDS = [
+    0.001 * 1e9,  // VOID:      0.001 SOL
+    0.01 * 1e9,   // METEOR:    0.01 SOL
+    0.1 * 1e9,    // NEBULA:    0.1 SOL
+    1 * 1e9,      // QUASAR:    1 SOL
+    10 * 1e9,     // SUPERNOVA: 10 SOL
+];
+
+// Prize pool balance (lamports) — admin can fund via API
+let poolBalance = 100 * 1e9; // 100 SOL initial
+
+interface PendingPrize {
+    id: string;           // unique prize ID
     wallet: string;
     rewardTier: number;
-    rewardAmount: number; // In lamports
+    rewardAmount: number; // lamports
+    tierName: string;
+    timestamp: number;    // when won
+    expiresAt: number;    // timestamp + 24h
+    claimed: boolean;
+    claimedAt?: number;
+}
+
+interface SpinRecord {
+    wallet: string;
+    rewardTier: number;
+    rewardAmount: number;
+    tierName: string;
     timestamp: number;
-    txSignature?: string;
+    stardustTotal: string; // holder's lifetimeEarned at time of spin
 }
 
-interface RedemptionConfig {
-    costPerSpin: bigint; // Stardust cost
-    probabilities: number[]; // Out of 10000 (basis points)
-    rewards: number[]; // SOL rewards in lamports
-    poolBalance: number; // Available SOL in lamports
-}
-
-// Redemption probabilities and rewards
-const REDEMPTION_CONFIG: RedemptionConfig = {
-    costPerSpin: 1_000_000n * BigInt(1e9), // 1M stardust (in smallest units)
-    probabilities: [5000, 3000, 1500, 450, 50], // 50%, 30%, 15%, 4.5%, 0.5%
-    rewards: [
-        0.001 * 1e9,  // 0.001 SOL in lamports
-        0.01 * 1e9,   // 0.01 SOL
-        0.1 * 1e9,    // 0.1 SOL
-        1 * 1e9,      // 1 SOL
-        10 * 1e9,     // 10 SOL
-    ],
-    poolBalance: 100 * 1e9, // 100 SOL initial pool
-};
-
-// Maximum unclaimed stardust (1M) - incentivizes users to claim
-const MAX_UNCLAIMED = 1_000_000n * BigInt(1e9);
-
-// Winner history (last 100 winners)
-const redemptionWinners: RedemptionWinner[] = [];
-let totalSpins = 0;
+// Admin spin state
+let holderQueue: string[] = [];       // sorted list of holder wallets (by lifetimeEarned desc)
+let currentHolderIndex = 0;           // which holder is next in the queue
+const pendingPrizes: Map<string, PendingPrize[]> = new Map(); // wallet -> prizes
+const spinHistory: SpinRecord[] = []; // last 200 spin results
+let totalAdminSpins = 0;
 let totalDistributed = 0;
 
 // Track total winnings per wallet (for leaderboard)
 const walletWinnings: Map<string, number> = new Map();
+
+const PRIZE_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * Generate a unique prize ID
+ */
+function generatePrizeId(): string {
+    return `prize_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Rebuild the holder queue sorted by lifetimeEarned (descending)
+ * Called periodically and on demand
+ */
+function rebuildHolderQueue() {
+    const holders = Array.from(earningsStore.entries())
+        .filter(([_, e]) => e.starBalance > 0n) // only holders with tokens
+        .sort((a, b) => Number(b[1].lifetimeEarned - a[1].lifetimeEarned));
+    holderQueue = holders.map(([wallet]) => wallet);
+    // Keep index in bounds
+    if (currentHolderIndex >= holderQueue.length) {
+        currentHolderIndex = 0;
+    }
+}
+
+/**
+ * Calculate adjusted probabilities based on holder's stardust rank
+ * Higher rank (more stardust) = better odds for higher tiers
+ * 
+ * Boost formula:
+ *   - rank = position in queue (0 = highest earner)
+ *   - rankRatio = rank / totalHolders (0.0 = top, 1.0 = bottom)
+ *   - boostFactor = 1.0 + 2.0 * (1.0 - rankRatio)  → top holder gets 3x, bottom gets 1x
+ *   - Higher tier probabilities are multiplied by boostFactor
+ *   - Lower tier probabilities absorb the difference (always sums to 10000)
+ */
+function getAdjustedProbabilities(wallet: string): number[] {
+    const queueIndex = holderQueue.indexOf(wallet);
+    const totalHolders = holderQueue.length;
+
+    if (totalHolders <= 1 || queueIndex < 0) {
+        return [...BASE_PROBABILITIES];
+    }
+
+    const rankRatio = queueIndex / (totalHolders - 1); // 0.0 = top, 1.0 = bottom
+    const boostFactor = 1.0 + 2.0 * (1.0 - rankRatio); // 3.0 for top, 1.0 for bottom
+
+    // Boost higher tiers (indices 2,3,4), reduce lowest tier to compensate
+    const adjusted = [...BASE_PROBABILITIES];
+    let totalBoost = 0;
+
+    for (let i = 2; i < adjusted.length; i++) {
+        const original = adjusted[i];
+        const boosted = Math.round(original * boostFactor);
+        totalBoost += (boosted - original);
+        adjusted[i] = boosted;
+    }
+
+    // Subtract boost from lowest tier (VOID), ensure minimum 500 (5%)
+    adjusted[0] = Math.max(500, adjusted[0] - totalBoost);
+
+    // Re-normalize to 10000
+    const sum = adjusted.reduce((a, b) => a + b, 0);
+    if (sum !== 10000) {
+        adjusted[0] += (10000 - sum);
+    }
+
+    return adjusted;
+}
+
+/**
+ * Spin the wheel for a specific holder with adjusted probabilities
+ */
+function spinForHolder(wallet: string): { tier: number; reward: number; tierName: string; probabilities: number[] } {
+    const probabilities = getAdjustedProbabilities(wallet);
+    const random = Math.floor(Math.random() * 10000);
+    let cumulative = 0;
+    let tier = 0;
+
+    for (let i = 0; i < probabilities.length; i++) {
+        cumulative += probabilities[i];
+        if (random < cumulative) {
+            tier = i;
+            break;
+        }
+    }
+
+    return {
+        tier,
+        reward: TIER_REWARDS[tier],
+        tierName: TIER_NAMES[tier],
+        probabilities,
+    };
+}
+
+/**
+ * Clean up expired prizes (runs every minute)
+ */
+function cleanupExpiredPrizes() {
+    const now = Date.now();
+    let cleaned = 0;
+    for (const [wallet, prizes] of pendingPrizes.entries()) {
+        const active = prizes.filter(p => p.expiresAt > now || p.claimed);
+        const expired = prizes.length - active.length;
+        if (expired > 0) {
+            pendingPrizes.set(wallet, active);
+            cleaned += expired;
+        }
+        if (active.length === 0) {
+            pendingPrizes.delete(wallet);
+        }
+    }
+    if (cleaned > 0) {
+        console.log(`🧹 Cleaned ${cleaned} expired prizes`);
+    }
+}
 
 // Loaded config
 let config: LocalConfig;
@@ -567,7 +694,15 @@ updateEarnings();
 
 // Flush to database every hour (3600 seconds)
 setInterval(flushToDatabase, 60 * 60 * 1000);
-console.log("🔄 Scheduled: earnings update every 1 min, DB flush every 1 hour");
+
+// Clean up expired prizes every minute
+setInterval(cleanupExpiredPrizes, 60 * 1000);
+
+// Rebuild holder queue every 5 minutes (and on startup)
+setInterval(rebuildHolderQueue, 5 * 60 * 1000);
+rebuildHolderQueue();
+
+console.log("🔄 Scheduled: earnings update every 1 min, DB flush every 1 hour, prize cleanup every 1 min, queue rebuild every 5 min");
 
 // JSON helper
 const json = (data: any, status = 200) =>
@@ -687,44 +822,48 @@ async function handler(req: Request): Promise<Response | null> {
             lifetimeEarned = claimed;
         }
 
-        // Calculate unclaimed with 1M cap - ensure never negative
+        // Calculate unclaimed - no cap, stardust grows infinitely
         let unclaimed = lifetimeEarned - claimed;
         if (unclaimed < 0n) {
             unclaimed = 0n;
         }
-        if (unclaimed > MAX_UNCLAIMED) {
-            unclaimed = MAX_UNCLAIMED;
-        }
-        const isCapped = unclaimed >= MAX_UNCLAIMED;
 
         // Get stardust token balance from cache (non-blocking)
-        // Don't await RPC calls here - they can hang due to rate limiting
         let stardustTokenBalance = 0n;
         let rpcWarning: string | null = null;
 
-        // Check cache first (fast path)
         const cached = stardustBalanceCache.get(wallet);
         if (cached && Date.now() - cached.timestamp < BALANCE_CACHE_TTL) {
             stardustTokenBalance = cached.balance;
         } else {
-            // Use claimed as fallback (what user has claimed so far)
             stardustTokenBalance = claimed;
             rpcWarning = 'Balance data is being refreshed...';
-
-            // Trigger background refresh (non-blocking) - errors tracked via measure
             fetchStardustTokenBalance(wallet).catch(() => { });
         }
+
+        // Get pending prizes for this wallet
+        const prizes = (pendingPrizes.get(wallet) || [])
+            .filter(p => !p.claimed && p.expiresAt > Date.now())
+            .map(p => ({
+                id: p.id,
+                tier: p.rewardTier,
+                tierName: p.tierName,
+                reward: p.rewardAmount,
+                rewardFormatted: (p.rewardAmount / 1e9).toFixed(3) + " SOL",
+                expiresAt: p.expiresAt,
+                timeRemaining: formatTimeAgo(p.expiresAt), // countdown
+            }));
 
         return json({
             wallet,
             lifetimeEarned: lifetimeEarned.toString(),
             claimed: claimed.toString(),
             unclaimed: unclaimed.toString(),
-            isCapped, // Frontend can show "1M MAX" indicator
             starBalance: earnings?.starBalance.toString() || "0",
-            stardustTokenBalance: (stardustTokenBalance ?? 0n).toString(), // Actual current stardust token balance
+            stardustTokenBalance: (stardustTokenBalance ?? 0n).toString(),
             lastUpdated: earnings?.lastUpdated || null,
-            rpcWarning, // Frontend can show toast if this is set
+            rpcWarning,
+            pendingPrizes: prizes,
         });
     }
 
@@ -986,244 +1125,354 @@ async function handler(req: Request): Promise<Response | null> {
     }
 
     // ============================================
-    // REDEMPTION API ENDPOINTS
+    // ADMIN WHEEL SPIN API ENDPOINTS
     // ============================================
 
-    // GET /api/redemption/config - Get redemption configuration
-    if (method === "GET" && path === "/api/redemption/config") {
+    // GET /api/wheel/config - Get wheel configuration
+    if (method === "GET" && path === "/api/wheel/config") {
         return json({
-            costPerSpin: REDEMPTION_CONFIG.costPerSpin.toString(),
-            costPerSpinFormatted: Number(REDEMPTION_CONFIG.costPerSpin / BigInt(1e9)),
-            probabilities: REDEMPTION_CONFIG.probabilities.map(p => (p / 100).toFixed(1) + "%"),
-            rewards: REDEMPTION_CONFIG.rewards.map(r => ({
-                lamports: r,
-                sol: r / 1e9,
-                formatted: (r / 1e9).toFixed(3) + " SOL",
+            tiers: TIER_NAMES.map((name, i) => ({
+                name,
+                reward: TIER_REWARDS[i],
+                rewardFormatted: (TIER_REWARDS[i] / 1e9).toFixed(3) + " SOL",
+                baseProbability: (BASE_PROBABILITIES[i] / 100).toFixed(1) + "%",
             })),
-            poolBalance: REDEMPTION_CONFIG.poolBalance,
-            poolBalanceFormatted: (REDEMPTION_CONFIG.poolBalance / 1e9).toFixed(2) + " SOL",
-            totalSpins,
+            poolBalance,
+            poolBalanceFormatted: (poolBalance / 1e9).toFixed(2) + " SOL",
+            totalSpins: totalAdminSpins,
             totalDistributed,
+            totalDistributedFormatted: (totalDistributed / 1e9).toFixed(3) + " SOL",
+            queueLength: holderQueue.length,
+            currentIndex: currentHolderIndex,
         });
     }
 
-    // GET /api/redemption/winners - Get recent winners
-    if (method === "GET" && path === "/api/redemption/winners") {
-        const limit = Math.min(parseInt(url.searchParams.get("limit") || "20"), 100);
+    // GET /api/admin/queue - Get holder queue
+    if (method === "GET" && path === "/api/admin/queue") {
+        const page = parseInt(url.searchParams.get("page") || "0");
+        const pageSize = 20;
+        const start = page * pageSize;
+        const queueSlice = holderQueue.slice(start, start + pageSize).map((wallet, i) => {
+            const earnings = earningsStore.get(wallet);
+            return {
+                position: start + i,
+                wallet,
+                walletShort: wallet.slice(0, 4) + "..." + wallet.slice(-4),
+                lifetimeEarned: earnings?.lifetimeEarned.toString() || "0",
+                starBalance: earnings?.starBalance.toString() || "0",
+                isCurrent: start + i === currentHolderIndex,
+            };
+        });
+
         return json({
-            winners: redemptionWinners.slice(-limit).reverse().map(w => ({
-                ...w,
-                tier: w.rewardTier, // Frontend uses this for tier-colored display
-                rewardFormatted: (w.rewardAmount / 1e9).toFixed(4) + " SOL",
-                walletShort: w.wallet.slice(0, 4) + "..." + w.wallet.slice(-4),
-                timeAgo: formatTimeAgo(w.timestamp),
+            queue: queueSlice,
+            totalHolders: holderQueue.length,
+            currentIndex: currentHolderIndex,
+            currentWallet: holderQueue[currentHolderIndex] || null,
+            page,
+            totalPages: Math.ceil(holderQueue.length / pageSize),
+        });
+    }
+
+    // POST /api/admin/spin-next - Admin spins wheel for next holder (ON-CHAIN)
+    if (method === "POST" && path === "/api/admin/spin-next") {
+        try {
+            if (holderQueue.length === 0) {
+                rebuildHolderQueue();
+                if (holderQueue.length === 0) {
+                    return json({ error: "no holders in queue" }, 400);
+                }
+            }
+
+            const wallet = holderQueue[currentHolderIndex];
+            const earnings = earningsStore.get(wallet);
+
+            // Calculate adjusted probabilities for this holder
+            const adjustedProbs = getAdjustedProbabilities(wallet);
+
+            // Pad to 10 slots (MAX_TIERS) with zeros
+            const probsArray = new Array(10).fill(0);
+            for (let i = 0; i < adjustedProbs.length; i++) {
+                probsArray[i] = adjustedProbs[i];
+            }
+
+            // Build on-chain admin_spin transaction
+            const WHEEL_PROGRAM_ID = new PublicKey(config.programId);
+            const holderPubkey = new PublicKey(wallet);
+
+            // Derive PDAs
+            const [statePda] = PublicKey.findProgramAddressSync(
+                [Buffer.from("wheel_state")],
+                WHEEL_PROGRAM_ID
+            );
+            const [poolPda] = PublicKey.findProgramAddressSync(
+                [Buffer.from("wheel_pool")],
+                WHEEL_PROGRAM_ID
+            );
+            const [userHistoryPda] = PublicKey.findProgramAddressSync(
+                [Buffer.from("user_history"), holderPubkey.toBuffer()],
+                WHEEL_PROGRAM_ID
+            );
+
+            // Build instruction data: discriminator + probabilities ([u16; 10])
+            // Anchor discriminator for "admin_spin" = sha256("global:admin_spin")[:8]
+            const crypto = await import("crypto");
+            const discHash = crypto.createHash("sha256").update("global:admin_spin").digest();
+            const discriminator = discHash.slice(0, 8);
+
+            // probabilities: 10 x u16 LE = 20 bytes
+            const instrData = Buffer.alloc(8 + 20);
+            discriminator.copy(instrData, 0);
+            for (let i = 0; i < 10; i++) {
+                instrData.writeUInt16LE(probsArray[i], 8 + i * 2);
+            }
+
+            const { Transaction, TransactionInstruction, SystemProgram: SysProgram } = await import("@solana/web3.js");
+
+            const adminSpinIx = new TransactionInstruction({
+                programId: WHEEL_PROGRAM_ID,
+                keys: [
+                    { pubkey: statePda, isSigner: false, isWritable: true },
+                    { pubkey: poolPda, isSigner: false, isWritable: true },
+                    { pubkey: authority.publicKey, isSigner: true, isWritable: true },
+                    { pubkey: holderPubkey, isSigner: false, isWritable: true },
+                    { pubkey: userHistoryPda, isSigner: false, isWritable: true },
+                    { pubkey: SysProgram.programId, isSigner: false, isWritable: false },
+                ],
+                data: instrData,
+            });
+
+            const tx = new Transaction().add(adminSpinIx);
+            const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+            tx.recentBlockhash = blockhash;
+            tx.feePayer = authority.publicKey;
+            tx.sign(authority);
+
+            const txSignature = await connection.sendRawTransaction(tx.serialize(), {
+                skipPreflight: false,
+                preflightCommitment: "confirmed",
+            });
+
+            // Wait for confirmation
+            await connection.confirmTransaction({
+                signature: txSignature,
+                blockhash,
+                lastValidBlockHeight,
+            }, "confirmed");
+
+            // Parse result from logs
+            const txDetails = await connection.getTransaction(txSignature, {
+                maxSupportedTransactionVersion: 0,
+                commitment: "confirmed",
+            });
+
+            let rewardTier = 0;
+            let rewardAmount = 0;
+            const logs = txDetails?.meta?.logMessages || [];
+            for (const log of logs) {
+                const match = log.match(/Admin Spin #\d+: Holder \S+ - Tier (\d+) - Won (\d+) lamports/);
+                if (match) {
+                    rewardTier = parseInt(match[1]);
+                    rewardAmount = parseInt(match[2]);
+                    break;
+                }
+            }
+
+            const tierName = TIER_NAMES[rewardTier] || `Tier ${rewardTier}`;
+            totalAdminSpins++;
+            totalDistributed += rewardAmount;
+
+            // Track wallet winnings
+            const currentWinnings = walletWinnings.get(wallet) || 0;
+            walletWinnings.set(wallet, currentWinnings + rewardAmount);
+
+            // Record in spin history
+            const now = Date.now();
+            const record: SpinRecord = {
+                wallet,
+                rewardTier,
+                rewardAmount,
+                tierName,
+                timestamp: now,
+                stardustTotal: earnings?.lifetimeEarned.toString() || "0",
+            };
+            spinHistory.push(record);
+            if (spinHistory.length > 200) spinHistory.shift();
+
+            // Advance to next holder
+            const spinIndex = currentHolderIndex;
+            currentHolderIndex = (currentHolderIndex + 1) % holderQueue.length;
+
+            console.log(`🎰 Admin spin #${totalAdminSpins}: ${wallet.slice(0, 8)}... → ${tierName} (${(rewardAmount / 1e9).toFixed(3)} SOL) tx:${txSignature.slice(0, 12)}...`);
+
+            return json({
+                success: true,
+                spinNumber: totalAdminSpins,
+                wallet,
+                walletShort: wallet.slice(0, 4) + "..." + wallet.slice(-4),
+                tier: rewardTier,
+                tierName,
+                rewardAmount,
+                rewardFormatted: (rewardAmount / 1e9).toFixed(3) + " SOL",
+                probabilities: adjustedProbs.map(p => (p / 100).toFixed(1) + "%"),
+                stardustTotal: earnings?.lifetimeEarned.toString() || "0",
+                txSignature,
+                queuePosition: spinIndex,
+                nextHolder: holderQueue[currentHolderIndex]?.slice(0, 4) + "..." + holderQueue[currentHolderIndex]?.slice(-4),
+            });
+        } catch (e: any) {
+            console.error("[admin-spin] Error:", e);
+            return json({ error: e.message || "spin failed" }, 500);
+        }
+    }
+
+    // POST /api/admin/reset-queue - Reset queue position to start
+    if (method === "POST" && path === "/api/admin/reset-queue") {
+        rebuildHolderQueue();
+        currentHolderIndex = 0;
+        return json({ success: true, queueLength: holderQueue.length });
+    }
+
+    // POST /api/admin/fund-pool - Admin adds SOL to the pool
+    if (method === "POST" && path === "/api/admin/fund-pool") {
+        try {
+            const body = await req.json() as { amount: number };
+            const amountLamports = Math.floor(body.amount * 1e9);
+            if (amountLamports <= 0) {
+                return json({ error: "amount must be positive" }, 400);
+            }
+            poolBalance += amountLamports;
+            console.log(`💰 Pool funded: +${body.amount} SOL (total: ${(poolBalance / 1e9).toFixed(2)} SOL)`);
+            return json({
+                success: true,
+                added: body.amount,
+                poolBalance,
+                poolBalanceFormatted: (poolBalance / 1e9).toFixed(2) + " SOL",
+            });
+        } catch (e: any) {
+            return json({ error: e.message }, 400);
+        }
+    }
+
+    // GET /api/wheel/history - Get recent spin history
+    if (method === "GET" && path === "/api/wheel/history") {
+        const limit = Math.min(parseInt(url.searchParams.get("limit") || "20"), 200);
+        return json({
+            spins: spinHistory.slice(-limit).reverse().map(s => ({
+                ...s,
+                rewardFormatted: (s.rewardAmount / 1e9).toFixed(3) + " SOL",
+                walletShort: s.wallet.slice(0, 4) + "..." + s.wallet.slice(-4),
+                timeAgo: formatTimeAgo(s.timestamp),
             })),
-            totalSpins,
+            totalSpins: totalAdminSpins,
             totalDistributed,
             totalDistributedFormatted: (totalDistributed / 1e9).toFixed(3) + " SOL",
         });
     }
 
-    // POST /api/redemption/spin - Spin the wheel
-    if (method === "POST" && path === "/api/redemption/spin") {
+    // ============================================
+    // PRIZE CLAIMING API ENDPOINTS
+    // ============================================
+
+    // GET /api/prizes/:wallet - Get pending prizes for a wallet
+    if (method === "GET" && path.startsWith("/api/prizes/")) {
+        const wallet = path.replace("/api/prizes/", "");
+        const prizes = (pendingPrizes.get(wallet) || [])
+            .filter(p => !p.claimed && p.expiresAt > Date.now())
+            .map(p => ({
+                id: p.id,
+                tier: p.rewardTier,
+                tierName: p.tierName,
+                reward: p.rewardAmount,
+                rewardFormatted: (p.rewardAmount / 1e9).toFixed(3) + " SOL",
+                timestamp: p.timestamp,
+                expiresAt: p.expiresAt,
+                timeRemaining: Math.max(0, p.expiresAt - Date.now()),
+                timeRemainingFormatted: formatTimeRemaining(p.expiresAt - Date.now()),
+            }));
+
+        return json({
+            wallet,
+            prizes,
+            totalPending: prizes.length,
+            totalValue: prizes.reduce((sum, p) => sum + p.reward, 0),
+            totalValueFormatted: (prizes.reduce((sum, p) => sum + p.reward, 0) / 1e9).toFixed(3) + " SOL",
+        });
+    }
+
+    // POST /api/prizes/claim - Claim a prize (gasless - wallet signature verification)
+    if (method === "POST" && path === "/api/prizes/claim") {
         try {
-            const body = await req.json() as { wallet: string };
-            const wallet = body.wallet;
+            const body = await req.json() as { wallet: string; prizeId: string; signature: string };
+            const { wallet, prizeId, signature } = body;
 
-            if (!wallet) {
-                return json({ error: "wallet required" }, 400);
+            if (!wallet || !prizeId || !signature) {
+                return json({ error: "wallet, prizeId, and signature required" }, 400);
             }
 
-            // Check user has enough stardust
-            const earnings = earningsStore.get(wallet);
-            if (!earnings) {
-                return json({ error: "no earnings found" }, 404);
+            // Find the prize
+            const prizes = pendingPrizes.get(wallet);
+            if (!prizes) {
+                return json({ error: "no prizes found for this wallet" }, 404);
             }
 
-            const unclaimed = earnings.lifetimeEarned - earnings.claimed;
-            if (unclaimed < REDEMPTION_CONFIG.costPerSpin) {
-                return json({
-                    error: "insufficient stardust",
-                    required: REDEMPTION_CONFIG.costPerSpin.toString(),
-                    available: unclaimed.toString(),
-                }, 400);
+            const prize = prizes.find(p => p.id === prizeId);
+            if (!prize) {
+                return json({ error: "prize not found" }, 404);
             }
 
-            // Deduct stardust cost
-            earnings.claimed += REDEMPTION_CONFIG.costPerSpin;
-
-            // Generate random outcome
-            const random = Math.floor(Math.random() * 10000);
-            let cumulativeProb = 0;
-            let rewardTier = 0;
-
-            for (let i = 0; i < REDEMPTION_CONFIG.probabilities.length; i++) {
-                cumulativeProb += REDEMPTION_CONFIG.probabilities[i];
-                if (random < cumulativeProb) {
-                    rewardTier = i;
-                    break;
-                }
+            if (prize.claimed) {
+                return json({ error: "prize already claimed" }, 400);
             }
 
-            const rewardAmount = REDEMPTION_CONFIG.rewards[rewardTier];
-
-            // Update stats
-            totalSpins++;
-            totalDistributed += rewardAmount;
-            REDEMPTION_CONFIG.poolBalance -= rewardAmount;
-
-            // Track wallet winnings for leaderboard
-            const currentWinnings = walletWinnings.get(wallet) || 0;
-            walletWinnings.set(wallet, currentWinnings + rewardAmount);
-
-            // Record winner
-            const winner: RedemptionWinner = {
-                wallet,
-                rewardTier,
-                rewardAmount,
-                timestamp: Date.now(),
-            };
-
-            redemptionWinners.push(winner);
-
-            // Keep only last 100 winners
-            if (redemptionWinners.length > 100) {
-                redemptionWinners.shift();
+            if (prize.expiresAt < Date.now()) {
+                return json({ error: "prize expired" }, 400);
             }
+
+            // Verify the wallet signature
+            // The user signs the message "claim:{prizeId}" with their wallet
+            const message = new TextEncoder().encode(`claim:${prizeId}`);
+            const signatureBytes = bs58.decode(signature);
+            const publicKeyBytes = new PublicKey(wallet).toBytes();
+
+            const isValid = nacl.sign.detached.verify(message, signatureBytes, publicKeyBytes);
+            if (!isValid) {
+                return json({ error: "invalid signature" }, 401);
+            }
+
+            // Mark prize as claimed
+            prize.claimed = true;
+            prize.claimedAt = Date.now();
+
+            console.log(`✅ Prize claimed: ${wallet.slice(0, 8)}... → ${prize.tierName} (${(prize.rewardAmount / 1e9).toFixed(3)} SOL)`);
+
+            // TODO: Auto-send SOL from authority wallet to user
+            // For now, prizes are recorded and admin can distribute manually
+            // To auto-send: use connection.sendTransaction with authority keypair
 
             return json({
                 success: true,
-                spinNumber: totalSpins,
-                rewardTier,
-                rewardAmount,
-                rewardFormatted: (rewardAmount / 1e9).toFixed(3) + " SOL",
-                tierName: ["Common", "Uncommon", "Rare", "Epic", "Legendary"][rewardTier],
-                newUnclaimedStardust: (earnings.lifetimeEarned - earnings.claimed).toString(),
-                poolRemaining: REDEMPTION_CONFIG.poolBalance,
-            });
-        } catch (e: any) {
-            return json({ error: e.message || "spin failed" }, 500);
-        }
-    }
-
-    // POST /api/wheel/record-spin - Record on-chain spin result for history
-    // Verifies the transaction on-chain before recording
-    if (method === "POST" && path === "/api/wheel/record-spin") {
-        try {
-            const body = await req.json() as { wallet: string; signature: string };
-            const { wallet, signature } = body;
-
-            if (!wallet || !signature) {
-                return json({ error: "wallet and signature required" }, 400);
-            }
-
-            // Check if this signature was already recorded (prevent duplicates)
-            if (redemptionWinners.find(w => w.txSignature === signature)) {
-                return json({ error: "spin already recorded" }, 409);
-            }
-
-            // Verify the transaction on-chain
-            let txDetails = null;
-            for (let attempt = 0; attempt < 3; attempt++) {
-                try {
-                    txDetails = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
-                    if (txDetails) break;
-                } catch (e) {
-                    console.warn(`[record-spin] getTransaction attempt ${attempt + 1} failed:`, e);
-                }
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-
-            if (!txDetails) {
-                return json({ error: "transaction not found - please wait and retry" }, 404);
-            }
-
-            // Verify transaction succeeded
-            if (txDetails.meta?.err) {
-                return json({ error: "transaction failed on-chain" }, 400);
-            }
-
-            // Verify it's our wheel program
-            const WHEEL_PROGRAM = "3M12BfitAEYz14WJBMnjahEuSvhsWhjfGJXbzur26o2U";
-            const accountKeys = txDetails.transaction.message.staticAccountKeys?.map(k => k.toBase58()) || [];
-            if (!accountKeys.includes(WHEEL_PROGRAM)) {
-                return json({ error: "not a valid wheel spin transaction" }, 400);
-            }
-
-            // Parse the result from on-chain logs
-            const logs = txDetails.meta?.logMessages || [];
-            let tier = -1;
-            let reward = 0;
-
-            for (const log of logs) {
-                // Parse: "Spin #X: Tier Y - Won Z lamports"
-                const match = log.match(/Spin #\d+: Tier (\d+) - Won (\d+) lamports/);
-                if (match) {
-                    tier = parseInt(match[1]);
-                    reward = parseInt(match[2]);
-                    break;
-                }
-            }
-
-            if (tier < 0) {
-                return json({ error: "could not parse spin result from transaction" }, 400);
-            }
-
-            // Record winner with verified data
-            const winner: RedemptionWinner = {
                 wallet,
-                rewardTier: tier,
-                rewardAmount: reward,
-                timestamp: txDetails.blockTime ? txDetails.blockTime * 1000 : Date.now(),
-                txSignature: signature,
-            };
-
-            redemptionWinners.push(winner);
-
-            // Keep only last 100 winners
-            if (redemptionWinners.length > 100) {
-                redemptionWinners.shift();
-            }
-
-            // Track wallet winnings
-            const currentWinnings = walletWinnings.get(wallet) || 0;
-            walletWinnings.set(wallet, currentWinnings + reward);
-
-            console.log(`[record-spin] Verified and recorded: wallet=${wallet.slice(0, 8)}, tier=${tier}, reward=${reward / 1e9} SOL, sig=${signature.slice(0, 8)}`);
-
-            return json({
-                success: true,
-                verified: true,
-                tier,
-                reward,
+                prizeId,
+                tierName: prize.tierName,
+                rewardAmount: prize.rewardAmount,
+                rewardFormatted: (prize.rewardAmount / 1e9).toFixed(3) + " SOL",
+                claimedAt: prize.claimedAt,
             });
         } catch (e: any) {
-            console.error('[record-spin] Error:', e);
-            return json({ error: e.message || "record failed" }, 500);
+            return json({ error: e.message || "claim failed" }, 500);
         }
     }
 
-    // GET /api/wheel/treasury - Get treasury pool balance
-    if (path === "/api/wheel/treasury" && req.method === "GET") {
-        try {
-            // Derive pool PDA
-            const WHEEL_PROGRAM_ID = new PublicKey("3M12BfitAEYz14WJBMnjahEuSvhsWhjfGJXbzur26o2U");
-            const [poolPda] = PublicKey.findProgramAddressSync(
-                [Buffer.from("wheel_pool")],
-                WHEEL_PROGRAM_ID
-            );
-
-            const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
-            const balance = await connection.getBalance(poolPda);
-
-            return json({
-                balance: balance / 1e9, // SOL
-                balanceLamports: balance,
-                poolPda: poolPda.toBase58(),
-            });
-        } catch (e: any) {
-            return json({ error: e.message, balance: 0 }, 500);
-        }
+    // GET /api/wheel/treasury - Get pool balance
+    if (method === "GET" && path === "/api/wheel/treasury") {
+        return json({
+            balance: poolBalance / 1e9,
+            balanceLamports: poolBalance,
+            totalSpins: totalAdminSpins,
+            totalDistributed,
+            totalDistributedFormatted: (totalDistributed / 1e9).toFixed(3) + " SOL",
+        });
     }
 
     return null;
@@ -1239,6 +1488,15 @@ function formatTimeAgo(timestamp: number): string {
     if (hours < 24) return `${hours}h ago`;
     const days = Math.floor(hours / 24);
     return `${days}d ago`;
+}
+
+// Helper function for time remaining countdown
+function formatTimeRemaining(ms: number): string {
+    if (ms <= 0) return "expired";
+    const hours = Math.floor(ms / (60 * 60 * 1000));
+    const minutes = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000));
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m`;
 }
 
 serve(handler);

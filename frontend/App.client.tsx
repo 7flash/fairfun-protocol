@@ -14,14 +14,24 @@ interface Config {
     rpcUrl: string;
 }
 
+interface PendingPrizeData {
+    id: string;
+    tier: number;
+    tierName: string;
+    reward: number;
+    rewardFormatted: string;
+    expiresAt: number;
+    timeRemaining: string;
+}
+
 interface EarningsData {
     wallet: string;
     lifetimeEarned: string;
     claimed: string;
     unclaimed: string;
-    isCapped?: boolean;
     starBalance: string;
-    stardustTokenBalance?: string; // Actual current stardust token balance
+    stardustTokenBalance?: string;
+    pendingPrizes?: PendingPrizeData[];
 }
 
 interface LeaderboardEntry {
@@ -1418,16 +1428,16 @@ function App() {
         return () => clearInterval(interval);
     }, []);
 
-    // Fetch winners
+    // Fetch winners (from admin spin history)
     const fetchWinners = useCallback(async () => {
         try {
-            const res = await fetch('/api/redemption/winners?limit=20');
+            const res = await fetch('/api/wheel/history?limit=20');
             const data = await res.json();
-            setWinners(data.winners?.map((w: any) => ({
+            setWinners(data.spins?.map((w: any) => ({
                 wallet: w.wallet,
                 amount: w.rewardAmount / 1e9,
                 timestamp: w.timestamp,
-                tier: w.tier, // 0=SUPERNOVA, 1=NEBULA, 2=METEORS, 3=COSMOS, 4=VOID
+                tier: w.rewardTier,
             })) || []);
         } catch (e) {
             console.error('Fetch winners failed:', e);
@@ -1439,6 +1449,42 @@ function App() {
         const interval = setInterval(fetchWinners, 5000);
         return () => clearInterval(interval);
     }, [fetchWinners]);
+
+    // Gasless prize claim handler (signs message with wallet, no transaction)
+    const handlePrizeClaim = async (prizeId: string) => {
+        if (!publicKey || !phantomWallet) return;
+
+        try {
+            // Sign the claim message
+            const message = new TextEncoder().encode(`claim:${prizeId}`);
+            const { signature } = await phantomWallet.signMessage(message, 'utf8');
+
+            // Convert signature to base58
+            const bs58Module = await import('bs58');
+            const signatureStr = bs58Module.default.encode(signature);
+
+            // Send to backend
+            const res = await fetch('/api/prizes/claim', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ wallet: publicKey, prizeId, signature: signatureStr }),
+            });
+            const data = await res.json();
+
+            if (data.success) {
+                addToast('success', `✅ Claimed ${data.tierName} prize — ${data.rewardFormatted}!`);
+                fetchEarnings(); // Refresh to update pending prizes
+            } else {
+                addToast('error', `Claim failed: ${data.error}`);
+            }
+        } catch (e: any) {
+            if (e.message?.includes('User rejected')) {
+                addToast('error', 'Signature cancelled');
+            } else {
+                addToast('error', `Claim failed: ${e.message}`);
+            }
+        }
+    };
 
     // Claim handler - builds and sends transaction via Phantom
     const handleClaim = async () => {
@@ -1906,6 +1952,62 @@ function App() {
                             onClaim={handleClaim}
                             gxyPrice={gxyPrice}
                         />
+
+                        {/* Pending Prizes Section */}
+                        {earnings?.pendingPrizes && earnings.pendingPrizes.length > 0 && (
+                            <Section label="PENDING PRIZES" className="prizes-section" id="prizes">
+                                <p style={{ textAlign: 'center', color: '#94a3b8', fontSize: '13px', margin: '0 0 16px 0' }}>
+                                    🎁 The admin spun the wheel for you! Sign with your wallet to claim (gasless — no transaction fee).
+                                </p>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                    {earnings.pendingPrizes.map((prize: PendingPrizeData) => {
+                                        const tierColors = ['#94a3b8', '#3b82f6', '#a855f7', '#f97316', '#fbbf24'];
+                                        const tierEmojis = ['⬛', '☄️', '🌌', '✨', '💥'];
+                                        return (
+                                            <div key={prize.id} style={{
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'space-between',
+                                                padding: '12px 16px',
+                                                borderRadius: '10px',
+                                                border: `1px solid ${tierColors[prize.tier]}40`,
+                                                background: `${tierColors[prize.tier]}10`,
+                                            }}>
+                                                <div>
+                                                    <span style={{ color: tierColors[prize.tier], fontWeight: 700, fontSize: '14px' }}>
+                                                        {tierEmojis[prize.tier]} {prize.tierName}
+                                                    </span>
+                                                    <span style={{ color: '#22c55e', fontWeight: 700, marginLeft: 12 }}>
+                                                        {prize.rewardFormatted}
+                                                    </span>
+                                                </div>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                                    <span style={{ color: '#6b7280', fontSize: '11px' }}>
+                                                        ⏳ {prize.timeRemaining}
+                                                    </span>
+                                                    <button
+                                                        onClick={() => handlePrizeClaim(prize.id)}
+                                                        style={{
+                                                            padding: '8px 16px',
+                                                            borderRadius: '8px',
+                                                            border: 'none',
+                                                            background: 'linear-gradient(135deg, #22c55e, #16a34a)',
+                                                            color: '#fff',
+                                                            fontWeight: 700,
+                                                            cursor: 'pointer',
+                                                            fontSize: '13px',
+                                                        }}
+                                                    >
+                                                        ✍️ Claim (Sign)
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </Section>
+                        )}
+
                         <GalaxyWheelSection
                             available={available}
                             spinning={spinning}
@@ -1914,8 +2016,6 @@ function App() {
                             onSpinFinish={() => {
                                 setSpinning(false);
                                 setTargetTier(null);
-
-                                // Show result toast now that wheel has finished
                                 if (pendingSpinResult.current) {
                                     const { tier, reward, signature } = pendingSpinResult.current;
                                     const tierNames = ["SUPERNOVA ⭐", "NEBULA 🌌", "METEORS 💫", "COSMOS 🌍", "VOID ✨"];
@@ -1923,11 +2023,9 @@ function App() {
                                     const tierName = tierNames[tier] || `Tier ${tier}`;
                                     addToast('success', `🎉 ${tierName}! You won ${rewardSol.toFixed(4)} SOL!`, signature);
                                     pendingSpinResult.current = null;
-
-                                    // Refresh winners list after spin
                                     fetchWinners();
                                 }
-                                setActualReward(undefined); // Reset for next spin
+                                setActualReward(undefined);
                             }}
                             spinCost={SPIN_COST}
                             actualReward={actualReward}
@@ -1937,17 +2035,16 @@ function App() {
                                 if (!phantomWallet || !publicKey) return;
                                 addToast('pending', 'Funding treasury...');
                                 try {
-                                    const res = await fetch('/api/wheel/fund', {
+                                    const res = await fetch('/api/admin/fund-pool', {
                                         method: 'POST',
                                         headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ wallet: publicKey, amount }),
+                                        body: JSON.stringify({ amount }),
                                     });
                                     if (!res.ok) {
                                         const err = await res.json();
                                         throw new Error(err.error || 'Fund failed');
                                     }
-                                    addToast('success', `Funded ${amount} SOL to treasury!`);
-                                    // Refresh treasury balance
+                                    addToast('success', `Funded ${amount} SOL to pool!`);
                                     fetch('/api/wheel/treasury').then(r => r.json()).then(d => setTreasuryBalance(d.balance || 0));
                                 } catch (e: any) {
                                     addToast('error', `Fund failed: ${e.message}`);

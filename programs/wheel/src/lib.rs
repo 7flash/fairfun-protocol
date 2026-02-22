@@ -203,6 +203,105 @@ pub mod galaxy_wheel {
         msg!("Stardust mint updated from {} to {}", old_mint, new_mint);
         Ok(())
     }
+
+    /// Admin: Spin the wheel on behalf of a holder with custom probabilities
+    /// No stardust burn - probabilities are adjusted per holder based on stardust rank
+    /// Randomization happens on-chain; SOL transfers from treasury pool PDA to the holder
+    pub fn admin_spin(
+        ctx: Context<AdminSpin>,
+        probabilities: [u16; MAX_TIERS],
+    ) -> Result<()> {
+        let state = &mut ctx.accounts.state;
+        let clock = Clock::get()?;
+        let num_tiers = state.num_tiers as usize;
+
+        // Validate probabilities sum to 10000
+        let total_prob: u16 = probabilities[..num_tiers].iter().sum();
+        require!(total_prob == 10000, WheelError::InvalidProbabilities);
+
+        // Get treasury balance
+        let treasury_balance = ctx.accounts.pool.lamports();
+
+        // Generate pseudo-random number (seeded with holder, slot, timestamp, total_spins)
+        let seed_data = [
+            ctx.accounts.holder.key().as_ref(),
+            &clock.slot.to_le_bytes(),
+            &clock.unix_timestamp.to_le_bytes(),
+            &state.total_spins.to_le_bytes(),
+        ].concat();
+
+        let hash_result = hash(&seed_data);
+        let random_value = u16::from_le_bytes([hash_result.as_ref()[0], hash_result.as_ref()[1]]) % 10000;
+
+        // Determine reward tier based on custom probabilities
+        let mut cumulative: u16 = 0;
+        let mut reward_tier: u8 = 0;
+
+        for i in 0..num_tiers {
+            cumulative += probabilities[i];
+            if random_value < cumulative {
+                reward_tier = i as u8;
+                break;
+            }
+        }
+
+        // Calculate reward as % of treasury
+        let reward_bps = state.reward_bps[reward_tier as usize] as u64;
+        let reward_amount = (treasury_balance * reward_bps) / 10000;
+
+        // Transfer SOL from pool PDA to holder
+        if reward_amount > 0 {
+            require!(treasury_balance >= reward_amount, WheelError::InsufficientTreasury);
+
+            let pool_bump = state.pool_bump;
+            let pool_seeds: &[&[u8]] = &[b"wheel_pool", &[pool_bump]];
+
+            let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
+                &ctx.accounts.pool.key(),
+                &ctx.accounts.holder.key(),
+                reward_amount,
+            );
+
+            anchor_lang::solana_program::program::invoke_signed(
+                &transfer_ix,
+                &[
+                    ctx.accounts.pool.to_account_info(),
+                    ctx.accounts.holder.to_account_info(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
+                &[pool_seeds],
+            )?;
+        }
+
+        // Update state
+        state.total_spins += 1;
+        state.total_distributed += reward_amount;
+
+        // Update holder spin history
+        let user_history = &mut ctx.accounts.user_history;
+        if user_history.user == Pubkey::default() {
+            user_history.user = ctx.accounts.holder.key();
+        }
+        user_history.total_spins += 1;
+        user_history.total_won += reward_amount;
+        user_history.last_spin_tier = reward_tier;
+        user_history.last_spin_amount = reward_amount;
+        user_history.last_spin_timestamp = clock.unix_timestamp;
+
+        // Emit result event
+        emit!(SpinResult {
+            user: ctx.accounts.holder.key(),
+            tier: reward_tier,
+            reward_amount,
+            reward_bps: reward_bps as u16,
+            treasury_balance,
+            timestamp: clock.unix_timestamp,
+        });
+
+        msg!("Admin Spin #{}: Holder {} - Tier {} - Won {} lamports (custom probs)",
+            state.total_spins, ctx.accounts.holder.key(), reward_tier, reward_amount);
+        Ok(())
+    }
 }
 
 // ============================================
@@ -321,6 +420,45 @@ pub struct UpdateMint<'info> {
     pub authority: Signer<'info>,
 }
 
+#[derive(Accounts)]
+pub struct AdminSpin<'info> {
+    #[account(
+        mut,
+        seeds = [b"wheel_state"],
+        bump = state.bump,
+        constraint = state.authority == authority.key() @ WheelError::Unauthorized
+    )]
+    pub state: Account<'info, WheelState>,
+
+    /// CHECK: SOL treasury pool PDA
+    #[account(
+        mut,
+        seeds = [b"wheel_pool"],
+        bump = state.pool_bump
+    )]
+    pub pool: AccountInfo<'info>,
+
+    /// Authority must match state.authority
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    /// CHECK: Target holder receiving SOL reward
+    #[account(mut)]
+    pub holder: AccountInfo<'info>,
+
+    /// Holder's spin history PDA
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = 8 + UserSpinHistory::LEN,
+        seeds = [b"user_history", holder.key().as_ref()],
+        bump
+    )]
+    pub user_history: Account<'info, UserSpinHistory>,
+
+    pub system_program: Program<'info, System>,
+}
+
 // ============================================
 // STATE
 // ============================================
@@ -391,4 +529,7 @@ pub enum WheelError {
     
     #[msg("Unauthorized - only authority can perform this action")]
     Unauthorized,
+
+    #[msg("Invalid reward tier - must be less than num_tiers")]
+    InvalidRewardTier,
 }
