@@ -55,7 +55,7 @@ interface WinnerEntry {
 // ============================================
 const TOKEN_NAME = "$GXY";
 const GXY_DECIMALS = 6; // GXY has 6 decimals (pump.fun token)
-const SPIN_COST = 1_000; // 1K stardust (temporarily reduced for testing)
+// Daily spin - no cost, once per 24h
 const ADMIN_AUTHORITY = "77cQ99WQ2FWQT19kgpN2a9CfgYSfDqpomNVGtyYUrpAY";
 const WHEEL_PROGRAM_ID = "3M12BfitAEYz14WJBMnjahEuSvhsWhjfGJXbzur26o2U";
 
@@ -160,7 +160,7 @@ const RulesBanner: React.FC = () => (
         <div className="rules-content">
             <span className="rules-icon">✨</span>
             <span className="rules-text">
-                <strong>Galaxy Wheel:</strong> Spend {SPIN_COST.toLocaleString()} stardust to spin and win SOL rewards!
+                <strong>Galaxy Wheel:</strong> Free daily spin for all holders — win SOL rewards every 24 hours!
                 Stardust accumulates based on your {TOKEN_NAME} holdings.
             </span>
         </div>
@@ -562,10 +562,11 @@ const GalaxyWheelSection: React.FC<{
     isAdmin?: boolean;
     treasuryBalance?: number;
     onFundTreasury?: (amount: number) => void;
-    spinCost: number;
-    actualReward?: number; // Actual reward in lamports from transaction
-}> = ({ available, spinning, onSpin, targetTier, onSpinFinish, isAdmin, treasuryBalance, onFundTreasury, spinCost, actualReward }) => {
-    const canSpin = available >= spinCost;
+    canDailySpin: boolean;
+    cooldownRemaining: number; // seconds until next spin
+    actualReward?: number;
+}> = ({ available, spinning, onSpin, targetTier, onSpinFinish, isAdmin, treasuryBalance, onFundTreasury, canDailySpin, cooldownRemaining, actualReward }) => {
+    const canSpin = canDailySpin;
     const [fundAmount, setFundAmount] = React.useState("0.1");
 
     // Animation state
@@ -865,7 +866,7 @@ const GalaxyWheelSection: React.FC<{
 
             {/* Explanation */}
             <p style={{ textAlign: 'center', color: '#94a3b8', fontSize: '14px', margin: '0 0 24px 0' }}>
-                Spend <span style={{ color: '#fbbf24', fontWeight: 700 }}>{spinCost.toLocaleString()}</span> stardust to spin and win a percentage of the treasury!
+                Free spin every <span style={{ color: '#fbbf24', fontWeight: 700 }}>24 hours</span> — win a percentage of the treasury!
             </p>
 
             {/* Wheel Container */}
@@ -989,9 +990,9 @@ const GalaxyWheelSection: React.FC<{
                 </div>
                 <div style={{ width: '1px', background: 'rgba(255,255,255,0.1)' }} />
                 <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1px' }}>Spin Cost</div>
-                    <div style={{ fontSize: '20px', fontWeight: 800, color: '#a855f7' }}>
-                        {spinCost.toLocaleString()} ✨
+                    <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1px' }}>Daily Spin</div>
+                    <div style={{ fontSize: '20px', fontWeight: 800, color: canSpin ? '#22c55e' : '#a855f7' }}>
+                        {canSpin ? 'READY ✨' : `${Math.floor(cooldownRemaining / 3600)}h`}
                     </div>
                 </div>
             </div>
@@ -1036,7 +1037,7 @@ const GalaxyWheelSection: React.FC<{
                     transition: 'all 0.2s ease'
                 }}
             >
-                {isSpinning ? '✨ SPINNING...' : '🚀 SPIN IT NOW!!!'}
+                {isSpinning ? '✨ SPINNING...' : canSpin ? '🎡 FREE DAILY SPIN' : `⏳ ${Math.floor(cooldownRemaining / 3600)}h ${Math.floor((cooldownRemaining % 3600) / 60)}m`}
             </button>
 
             {/* Demo button - subtle */}
@@ -1060,8 +1061,8 @@ const GalaxyWheelSection: React.FC<{
             </button>
 
             {!canSpin && !isSpinning && (
-                <p style={{ color: '#ef4444', fontSize: '13px', margin: '12px 0 0 0', textAlign: 'center' }}>
-                    Need {(spinCost - available).toLocaleString()} more STARDUST
+                <p style={{ color: '#60a5fa', fontSize: '13px', margin: '12px 0 0 0', textAlign: 'center' }}>
+                    Next free spin in {Math.floor(cooldownRemaining / 3600)}h {Math.floor((cooldownRemaining % 3600) / 60)}m
                 </p>
             )}
 
@@ -1202,8 +1203,10 @@ function App() {
     const [phantomWallet, setPhantomWallet] = useState<any>(null);
     const [toasts, setToasts] = useState<Toast[]>([]);
     const [treasuryBalance, setTreasuryBalance] = useState<number>(0);
-    const [gxyPrice, setGxyPrice] = useState<number>(0.02); // Default fallback price
+    const [gxyPrice, setGxyPrice] = useState<number>(0.02);
     const [actualReward, setActualReward] = useState<number | undefined>(undefined);
+    const [canDailySpin, setCanDailySpin] = useState(true);
+    const [cooldownRemaining, setCooldownRemaining] = useState(0);
 
     // Ref to store pending spin result (shown after wheel finishes)
     const pendingSpinResult = React.useRef<{ tier: number, reward: number, signature: string } | null>(null);
@@ -1644,286 +1647,68 @@ function App() {
         }
     };
 
-    // Spin handler - On-chain transaction
+    // Spin handler - Gasless daily spin via backend API
     const handleSpin = async () => {
-        if (!publicKey || !phantomWallet) {
+        if (!publicKey) {
             setShowLogin(true);
             return;
         }
 
-        // Don't start spinning animation yet - wait for successful simulation and signing
-        const toastId = addToast('pending', '⏳ Preparing spin transaction...');
+        if (!canDailySpin) {
+            addToast('error', `Daily spin cooldown active. Try again in ${Math.floor(cooldownRemaining / 3600)}h ${Math.floor((cooldownRemaining % 3600) / 60)}m`);
+            return;
+        }
+
+        const toastId = addToast('pending', '🎡 Requesting daily spin...');
 
         try {
-            // Use RPC URL from config (required - comes from backend's SOLANA_RPC env)
-            if (!config?.rpcUrl) {
-                addToast('error', 'Configuration error: RPC URL not available. Please refresh the page.');
-                return;
-            }
-            console.log("Using RPC URL:", config.rpcUrl);
-            const connection = new Connection(config.rpcUrl, "confirmed");
-            const userPubkey = new PublicKey(publicKey);
-            const wheelProgramId = new PublicKey(WHEEL_PROGRAM_ID);
-
-            // PDAs
-            const [statePda] = PublicKey.findProgramAddressSync([Buffer.from("wheel_state")], wheelProgramId);
-            const [poolPda] = PublicKey.findProgramAddressSync([Buffer.from("wheel_pool")], wheelProgramId);
-            const [userHistoryPda] = PublicKey.findProgramAddressSync(
-                [Buffer.from("user_history"), userPubkey.toBytes()],
-                wheelProgramId
-            );
-
-            // Stardust mint - FORCE CORRECT MAINNET MINT (ignore config which might be stale)
-            const stardustMint = new PublicKey("XG3VfC9e8hzjaeQutPHrCs1YE6jwbdCqhfRpY8miWo5");
-
-            // Get user's stardust token account
-            const userStardustAta = await getAssociatedTokenAddress(stardustMint, userPubkey);
-
-            // Check if user has the stardust token account and sufficient balance BEFORE simulating
-            try {
-                const tokenBalance = await connection.getTokenAccountBalance(userStardustAta);
-                const balance = tokenBalance.value.uiAmount || 0;
-                console.log("User stardust balance:", balance);
-                if (balance < SPIN_COST) {
-                    dismissToast(toastId);
-                    addToast('error', `Insufficient stardust! You have ${balance.toLocaleString()} but need ${SPIN_COST.toLocaleString()} ✨ to spin.`);
-                    return;
-                }
-            } catch (e: any) {
-                console.error("Token account check failed:", e);
-                console.error("Error details:", e.message || e);
-                dismissToast(toastId);
-                // More specific error message
-                if (e.message?.includes('could not find account') || e.message?.includes('Token account does not exist')) {
-                    addToast('error', 'No stardust token account found. Please claim stardust first by holding $GXY tokens.');
-                } else {
-                    addToast('error', `Failed to check stardust balance: ${e.message || 'Unknown error'}`);
-                }
-                return;
-            }
-
-            // Spin discriminator: sha256("global:spin")[:8]
-            const spinDiscriminator = Buffer.from([0x57, 0x40, 0x78, 0x0a, 0x19, 0xe0, 0x7a, 0x5d]);
-
-            // Account order MUST match Spin context in lib.rs:
-            // 1. state, 2. pool, 3. stardust_mint, 4. user_stardust, 5. user_history, 6. user, 7. token_program, 8. system_program
-            const spinIx = new TransactionInstruction({
-                programId: wheelProgramId,
-                keys: [
-                    { pubkey: statePda, isSigner: false, isWritable: true },          // state
-                    { pubkey: poolPda, isSigner: false, isWritable: true },           // pool
-                    { pubkey: stardustMint, isSigner: false, isWritable: true },      // stardust_mint
-                    { pubkey: userStardustAta, isSigner: false, isWritable: true },   // user_stardust
-                    { pubkey: userHistoryPda, isSigner: false, isWritable: true },    // user_history
-                    { pubkey: userPubkey, isSigner: true, isWritable: true },         // user
-                    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // token_program
-                    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
-                ],
-                data: spinDiscriminator,
-            });
-
-            const transaction = new Transaction().add(spinIx);
-            const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
-            transaction.recentBlockhash = blockhash;
-            transaction.feePayer = userPubkey;
-
-            // Simulate transaction first to catch errors before signing
-            console.log("Simulating spin transaction...");
-            console.log("Accounts:", {
-                state: statePda.toBase58(),
-                pool: poolPda.toBase58(),
-                stardustMint: stardustMint.toBase58(),
-                userStardust: userStardustAta.toBase58(),
-                userHistory: userHistoryPda.toBase58(),
-                user: userPubkey.toBase58(),
-            });
-
-            try {
-                const simResult = await connection.simulateTransaction(transaction);
-                if (simResult.value.err) {
-                    console.error("Simulation failed:", simResult.value.err);
-                    console.error("Logs:", simResult.value.logs);
-                    throw new Error(`Simulation failed: ${JSON.stringify(simResult.value.err)}. Check console for logs.`);
-                }
-                console.log("Simulation succeeded! Logs:", simResult.value.logs);
-            } catch (simErr: any) {
-                console.error("Simulation error:", simErr);
-                dismissToast(toastId);
-                addToast('error', `Simulation failed: ${simErr.message}`);
-                return;
-            }
-
-            // Simulation passed! Prompt for signing (don't start wheel yet)
-            updateToast(toastId, 'pending', '✍️ Please sign the transaction in your wallet...');
-
-            // Sign and send via Phantom
-            let signature: string;
-            try {
-                const result = await phantomWallet.signAndSendTransaction(transaction);
-                signature = result.signature;
-            } catch (signErr: any) {
-                dismissToast(toastId);
-                if (signErr.message?.includes('User rejected')) {
-                    addToast('error', 'Transaction cancelled by user');
-                } else {
-                    addToast('error', `Sign failed: ${signErr.message}`);
-                }
-                return;
-            }
-
-            // NOW start the wheel animation (after user signed)
+            // Start wheel animation immediately
             setSpinning(true);
-            updateToast(toastId, 'pending', '🎰 Wheel is spinning... Confirming transaction...');
+            updateToast(toastId, 'pending', '🎰 Wheel is spinning...');
 
-            // Try to confirm with a SHORT timeout (don't wait for block height expiry)
-            let confirmed = false;
-            let txError: any = null;
+            const res = await fetch('/api/spin', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ wallet: publicKey }),
+            });
 
-            // Confirm with 15 second timeout - don't wait forever for block height
-            const confirmWithTimeout = async () => {
-                const timeoutPromise = new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error('Confirmation timeout')), 15000)
-                );
+            const data = await res.json() as any;
 
-                try {
-                    const result = await Promise.race([
-                        connection.confirmTransaction({
-                            signature,
-                            blockhash,
-                            lastValidBlockHeight,
-                        }, 'confirmed'),
-                        timeoutPromise
-                    ]) as any;
-
-                    if (result?.value?.err) {
-                        throw new Error('Transaction failed on-chain');
-                    }
-                    return true;
-                } catch (e: any) {
-                    // Timeout or block height - check status directly
-                    throw e;
+            if (!res.ok) {
+                if (res.status === 429) {
+                    setCanDailySpin(false);
+                    setCooldownRemaining(86400); // Reset to 24h
                 }
-            };
-
-            try {
-                confirmed = await confirmWithTimeout();
-            } catch (confirmErr: any) {
-                console.warn('Confirmation error/timeout:', confirmErr.message);
-                updateToast(toastId, 'pending', '⏳ Checking transaction status...');
-
-                // Poll for up to 10 seconds with getSignatureStatus
-                for (let i = 0; i < 10; i++) {
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-
-                    try {
-                        const status = await connection.getSignatureStatus(signature);
-                        console.log(`Status check ${i + 1}:`, status.value);
-
-                        if (status.value?.confirmationStatus === 'confirmed' ||
-                            status.value?.confirmationStatus === 'finalized') {
-                            confirmed = true;
-                            break;
-                        }
-                        if (status.value?.err) {
-                            txError = new Error('Transaction failed on-chain');
-                            break;
-                        }
-                    } catch (e) {
-                        console.warn('Status check failed:', e);
-                    }
-                }
-
-                // If still not confirmed after polling, check transaction directly
-                if (!confirmed && !txError) {
-                    try {
-                        const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
-                        if (tx) {
-                            confirmed = true;
-                        }
-                    } catch (e) {
-                        console.warn('getTransaction failed:', e);
-                    }
-                }
-
-                // If we still can't determine, assume success (tx was sent)
-                if (!confirmed && !txError) {
-                    console.warn('Could not confirm tx status, assuming success');
-                    confirmed = true;
-                }
+                throw new Error(data.error || 'Spin failed');
             }
 
-            if (txError) {
-                throw txError;
-            }
-
-            // Get transaction logs to parse result (with retries for delayed RPC indexing)
-            let txDetails = null;
-            for (let attempt = 0; attempt < 5; attempt++) {
-                try {
-                    txDetails = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
-                    if (txDetails) break;
-                } catch (e) {
-                    console.warn(`getTransaction attempt ${attempt + 1} failed:`, e);
-                }
-                // Wait before retry (RPC may need time to index)
-                await new Promise(resolve => setTimeout(resolve, 1500));
-            }
-
-            const logs = txDetails?.meta?.logMessages || [];
-
-            // Parse spin result from logs: "Spin #X: Tier Y - Won Z lamports"
-            // On-chain tiers are 0-indexed: 0=VOID, 1=METEOR, 2=NEBULA, 3=SUPERNOVA
-            let tier = 1; // Default to METEOR (most common at 75%)
-            let reward = 0;
-            console.log('[Spin] Transaction logs:', logs);
-            for (const log of logs) {
-                const match = log.match(/Spin #\d+: Tier (\d+) - Won (\d+) lamports/);
-                if (match) {
-                    tier = parseInt(match[1]);
-                    reward = parseInt(match[2]);
-                    console.log('[Spin] Parsed result - Tier:', tier, 'Reward:', reward, 'lamports');
-                    // Validate tier is in range 0-3
-                    if (tier < 0 || tier > 3) {
-                        console.warn('[Spin] Invalid tier', tier, '- clamping to valid range');
-                        tier = Math.max(0, Math.min(tier, 3));
-                    }
-                    break;
-                }
-            }
+            const tier = data.tier;
+            const reward = data.rewardAmount;
+            const signature = data.txSignature;
 
             // Set target tier so the wheel animation lands on the correct segment
             setTargetTier(tier);
-
-            // Store result to show toast AFTER wheel stops (in onSpinFinish)
             pendingSpinResult.current = { tier, reward, signature };
-            setActualReward(reward); // Pass actual reward to wheel for display
+            setActualReward(reward);
 
-            // Record spin in backend for history display
-            // Backend verifies transaction on-chain and parses tier/reward from logs
-            fetch('/api/wheel/record-spin', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ wallet: publicKey, signature }),
-            }).catch(err => console.warn('Failed to record spin:', err));
+            // After a successful spin, set cooldown
+            setCanDailySpin(false);
+            setCooldownRemaining(86400);
 
-            // Dismiss the pending toast - success toast will show when wheel stops
             dismissToast(toastId);
-
-            // Refresh balances
             fetchEarnings();
             fetch('/api/wheel/treasury').then(r => r.json()).then((d: any) => setTreasuryBalance(d.balance || 0));
 
         } catch (e: any) {
             console.error('Spin error:', e);
             dismissToast(toastId);
-            if (e.message?.includes('User rejected')) {
-                addToast('error', 'Transaction cancelled');
-            } else if (e.message?.includes('insufficient')) {
-                addToast('error', 'Insufficient stardust balance');
+            if (e.message?.includes('24 hours')) {
+                addToast('error', 'Must wait 24 hours between daily spins');
+                setCanDailySpin(false);
+                setCooldownRemaining(86400);
             } else {
                 addToast('error', `Spin failed: ${e.message}`);
             }
-            // Only set spinning=false on error - on success, the wheel's onSpinFinish callback handles it
             setSpinning(false);
         }
     };
@@ -2027,7 +1812,8 @@ function App() {
                                 }
                                 setActualReward(undefined);
                             }}
-                            spinCost={SPIN_COST}
+                            canDailySpin={canDailySpin}
+                            cooldownRemaining={cooldownRemaining}
                             actualReward={actualReward}
                             isAdmin={isAdmin}
                             treasuryBalance={treasuryBalance}
