@@ -1261,6 +1261,33 @@ function App() {
         return () => window.removeEventListener('load', check);
     }, []);
 
+    // Fetch daily spin cooldown status when wallet connects
+    useEffect(() => {
+        if (!publicKey) return;
+        fetch(`/api/spin/status?wallet=${publicKey}`)
+            .then(r => r.json())
+            .then((data: any) => {
+                setCanDailySpin(data.canSpin);
+                setCooldownRemaining(data.cooldownRemaining || 0);
+            })
+            .catch(() => setCanDailySpin(true));
+    }, [publicKey]);
+
+    // Live countdown timer - tick every second
+    useEffect(() => {
+        if (cooldownRemaining <= 0) return;
+        const timer = setInterval(() => {
+            setCooldownRemaining(prev => {
+                if (prev <= 1) {
+                    setCanDailySpin(true);
+                    return 0;
+                }
+                return prev - 1;
+            });
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [cooldownRemaining > 0]);
+
     // Connect Phantom
     const handleConnect = async () => {
         if (!phantomWallet) {
