@@ -74,6 +74,9 @@ const TIER_NAMES = ["VOID", "METEOR", "NEBULA", "QUASAR", "SUPERNOVA"];
 // Base probabilities (out of 10000) — adjusted per holder based on stardust
 const BASE_PROBABILITIES = [5000, 3000, 1500, 450, 50]; // 50%, 30%, 15%, 4.5%, 0.5%
 
+// Wheel program ID (separate from stardust program in config.programId)
+const WHEEL_PROGRAM_ID_STR = "3M12BfitAEYz14WJBMnjahEuSvhsWhjfGJXbzur26o2U";
+
 // SOL rewards per tier (in lamports)
 const TIER_REWARDS = [
     0.001 * 1e9,  // VOID:      0.001 SOL
@@ -732,7 +735,7 @@ async function updateHoldersOnChain(): Promise<boolean> {
         // Cap at 30 (MAX_HOLDERS on-chain)
         const holders = holderQueue.slice(0, 30);
 
-        const WHEEL_PROGRAM_ID = new PublicKey(config.programId);
+        const WHEEL_PROGRAM_ID = new PublicKey(WHEEL_PROGRAM_ID_STR);
         const [statePda] = PublicKey.findProgramAddressSync([Buffer.from("wheel_state")], WHEEL_PROGRAM_ID);
         const [registryPda] = PublicKey.findProgramAddressSync([Buffer.from("holder_registry")], WHEEL_PROGRAM_ID);
 
@@ -792,7 +795,7 @@ async function executeAdminSpin(): Promise<{ wallet: string; rewardTier: number;
         probsArray[i] = adjustedProbs[i];
     }
 
-    const WHEEL_PROGRAM_ID = new PublicKey(config.programId);
+    const WHEEL_PROGRAM_ID = new PublicKey(WHEEL_PROGRAM_ID_STR);
     const [statePda] = PublicKey.findProgramAddressSync([Buffer.from("wheel_state")], WHEEL_PROGRAM_ID);
     const [registryPda] = PublicKey.findProgramAddressSync([Buffer.from("holder_registry")], WHEEL_PROGRAM_ID);
     const [poolPda] = PublicKey.findProgramAddressSync([Buffer.from("wheel_pool")], WHEEL_PROGRAM_ID);
@@ -893,7 +896,7 @@ async function executeUserSpin(wallet: string): Promise<{ rewardTier: number; re
         probsArray[i] = adjustedProbs[i];
     }
 
-    const WHEEL_PROGRAM_ID = new PublicKey(config.programId);
+    const WHEEL_PROGRAM_ID = new PublicKey(WHEEL_PROGRAM_ID_STR);
     const holderPubkey = new PublicKey(wallet);
 
     const [statePda] = PublicKey.findProgramAddressSync([Buffer.from("wheel_state")], WHEEL_PROGRAM_ID);
@@ -1459,7 +1462,7 @@ async function handler(req: Request): Promise<Response | null> {
         if (!wallet) return json({ error: "wallet required" }, 400);
 
         try {
-            const WHEEL_PROGRAM_ID = new PublicKey(config.programId);
+            const WHEEL_PROGRAM_ID = new PublicKey(WHEEL_PROGRAM_ID_STR);
             const holderPubkey = new PublicKey(wallet);
             const [userHistoryPda] = PublicKey.findProgramAddressSync(
                 [Buffer.from("user_history"), holderPubkey.toBuffer()],
