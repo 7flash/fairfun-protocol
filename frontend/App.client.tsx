@@ -366,7 +366,8 @@ const DartboardWheel: React.FC<{
     let cumulativeAngle = 0;
 
     WHEEL_CONFIG.forEach((tier, ringIndex) => {
-        // Reverse the order: tier 0 (SUPERNOVA) is innermost, tier 4 (STARDUST) is outermost
+        // Reverse radial order: tier 0 (SUPERNOVA) = innermost ring, tier 4 (VOID) = outermost ring
+        // The rarest/highest-value tier is at the center, common tiers at the edge
         const reversedIndex = numRings - 1 - ringIndex;
         const ringOuterR = outerRadius - reversedIndex * ringWidth;
         const ringInnerR = outerRadius - (reversedIndex + 1) * ringWidth;
@@ -463,23 +464,26 @@ const DartboardWheel: React.FC<{
             {segments}
 
             {/* Ring separators with subtle glow */}
-            {WHEEL_CONFIG.map((tier, idx) => (
-                <circle
-                    key={`ring-sep-${idx}`}
-                    cx={center}
-                    cy={center}
-                    r={outerRadius - (idx + 1) * ringWidth}
-                    fill="none"
-                    stroke="#2a2a4e"
-                    strokeWidth="1.5"
-                    opacity="0.8"
-                />
-            ))}
+            {WHEEL_CONFIG.map((_tier, idx) => {
+                const reversedIdx = numRings - 1 - idx;
+                return (
+                    <circle
+                        key={`ring-sep-${idx}`}
+                        cx={center}
+                        cy={center}
+                        r={outerRadius - (reversedIdx + 1) * ringWidth}
+                        fill="none"
+                        stroke="#2a2a4e"
+                        strokeWidth="1.5"
+                        opacity="0.8"
+                    />
+                );
+            })}
             {/* Radial reward labels on each ring - arc text in dark space area */}
             {WHEEL_CONFIG.map((tier, idx) => {
-                // Reverse index match segments: 0 (Supernova) is innermost
-                const reversedIndex = numRings - 1 - idx;
-                const ringMidRadius = outerRadius - reversedIndex * ringWidth - ringWidth / 2;
+                // Reversed: tier 0 (Supernova) is innermost (rarest at center)
+                const reversedIdx = numRings - 1 - idx;
+                const ringMidRadius = outerRadius - reversedIdx * ringWidth - ringWidth / 2;
 
                 // Calculate SOL value based on treasury
                 const solValue = tier.reward > 0 ? (treasuryBalance * tier.reward / 100) : 0;
@@ -553,6 +557,124 @@ const DartboardWheel: React.FC<{
     );
 };
 
+// Holder Queue component - shows next holders and live auto-spin events
+const HolderQueue: React.FC<{ liveEvent?: any; lastSpinResult?: any }> = ({ liveEvent, lastSpinResult }) => {
+    const [queue, setQueue] = React.useState<any[]>([]);
+    const [totalHolders, setTotalHolders] = React.useState(0);
+    const [autoSpinEnabled, setAutoSpinEnabled] = React.useState(false);
+    const BACKEND = (window as any).__BACKEND_URL__ || '';
+
+    React.useEffect(() => {
+        const fetchQueue = async () => {
+            try {
+                const res = await fetch(`${BACKEND}/api/wheel/queue`);
+                if (res.ok) {
+                    const data = await res.json() as any;
+                    setQueue(data.queue || []);
+                    setTotalHolders(data.totalHolders || 0);
+                    setAutoSpinEnabled(data.autoSpinEnabled || false);
+                }
+            } catch { }
+        };
+        fetchQueue();
+        const interval = setInterval(fetchQueue, 15_000);
+        return () => clearInterval(interval);
+    }, []);
+
+    // Refresh queue when a spin result arrives
+    React.useEffect(() => {
+        if (lastSpinResult) {
+            fetch(`${BACKEND}/api/wheel/queue`).then(r => r.ok ? r.json() : null).then(data => {
+                if (data) {
+                    setQueue(data.queue || []);
+                    setTotalHolders(data.totalHolders || 0);
+                }
+            }).catch(() => { });
+        }
+    }, [lastSpinResult]);
+
+    return (
+        <div style={{
+            marginTop: '20px', padding: '16px', borderRadius: '10px',
+            background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)'
+        }}>
+            {/* Live auto-spin status */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginBottom: '10px' }}>
+                <span style={{
+                    width: '8px', height: '8px', borderRadius: '50%',
+                    background: autoSpinEnabled ? '#10b981' : '#64748b',
+                    boxShadow: autoSpinEnabled ? '0 0 8px #10b981' : 'none',
+                    animation: autoSpinEnabled ? 'pulse 2s infinite' : 'none',
+                }}></span>
+                <span style={{ fontSize: '11px', color: autoSpinEnabled ? '#10b981' : '#64748b', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 700 }}>
+                    {autoSpinEnabled ? 'LIVE AUTO-SPIN' : 'AUTO-SPIN PAUSED'}
+                </span>
+            </div>
+
+            {/* Last spin result banner */}
+            {lastSpinResult && (
+                <div style={{
+                    padding: '8px 12px', borderRadius: '8px', marginBottom: '10px', textAlign: 'center',
+                    background: `rgba(${lastSpinResult.tier <= 1 ? '251,191,36' : lastSpinResult.tier <= 2 ? '168,85,247' : '100,116,139'},0.15)`,
+                    border: `1px solid rgba(${lastSpinResult.tier <= 1 ? '251,191,36' : lastSpinResult.tier <= 2 ? '168,85,247' : '100,116,139'},0.3)`,
+                    animation: 'fadeIn 0.5s ease-out',
+                }}>
+                    <span style={{ fontSize: '12px', color: '#e2e8f0' }}>
+                        🎰 <span style={{ fontFamily: 'monospace', color: '#fbbf24' }}>{lastSpinResult.walletShort}</span>
+                        {' → '}
+                        <span style={{ fontWeight: 700, color: lastSpinResult.tier === 0 ? '#fbbf24' : lastSpinResult.tier === 1 ? '#a855f7' : '#94a3b8' }}>
+                            {lastSpinResult.tierName}
+                        </span>
+                        {' '}{lastSpinResult.rewardFormatted}
+                    </span>
+                </div>
+            )}
+
+            {/* Currently spinning indicator */}
+            {liveEvent && (
+                <div style={{
+                    padding: '8px 12px', borderRadius: '8px', marginBottom: '10px', textAlign: 'center',
+                    background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.2)',
+                }}>
+                    <span style={{ fontSize: '12px', color: '#fbbf24' }}>
+                        ✨ Spinning for <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{liveEvent.walletShort}</span>...
+                    </span>
+                </div>
+            )}
+
+            {/* Queue header */}
+            <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '10px', textAlign: 'center' }}>
+                {totalHolders > 0 ? `Next in Queue (${totalHolders} holders)` : 'Waiting for token holders'}
+            </div>
+
+            {queue.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {queue.map((h: any, i: number) => (
+                        <div key={i} style={{
+                            display: 'flex', alignItems: 'center', gap: '8px',
+                            padding: '6px 10px', borderRadius: '6px',
+                            background: h.isCurrent ? 'rgba(251,191,36,0.15)' : 'transparent',
+                            border: h.isCurrent ? '1px solid rgba(251,191,36,0.3)' : '1px solid transparent'
+                        }}>
+                            <span style={{ color: h.isCurrent ? '#fbbf24' : '#475569', fontSize: '12px', fontWeight: 700, width: '24px' }}>
+                                {h.isCurrent ? '▶' : `#${h.position + 1}`}
+                            </span>
+                            <span style={{ color: h.isCurrent ? '#fbbf24' : '#94a3b8', fontSize: '13px', fontFamily: 'monospace' }}>
+                                {h.walletShort}
+                            </span>
+                            {h.isCurrent && <span style={{ marginLeft: 'auto', fontSize: '10px', color: '#fbbf24', fontWeight: 600 }}>NEXT</span>}
+                        </div>
+                    ))}
+                </div>
+            ) : (
+                <div style={{ textAlign: 'center', color: '#475569', fontSize: '12px', padding: '10px 0' }}>
+                    No holders with tokens yet
+                </div>
+            )}
+        </div>
+    );
+};
+
 const GalaxyWheelSection: React.FC<{
     available: number;
     spinning: boolean;
@@ -565,8 +687,11 @@ const GalaxyWheelSection: React.FC<{
     canDailySpin: boolean;
     cooldownRemaining: number; // seconds until next spin
     actualReward?: number;
-}> = ({ available, spinning, onSpin, targetTier, onSpinFinish, isAdmin, treasuryBalance, onFundTreasury, canDailySpin, cooldownRemaining, actualReward }) => {
-    const canSpin = canDailySpin;
+    connected?: boolean;
+    liveSpinEvent?: any;
+    lastAutoSpinResult?: any;
+}> = ({ available, spinning, onSpin, targetTier, onSpinFinish, isAdmin, treasuryBalance, onFundTreasury, canDailySpin, cooldownRemaining, actualReward, connected, liveSpinEvent, lastAutoSpinResult }) => {
+    const canSpin = canDailySpin && !!connected;
     const [fundAmount, setFundAmount] = React.useState("0.1");
 
     // Animation state
@@ -760,9 +885,15 @@ const GalaxyWheelSection: React.FC<{
             const target = getTargetAngleForTier(knownTier);
             // Calculate pre-final rotation amount to set proper target
             const preFinalRotation = calculatePreFinalRotation();
-            // Add full rotations + pre-final stages + extra for final stage
-            const fullRotations = 3 + Math.floor(Math.random() * 2);
-            setTargetRotation(pointerRotation + (fullRotations * 360) + preFinalRotation + target);
+            // We need targetRotation % 360 === target so the pointer lands on the correct tier zone.
+            // Compute how far we'll travel before stage 5 (accel + constant + stages 1-4):
+            const baseTravel = pointerRotation + preFinalRotation;
+            // Figure out how much extra we need so the total mod 360 == target
+            const remainder = ((baseTravel % 360) + 360) % 360;
+            // Stage 5 must cover (target - remainder + 360) % 360 degrees, plus enough full rotations
+            const minFullRotations = 3 + Math.floor(Math.random() * 2);
+            const stage5Travel = ((target - remainder) % 360 + 360) % 360;
+            setTargetRotation(baseTravel + minFullRotations * 360 + stage5Travel);
 
             // Schedule transition to decel after accel + brief constant
             setTimeout(() => {
@@ -816,9 +947,13 @@ const GalaxyWheelSection: React.FC<{
             const currentRotation = pointerRotation;
             // Calculate pre-final rotation amount
             const preFinalRotation = calculatePreFinalRotation();
-            const fullRotations = 3 + Math.floor(Math.random() * 2);
+            // Fix: ensure targetRotation % 360 === target so pointer lands on correct tier
+            const baseTravel = currentRotation + preFinalRotation;
+            const remainder = ((baseTravel % 360) + 360) % 360;
+            const minFullRotations = 3 + Math.floor(Math.random() * 2);
+            const stage5Travel = ((target - remainder) % 360 + 360) % 360;
 
-            const targetRot = currentRotation + (fullRotations * 360) + preFinalRotation + target;
+            const targetRot = baseTravel + minFullRotations * 360 + stage5Travel;
             setTargetRotation(targetRot);
 
             // Store the tier for animation-synced reveal
@@ -1015,10 +1150,10 @@ const GalaxyWheelSection: React.FC<{
                 </div>
             )}
 
-            {/* Full-width Spin Button */}
+            {/* Spin Button */}
             <button
-                onClick={handleRealSpin}
-                disabled={!canSpin || isSpinning}
+                onClick={canSpin ? handleRealSpin : handleDemo}
+                disabled={isSpinning}
                 style={{
                     width: '100%',
                     padding: '16px',
@@ -1026,45 +1161,30 @@ const GalaxyWheelSection: React.FC<{
                     fontWeight: 800,
                     borderRadius: '12px',
                     border: 'none',
-                    background: canSpin && !isSpinning
-                        ? 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)'
-                        : 'linear-gradient(135deg, #475569, #334155)',
-                    color: canSpin && !isSpinning ? '#0f172a' : '#94a3b8',
-                    cursor: canSpin && !isSpinning ? 'pointer' : 'not-allowed',
-                    boxShadow: canSpin && !isSpinning
-                        ? '0 4px 20px rgba(251, 191, 36, 0.4)'
-                        : 'none',
+                    background: isSpinning
+                        ? 'linear-gradient(135deg, #475569, #334155)'
+                        : canSpin
+                            ? 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%)'
+                            : 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+                    color: isSpinning ? '#94a3b8' : canSpin ? '#0f172a' : '#fff',
+                    cursor: isSpinning ? 'not-allowed' : 'pointer',
+                    boxShadow: isSpinning ? 'none'
+                        : canSpin ? '0 4px 20px rgba(251, 191, 36, 0.4)'
+                            : '0 4px 20px rgba(99, 102, 241, 0.3)',
                     transition: 'all 0.2s ease'
                 }}
             >
-                {isSpinning ? '✨ SPINNING...' : canSpin ? '🎡 FREE DAILY SPIN' : `⏳ ${Math.floor(cooldownRemaining / 3600)}h ${Math.floor((cooldownRemaining % 3600) / 60)}m`}
-            </button>
-
-            {/* Demo button - subtle */}
-            <button
-                onClick={handleDemo}
-                disabled={isSpinning}
-                style={{
-                    width: '100%',
-                    marginTop: '10px',
-                    padding: '10px',
-                    fontSize: '13px',
-                    background: 'transparent',
-                    border: '1px solid #334155',
-                    color: '#64748b',
-                    borderRadius: '8px',
-                    cursor: isSpinning ? 'not-allowed' : 'pointer',
-                    opacity: isSpinning ? 0.5 : 1
-                }}
-            >
-                Demo Spin (Free)
+                {isSpinning ? '✨ SPINNING...' : canSpin ? '🎡 FREE DAILY SPIN' : '🎡 DEMO SPIN'}
             </button>
 
             {!canSpin && !isSpinning && (
-                <p style={{ color: '#60a5fa', fontSize: '13px', margin: '12px 0 0 0', textAlign: 'center' }}>
-                    Next free spin in {Math.floor(cooldownRemaining / 3600)}h {Math.floor((cooldownRemaining % 3600) / 60)}m
+                <p style={{ color: '#64748b', fontSize: '12px', margin: '8px 0 0 0', textAlign: 'center' }}>
+                    Next free spin in {Math.floor(cooldownRemaining / 3600)}h {Math.floor((cooldownRemaining % 3600) / 60)}m • Demo spins don't cost anything
                 </p>
             )}
+
+            {/* Holder Queue */}
+            <HolderQueue liveEvent={liveSpinEvent} lastSpinResult={lastAutoSpinResult} />
 
             {/* Admin Panel */}
             {isAdmin && onFundTreasury && (
@@ -1208,6 +1328,14 @@ function App() {
     const [canDailySpin, setCanDailySpin] = useState(true);
     const [cooldownRemaining, setCooldownRemaining] = useState(0);
 
+    // SSE live auto-spin state
+    const [liveSpinEvent, setLiveSpinEvent] = useState<any>(null);
+    const [lastAutoSpinResult, setLastAutoSpinResult] = useState<any>(null);
+
+    // Withdrawal state
+    const [withdrawableBalance, setWithdrawableBalance] = useState(0);
+    const [withdrawing, setWithdrawing] = useState(false);
+
     // Ref to store pending spin result (shown after wheel finishes)
     const pendingSpinResult = React.useRef<{ tier: number, reward: number, signature: string } | null>(null);
 
@@ -1288,6 +1416,40 @@ function App() {
         return () => clearInterval(timer);
     }, [cooldownRemaining > 0]);
 
+    // SSE: Subscribe to real-time auto-spin events
+    useEffect(() => {
+        const eventSource = new EventSource('/api/wheel/events');
+
+        eventSource.addEventListener('connected', (e) => {
+            console.log('[SSE] Connected to wheel events:', JSON.parse(e.data));
+        });
+
+        eventSource.addEventListener('spinning', (e) => {
+            const data = JSON.parse(e.data);
+            console.log('[SSE] Spinning for:', data.walletShort);
+            setLiveSpinEvent(data);
+        });
+
+        eventSource.addEventListener('spin', (e) => {
+            const data = JSON.parse(e.data);
+            console.log('[SSE] Spin result:', data.walletShort, '→', data.tierName, data.rewardFormatted);
+            setLiveSpinEvent(null); // Clear "spinning" indicator
+            setLastAutoSpinResult(data);
+            // Refresh winners list via direct fetch
+            fetch('/api/wheel/history?limit=20').then(r => r.ok ? r.json() : null).then((d: any) => {
+                if (d?.spins) setWinners(d.spins);
+            }).catch(() => { });
+            // Clear the result banner after 25 seconds (before next spin)
+            setTimeout(() => setLastAutoSpinResult(null), 25_000);
+        });
+
+        eventSource.onerror = () => {
+            console.warn('[SSE] Connection lost, will reconnect...');
+        };
+
+        return () => eventSource.close();
+    }, []);
+
     // Connect Phantom
     const handleConnect = async () => {
         if (!phantomWallet) {
@@ -1306,6 +1468,12 @@ function App() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ wallet: pk }),
                 });
+                // Fetch user rewards
+                try {
+                    const rewardsRes = await fetch(`/api/wheel/user/${pk}`);
+                    const rewardsData = await rewardsRes.json() as any;
+                    if (rewardsData.availableToWithdraw) setWithdrawableBalance(rewardsData.availableToWithdraw);
+                } catch (e) { }
                 return;
             }
 
@@ -1319,6 +1487,12 @@ function App() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ wallet: pk }),
             });
+            // Fetch user rewards
+            try {
+                const rewardsRes = await fetch(`/api/wheel/user/${pk}`);
+                const rewardsData = await rewardsRes.json() as any;
+                if (rewardsData.availableToWithdraw) setWithdrawableBalance(rewardsData.availableToWithdraw);
+            } catch (e) { }
         } catch (e: any) {
             console.error('Connect failed:', e);
 
@@ -1756,7 +1930,7 @@ function App() {
                 />
                 <RulesBanner />
 
-                {connected ? (
+                {connected && (
                     <>
                         <MyWalletSection
                             earnings={earnings}
@@ -1819,53 +1993,10 @@ function App() {
                                 </div>
                             </Section>
                         )}
-
-                        <GalaxyWheelSection
-                            available={available}
-                            spinning={spinning}
-                            onSpin={handleSpin}
-                            targetTier={targetTier}
-                            onSpinFinish={() => {
-                                setSpinning(false);
-                                setTargetTier(null);
-                                if (pendingSpinResult.current) {
-                                    const { tier, reward, signature } = pendingSpinResult.current;
-                                    const tierNames = ["SUPERNOVA ⭐", "NEBULA 🌌", "METEORS 💫", "COSMOS 🌍", "VOID ✨"];
-                                    const rewardSol = reward / 1e9;
-                                    const tierName = tierNames[tier] || `Tier ${tier}`;
-                                    addToast('success', `🎉 ${tierName}! You won ${rewardSol.toFixed(4)} SOL!`, signature);
-                                    pendingSpinResult.current = null;
-                                    fetchWinners();
-                                }
-                                setActualReward(undefined);
-                            }}
-                            canDailySpin={canDailySpin}
-                            cooldownRemaining={cooldownRemaining}
-                            actualReward={actualReward}
-                            isAdmin={isAdmin}
-                            treasuryBalance={treasuryBalance}
-                            onFundTreasury={async (amount) => {
-                                if (!phantomWallet || !publicKey) return;
-                                addToast('pending', 'Funding treasury...');
-                                try {
-                                    const res = await fetch('/api/admin/fund-pool', {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ amount }),
-                                    });
-                                    if (!res.ok) {
-                                        const err = await res.json();
-                                        throw new Error(err.error || 'Fund failed');
-                                    }
-                                    addToast('success', `Funded ${amount} SOL to pool!`);
-                                    fetch('/api/wheel/treasury').then(r => r.json()).then(d => setTreasuryBalance(d.balance || 0));
-                                } catch (e: any) {
-                                    addToast('error', `Fund failed: ${e.message}`);
-                                }
-                            }}
-                        />
                     </>
-                ) : (
+                )}
+
+                {!connected && (
                     <div className="connect-prompt">
                         <h2>Connect Your Wallet</h2>
                         <p>Connect your Phantom wallet to view your {TOKEN_NAME} balance and earn stardust!</p>
@@ -1874,6 +2005,123 @@ function App() {
                         </button>
                     </div>
                 )}
+
+                {/* Withdrawal Card */}
+                {connected && withdrawableBalance > 0 && (
+                    <div style={{
+                        margin: '16px auto',
+                        maxWidth: '480px',
+                        padding: '16px 20px',
+                        borderRadius: '12px',
+                        background: 'linear-gradient(135deg, rgba(34,197,94,0.08), rgba(34,197,94,0.02))',
+                        border: '1px solid rgba(34,197,94,0.2)',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                    }}>
+                        <div>
+                            <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '4px' }}>Available to Withdraw</div>
+                            <div style={{ fontSize: '20px', fontWeight: 700, color: '#22c55e' }}>
+                                {(withdrawableBalance / 1e9).toFixed(4)} SOL
+                            </div>
+                        </div>
+                        <button
+                            onClick={async () => {
+                                if (!phantomWallet || !publicKey || withdrawing) return;
+                                setWithdrawing(true);
+                                try {
+                                    addToast('pending', 'Building withdrawal transaction...');
+                                    const res = await fetch('/api/wheel/withdraw-tx', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ wallet: publicKey }),
+                                    });
+                                    const data = await res.json() as any;
+                                    if (data.error) throw new Error(data.error);
+
+                                    const { Transaction: Tx } = await import('@solana/web3.js');
+                                    const txBuf = Uint8Array.from(atob(data.transaction), c => c.charCodeAt(0));
+                                    const transaction = Tx.from(txBuf);
+                                    const { signature } = await phantomWallet.signAndSendTransaction(transaction);
+                                    addToast('success', `✅ Withdrew ${(withdrawableBalance / 1e9).toFixed(4)} SOL!`, signature);
+                                    setWithdrawableBalance(0);
+                                } catch (e: any) {
+                                    addToast('error', e.message || 'Withdrawal failed');
+                                } finally {
+                                    setWithdrawing(false);
+                                }
+                            }}
+                            disabled={withdrawing}
+                            style={{
+                                padding: '10px 20px',
+                                borderRadius: '8px',
+                                background: withdrawing ? '#374151' : 'linear-gradient(135deg, #22c55e, #16a34a)',
+                                color: 'white',
+                                border: 'none',
+                                cursor: withdrawing ? 'not-allowed' : 'pointer',
+                                fontWeight: 700,
+                                fontSize: '14px',
+                            }}
+                        >
+                            {withdrawing ? '⏳ Withdrawing...' : '💰 Withdraw'}
+                        </button>
+                    </div>
+                )}
+
+                {/* Live Viewer Link */}
+                <div style={{ textAlign: 'center', margin: '8px 0' }}>
+                    <a href="/live" target="_blank" style={{ color: '#3b82f6', fontSize: '12px', textDecoration: 'none' }}>
+                        🌀 Watch Live Spins →
+                    </a>
+                </div>
+
+                <GalaxyWheelSection
+                    available={available}
+                    spinning={spinning}
+                    onSpin={handleSpin}
+                    targetTier={targetTier}
+                    onSpinFinish={() => {
+                        setSpinning(false);
+                        setTargetTier(null);
+                        if (pendingSpinResult.current) {
+                            const { tier, reward, signature } = pendingSpinResult.current;
+                            const tierNames = ["SUPERNOVA ⭐", "NEBULA 🌌", "METEORS 💫", "COSMOS 🌍", "VOID ✨"];
+                            const rewardSol = reward / 1e9;
+                            const tierName = tierNames[tier] || `Tier ${tier}`;
+                            addToast('success', `🎉 ${tierName}! You won ${rewardSol.toFixed(4)} SOL!`, signature);
+                            pendingSpinResult.current = null;
+                            fetchWinners();
+                        }
+                        setActualReward(undefined);
+                    }}
+                    canDailySpin={canDailySpin}
+                    cooldownRemaining={cooldownRemaining}
+                    actualReward={actualReward}
+                    isAdmin={isAdmin}
+                    treasuryBalance={treasuryBalance}
+                    connected={connected}
+                    liveSpinEvent={liveSpinEvent}
+                    lastAutoSpinResult={lastAutoSpinResult}
+                    onFundTreasury={async (amount) => {
+                        if (!phantomWallet || !publicKey) return;
+                        addToast('pending', 'Funding treasury...');
+                        try {
+                            const res = await fetch('/api/admin/fund-pool', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ amount }),
+                            });
+                            if (!res.ok) {
+                                const err = await res.json();
+                                throw new Error(err.error || 'Fund failed');
+                            }
+                            addToast('success', `Funded ${amount} SOL to pool!`);
+                            fetch('/api/wheel/treasury').then(r => r.json()).then(d => setTreasuryBalance(d.balance || 0));
+                        } catch (e: any) {
+                            addToast('error', `Fund failed: ${e.message}`);
+                        }
+                    }}
+                />
 
                 <LeadersSection leaderboard={leaderboard} currentWallet={publicKey} />
                 <HistorySection winners={winners} />

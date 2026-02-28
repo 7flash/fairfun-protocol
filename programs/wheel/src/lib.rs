@@ -90,6 +90,7 @@ pub mod galaxy_wheel {
 
     /// Daily spin - authority calls on behalf of holder, no stardust burn
     /// Uses manual_pool PDA, enforces 24h cooldown per holder
+    /// Rewards are ACCUMULATED in UserRewards PDA (user must withdraw)
     pub fn spin(
         ctx: Context<Spin>,
         probabilities: [u16; MAX_TIERS],
@@ -139,29 +140,15 @@ pub mod galaxy_wheel {
         let reward_bps = state.reward_bps[reward_tier as usize] as u64;
         let reward_amount = (treasury_balance * reward_bps) / 10000;
 
-        // Transfer SOL from manual_pool PDA to holder
-        if reward_amount > 0 {
-            require!(treasury_balance >= reward_amount, WheelError::InsufficientTreasury);
-
-            let manual_pool_bump = ctx.bumps.manual_pool;
-            let pool_seeds: &[&[u8]] = &[b"wheel_manual_pool", &[manual_pool_bump]];
-
-            let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
-                &ctx.accounts.manual_pool.key(),
-                &ctx.accounts.holder.key(),
-                reward_amount,
-            );
-
-            anchor_lang::solana_program::program::invoke_signed(
-                &transfer_ix,
-                &[
-                    ctx.accounts.manual_pool.to_account_info(),
-                    ctx.accounts.holder.to_account_info(),
-                    ctx.accounts.system_program.to_account_info(),
-                ],
-                &[pool_seeds],
-            )?;
+        // Accumulate reward in UserRewards PDA (no direct transfer)
+        let user_rewards = &mut ctx.accounts.user_rewards;
+        if user_rewards.user == Pubkey::default() {
+            user_rewards.user = ctx.accounts.holder.key();
+            user_rewards.bump = ctx.bumps.user_rewards;
         }
+        user_rewards.available += reward_amount;
+        user_rewards.total_earned += reward_amount;
+        user_rewards.last_reward_ts = clock.unix_timestamp;
 
         // Update state
         state.total_spins += 1;
@@ -188,8 +175,8 @@ pub mod galaxy_wheel {
             timestamp: clock.unix_timestamp,
         });
 
-        msg!("Daily Spin #{}: Holder {} - Tier {} - Won {} lamports",
-            state.total_spins, ctx.accounts.holder.key(), reward_tier, reward_amount);
+        msg!("Daily Spin #{}: Holder {} - Tier {} - Credited {} lamports (available: {})",
+            state.total_spins, ctx.accounts.holder.key(), reward_tier, reward_amount, user_rewards.available);
         Ok(())
     }
 
@@ -263,20 +250,17 @@ pub mod galaxy_wheel {
         Ok(())
     }
 
-    /// Admin: Spin the wheel - randomly picks a winner from the on-chain registry
-    /// Winner is selected using on-chain hash (slot, timestamp, total_spins)
-    /// All holders must be passed as remaining_accounts for SOL transfer
-    pub fn admin_spin<'info>(
-        ctx: Context<'_, '_, 'info, 'info, AdminSpin<'info>>,
+    /// Admin: Spin the wheel for a specific holder
+    /// Winner is the holder whose user_rewards PDA is passed
+    /// Reward is ACCUMULATED in the UserRewards PDA (not transferred directly)
+    /// User must call withdraw() to claim
+    pub fn admin_spin(
+        ctx: Context<AdminSpin>,
         probabilities: [u16; MAX_TIERS],
     ) -> Result<()> {
         let state = &mut ctx.accounts.state;
-        let registry = &ctx.accounts.registry;
         let clock = Clock::get()?;
         let num_tiers = state.num_tiers as usize;
-        let n = registry.num_holders as usize;
-
-        require!(n > 0, WheelError::EmptyHolderList);
 
         // Validate probabilities sum to 10000
         let total_prob: u16 = probabilities[..num_tiers].iter().sum();
@@ -285,25 +269,12 @@ pub mod galaxy_wheel {
         // Get treasury balance
         let treasury_balance = ctx.accounts.pool.lamports();
 
-        // Step 1: Pick random winner from registry
-        let winner_seed = [
-            &clock.slot.to_le_bytes()[..],
-            &clock.unix_timestamp.to_le_bytes()[..],
-            &state.total_spins.to_le_bytes()[..],
-            b"winner",
-        ].concat();
-        let winner_hash = hash(&winner_seed);
-        let winner_idx = (u16::from_le_bytes([winner_hash.as_ref()[0], winner_hash.as_ref()[1]]) as usize) % n;
-        let winner_pubkey = registry.holders[winner_idx];
+        // The holder is explicitly passed as an account
+        let holder_pubkey = ctx.accounts.holder.key();
 
-        // Step 2: Find winner in remaining_accounts
-        let winner_account = ctx.remaining_accounts.iter()
-            .find(|a| a.key() == winner_pubkey)
-            .ok_or(WheelError::WinnerNotFound)?;
-
-        // Step 3: Generate tier random number (seeded differently from winner selection)
+        // Generate tier random number
         let tier_seed = [
-            winner_pubkey.as_ref(),
+            holder_pubkey.as_ref(),
             &clock.slot.to_le_bytes()[..],
             &clock.unix_timestamp.to_le_bytes()[..],
             &state.total_spins.to_le_bytes()[..],
@@ -327,29 +298,15 @@ pub mod galaxy_wheel {
         let reward_bps = state.reward_bps[reward_tier as usize] as u64;
         let reward_amount = (treasury_balance * reward_bps) / 10000;
 
-        // Transfer SOL from pool PDA to winner
-        if reward_amount > 0 {
-            require!(treasury_balance >= reward_amount, WheelError::InsufficientTreasury);
-
-            let pool_bump = state.pool_bump;
-            let pool_seeds: &[&[u8]] = &[b"wheel_pool", &[pool_bump]];
-
-            let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
-                &ctx.accounts.pool.key(),
-                &winner_pubkey,
-                reward_amount,
-            );
-
-            anchor_lang::solana_program::program::invoke_signed(
-                &transfer_ix,
-                &[
-                    ctx.accounts.pool.to_account_info(),
-                    winner_account.to_account_info(),
-                    ctx.accounts.system_program.to_account_info(),
-                ],
-                &[pool_seeds],
-            )?;
+        // Accumulate reward in UserRewards PDA (no direct transfer)
+        let user_rewards = &mut ctx.accounts.user_rewards;
+        if user_rewards.user == Pubkey::default() {
+            user_rewards.user = holder_pubkey;
+            user_rewards.bump = ctx.bumps.user_rewards;
         }
+        user_rewards.available += reward_amount;
+        user_rewards.total_earned += reward_amount;
+        user_rewards.last_reward_ts = clock.unix_timestamp;
 
         // Update state
         state.total_spins += 1;
@@ -357,7 +314,7 @@ pub mod galaxy_wheel {
 
         // Emit result event
         emit!(SpinResult {
-            user: winner_pubkey,
+            user: holder_pubkey,
             tier: reward_tier,
             reward_amount,
             reward_bps: reward_bps as u16,
@@ -365,8 +322,48 @@ pub mod galaxy_wheel {
             timestamp: clock.unix_timestamp,
         });
 
-        msg!("Admin Spin #{}: Winner {} (idx {}/{}) - Tier {} - Won {} lamports",
-            state.total_spins, winner_pubkey, winner_idx, n, reward_tier, reward_amount);
+        msg!("Admin Spin #{}: Holder {} - Tier {} - Credited {} lamports (available: {})",
+            state.total_spins, holder_pubkey, reward_tier, reward_amount, user_rewards.available);
+        Ok(())
+    }
+
+    /// Withdraw accumulated rewards from UserRewards PDA
+    /// User signs the transaction, SOL is transferred from pool to user
+    pub fn withdraw(ctx: Context<Withdraw>) -> Result<()> {
+        let user_rewards = &mut ctx.accounts.user_rewards;
+        let amount = user_rewards.available;
+        
+        require!(amount > 0, WheelError::NothingToWithdraw);
+
+        let treasury_balance = ctx.accounts.pool.lamports();
+        require!(treasury_balance >= amount, WheelError::InsufficientTreasury);
+
+        // Transfer SOL from pool PDA to user
+        let state = &ctx.accounts.state;
+        let pool_bump = state.pool_bump;
+        let pool_seeds: &[&[u8]] = &[b"wheel_pool", &[pool_bump]];
+
+        let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
+            &ctx.accounts.pool.key(),
+            &ctx.accounts.user.key(),
+            amount,
+        );
+
+        anchor_lang::solana_program::program::invoke_signed(
+            &transfer_ix,
+            &[
+                ctx.accounts.pool.to_account_info(),
+                ctx.accounts.user.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+            &[pool_seeds],
+        )?;
+
+        // Update rewards state
+        user_rewards.available = 0;
+        user_rewards.total_withdrawn += amount;
+
+        msg!("Withdraw: {} claimed {} lamports", ctx.accounts.user.key(), amount);
         Ok(())
     }
 }
@@ -456,9 +453,18 @@ pub struct Spin<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
-    /// CHECK: Target holder receiving SOL reward
-    #[account(mut)]
+    /// CHECK: Target holder
     pub holder: AccountInfo<'info>,
+
+    /// Holder's UserRewards PDA — rewards are accumulated here
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = 8 + UserRewards::LEN,
+        seeds = [b"user_rewards", holder.key().as_ref()],
+        bump
+    )]
+    pub user_rewards: Account<'info, UserRewards>,
 
     /// Holder's spin history PDA (for 24h cooldown tracking)
     #[account(
@@ -533,12 +539,41 @@ pub struct AdminSpin<'info> {
     )]
     pub state: Account<'info, WheelState>,
 
-    /// On-chain holder registry — winners picked randomly from this
+    /// CHECK: SOL treasury pool PDA
     #[account(
-        seeds = [b"holder_registry"],
+        mut,
+        seeds = [b"wheel_pool"],
+        bump = state.pool_bump
+    )]
+    pub pool: AccountInfo<'info>,
+
+    /// CHECK: The holder being spun for
+    pub holder: AccountInfo<'info>,
+
+    /// Holder's UserRewards PDA — rewards are accumulated here
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = 8 + UserRewards::LEN,
+        seeds = [b"user_rewards", holder.key().as_ref()],
         bump
     )]
-    pub registry: Box<Account<'info, HolderRegistry>>,
+    pub user_rewards: Account<'info, UserRewards>,
+
+    /// Authority must match state.authority
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct Withdraw<'info> {
+    #[account(
+        seeds = [b"wheel_state"],
+        bump = state.bump
+    )]
+    pub state: Account<'info, WheelState>,
 
     /// CHECK: SOL treasury pool PDA
     #[account(
@@ -548,12 +583,20 @@ pub struct AdminSpin<'info> {
     )]
     pub pool: AccountInfo<'info>,
 
-    /// Authority must match state.authority
+    /// User's UserRewards PDA
+    #[account(
+        mut,
+        seeds = [b"user_rewards", user.key().as_ref()],
+        bump = user_rewards.bump,
+        constraint = user_rewards.user == user.key() @ WheelError::Unauthorized
+    )]
+    pub user_rewards: Account<'info, UserRewards>,
+
+    /// The user withdrawing their rewards
     #[account(mut)]
-    pub authority: Signer<'info>,
+    pub user: Signer<'info>,
 
     pub system_program: Program<'info, System>,
-    // remaining_accounts: all holder pubkeys for SOL transfer
 }
 
 // ============================================
@@ -604,6 +647,20 @@ impl HolderRegistry {
     pub const LEN: usize = 32 + 2 + 8 + (32 * MAX_HOLDERS); // 1002
 }
 
+#[account]
+pub struct UserRewards {
+    pub user: Pubkey,           // 32
+    pub available: u64,         // 8 — SOL available for withdrawal (lamports)
+    pub total_earned: u64,      // 8 — lifetime earnings
+    pub total_withdrawn: u64,   // 8 — lifetime withdrawals
+    pub last_reward_ts: i64,    // 8 — last reward timestamp
+    pub bump: u8,               // 1
+}
+
+impl UserRewards {
+    pub const LEN: usize = 32 + 8 + 8 + 8 + 8 + 1; // 65
+}
+
 // ============================================
 // EVENTS
 // ============================================
@@ -647,4 +704,7 @@ pub enum WheelError {
 
     #[msg("Winner account not found in remaining_accounts")]
     WinnerNotFound,
+
+    #[msg("No rewards available to withdraw")]
+    NothingToWithdraw,
 }

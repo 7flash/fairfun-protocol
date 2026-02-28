@@ -10,6 +10,7 @@ let scriptPath: string;
 let stylePath: string;
 let adminScriptPath: string;
 let wheelDemoScriptPath: string;
+let liveViewerScriptPath: string;
 
 async function init() {
   console.log("Initializing frontend build...");
@@ -17,6 +18,7 @@ async function init() {
   stylePath = await buildStyle("./App.css");
   adminScriptPath = await buildScript("./Admin.client.tsx", true);
   wheelDemoScriptPath = await buildScript("./WheelDemoClient.tsx", true);
+  liveViewerScriptPath = await buildScript("./LiveViewer.client.tsx", true);
 }
 
 // HTML template with links to cached assets
@@ -76,6 +78,13 @@ async function handler(req: Request): Promise<Response | null> {
   // Serve wheel demo page
   if (url.pathname === "/wheel-demo") {
     return new Response(html(wheelDemoScriptPath, "Galaxy Wheel Demo"), {
+      headers: { "Content-Type": "text/html" },
+    });
+  }
+
+  // Serve live viewer page
+  if (url.pathname === "/live") {
+    return new Response(html(liveViewerScriptPath, "Galaxy Wheel LIVE"), {
       headers: { "Content-Type": "text/html" },
     });
   }

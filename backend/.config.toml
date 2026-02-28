@@ -2,7 +2,7 @@
 BUN_PORT = 3005
 
 [solana]
-rpc = "https://mainnet.helius-rpc.com/?api-key=15319bf4-5b40-4958-ac8d-6313aa55eb92"
+rpc = "https://beta.helius-rpc.com/?api-key=093c9b83-eb11-418c-8aeb-b96bf06c848e"
 
 [main_token]
 mint = "So11111111111111111111111111111111111111112"
@@ -13,3 +13,4 @@ api = "https://api.coingecko.com/api/v3"
 [authority]
 # IMPORTANT: Replace with actual keypair for production
 secret_key = ""
+
