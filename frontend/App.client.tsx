@@ -82,30 +82,30 @@ function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
     const cascadeIndex = useRef(-1);   // which ring is currently locking (-1 = none, 0-4, 5 = done)
     const cascadeTimer = useRef(0);    // timestamp when current lock started
     const notifiedRings = useRef([false, false, false, false, false]);
+    const lockStartTime = useRef([0, 0, 0, 0, 0]);
+    const resultTierRef = useRef<number | null>(null);   // persists across effect re-runs
 
     const PROB = [0.50, 0.30, 0.15, 0.045, 0.005];
     const ARCS = [5, 4, 3, 2, 1];
-    const LOCK_DURATION = 60;   // frames (~1s at 60fps)
-    const LOCK_DELAY = 45;      // frames between ring locks (~0.75s)
+    const LOCK_DURATION_MS = 2500;  // 2.5 seconds per ring deceleration
+    const LOCK_DELAY_MS = 650;      // 0.65s between ring locks
 
     // Find the nearest active arc's center angle for a ring at current rotation
     const findNearestArc = (ringIdx: number, currentRot: number, targetAngle: number) => {
         const arcLen = (PROB[ringIdx] / ARCS[ringIdx]) * Math.PI * 2;
         const gapLen = (Math.PI * 2 * (1 - PROB[ringIdx])) / ARCS[ringIdx];
         const stride = arcLen + gapLen;
+        const dir = ringSpds.current[ringIdx] >= 0 ? 1 : -1;
         let bestDist = Infinity, bestTarget = currentRot;
         for (let a = 0; a < ARCS[ringIdx]; a++) {
-            // Arc center angle relative to ring: a * stride + arcLen/2
             const arcCenter = a * stride + arcLen / 2;
-            // We need currentRot + arcCenter ≡ targetAngle (mod 2π)
-            // So: targetRot = targetAngle - arcCenter
             let targetRot = targetAngle - arcCenter;
-            // Bring targetRot to nearest value to currentRot (could be ± full rotations)
             const diff = targetRot - currentRot;
             const mod = ((diff % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
-            // Choose the nearest forward rotation (at least 1/4 turn for visual drama)
-            targetRot = currentRot + mod;
-            if (targetRot < currentRot + Math.PI / 2) targetRot += Math.PI * 2;
+            targetRot = currentRot + (dir > 0 ? mod : mod - Math.PI * 2);
+            const minTravel = Math.PI * 2;
+            if (dir > 0 && targetRot < currentRot + minTravel) targetRot += Math.PI * 2;
+            if (dir < 0 && targetRot > currentRot - minTravel) targetRot -= Math.PI * 2;
             const dist = Math.abs(targetRot - currentRot);
             if (dist < bestDist) { bestDist = dist; bestTarget = targetRot; }
         }
@@ -116,14 +116,15 @@ function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
     const findMissAngle = (ringIdx: number, currentRot: number, targetAngle: number) => {
         const arcLen = (PROB[ringIdx] / ARCS[ringIdx]) * Math.PI * 2;
         const gapLen = (Math.PI * 2 * (1 - PROB[ringIdx])) / ARCS[ringIdx];
-        const stride = arcLen + gapLen;
-        // Target: gap center at pointer
-        const gapCenter = arcLen + gapLen / 2; // center of first gap
+        const gapCenter = arcLen + gapLen / 2;
+        const dir = ringSpds.current[ringIdx] >= 0 ? 1 : -1;
         let targetRot = targetAngle - gapCenter;
         const diff = targetRot - currentRot;
         const mod = ((diff % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
-        targetRot = currentRot + mod;
-        if (targetRot < currentRot + Math.PI / 2) targetRot += Math.PI * 2;
+        targetRot = currentRot + (dir > 0 ? mod : mod - Math.PI * 2);
+        const minTravel = Math.PI * 2;
+        if (dir > 0 && targetRot < currentRot + minTravel) targetRot += Math.PI * 2;
+        if (dir < 0 && targetRot > currentRot - minTravel) targetRot -= Math.PI * 2;
         return targetRot;
     };
 
@@ -141,7 +142,7 @@ function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
     // Start spinning — randomize directions and speeds
     useEffect(() => {
         if (spinning) {
-            const dirs = [1, -1, 1, -1, 1]; // alternating directions
+            const dirs = [1, -1, 1, -1, 1];
             for (let i = 0; i < 5; i++) {
                 ringSpds.current[i] = dirs[i] * (0.025 + Math.random() * 0.035);
                 ringLocked.current[i] = false;
@@ -157,8 +158,9 @@ function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
     // When result arrives, begin cascade
     useEffect(() => {
         if (resultTier !== null && !spinning) {
+            resultTierRef.current = resultTier;
             cascadeIndex.current = 0;
-            cascadeTimer.current = 0; // will start counting in draw loop
+            cascadeTimer.current = 0;
         }
     }, [resultTier, spinning]);
 
@@ -174,74 +176,79 @@ function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
         const cx = S / 2, cy = S / 2;
         const radii = [165, 138, 111, 84, 60];
         const widths = [20, 20, 20, 18, 16];
-        const PTR = -Math.PI / 2; // pointer angle = top
-        let frameCount = 0;
+        const PTR = -Math.PI / 2;
 
         const draw = () => {
             ctx.clearRect(0, 0, S, S);
             const t = Date.now() * 0.003;
-            frameCount++;
+            const now = Date.now();
 
             // --- Update ring rotations ---
+            const rt = resultTierRef.current;
             for (let i = 0; i < 5; i++) {
-                if (ringLocked.current[i]) continue; // already locked
+                if (ringLocked.current[i]) continue;
 
-                // Is this ring currently in lock phase?
                 if (cascadeIndex.current === i && ringTargets.current[i] !== null) {
-                    ringLockPhase.current[i] = Math.min(1, ringLockPhase.current[i] + (1 / LOCK_DURATION));
-                    const ease = 1 - Math.pow(1 - ringLockPhase.current[i], 3);
+                    // Currently locking this ring
+                    const elapsed = now - lockStartTime.current[i];
+                    ringLockPhase.current[i] = Math.min(1, elapsed / LOCK_DURATION_MS);
+                    const p = 1 - ringLockPhase.current[i];
+                    const ease = 1 - p * p * p * p;
                     ringRots.current[i] = ringLockStart.current[i] +
                         (ringTargets.current[i]! - ringLockStart.current[i]) * ease;
 
                     if (ringLockPhase.current[i] >= 1) {
                         ringRots.current[i] = ringTargets.current[i]!;
                         ringLocked.current[i] = true;
-                        const isHit = resultTier !== null && i <= resultTier;
+                        const isHit = rt !== null && i <= rt;
+
                         if (!notifiedRings.current[i] && onRingLocked) {
                             onRingLocked(i, isHit);
                             notifiedRings.current[i] = true;
                         }
-                        cascadeTimer.current = frameCount; // start delay for next ring
+                        cascadeTimer.current = now;
                     }
                 } else if (cascadeIndex.current >= 0 && i > cascadeIndex.current && !ringLocked.current[i]) {
-                    // Rings waiting to lock — keep spinning but slow down slightly
-                    const slowFactor = Math.max(0.4, 1 - (cascadeIndex.current / 5));
-                    ringRots.current[i] += ringSpds.current[i] * slowFactor;
+                    // Waiting rings — gradually decelerate
+                    ringSpds.current[i] *= 0.995;
+                    ringRots.current[i] += ringSpds.current[i];
                 } else {
-                    // Free spinning
                     ringRots.current[i] += ringSpds.current[i];
                 }
             }
 
             // --- Cascade progression ---
-            if (resultTier !== null && cascadeIndex.current >= 0 && cascadeIndex.current < 5) {
+            if (rt !== null && cascadeIndex.current >= 0 && cascadeIndex.current < 5) {
                 const ci = cascadeIndex.current;
 
-                // Initialize lock target for current ring if not done
+                // Initialize lock target for current ring
                 if (ringTargets.current[ci] === null) {
-                    if (cascadeTimer.current === 0 || frameCount - cascadeTimer.current >= LOCK_DELAY) {
-                        const isHit = ci <= resultTier;
+                    if (cascadeTimer.current === 0 || now - cascadeTimer.current >= LOCK_DELAY_MS) {
+                        const isHit = ci <= rt;
                         const target = isHit
                             ? findNearestArc(ci, ringRots.current[ci], PTR)
                             : findMissAngle(ci, ringRots.current[ci], PTR);
                         ringTargets.current[ci] = target;
                         ringLockStart.current[ci] = ringRots.current[ci];
                         ringLockPhase.current[ci] = 0;
+                        lockStartTime.current[ci] = now;
                     }
                 }
 
                 // Move to next ring after current finishes + delay
-                if (ringLocked.current[ci] && frameCount - cascadeTimer.current >= LOCK_DELAY) {
+                const isLocked = ringLocked.current[ci];
+                const elapsed = isLocked ? now - cascadeTimer.current : -1;
+                if (isLocked && elapsed >= LOCK_DELAY_MS) {
                     if (ci < 4) {
                         cascadeIndex.current = ci + 1;
                     } else {
-                        cascadeIndex.current = 5; // done
+                        cascadeIndex.current = 5;
                     }
                 }
             }
 
             const allDone = cascadeIndex.current >= 5;
-            const showingResult = resultTier !== null && cascadeIndex.current >= 0;
+            const showingResult = rt !== null && cascadeIndex.current >= 0;
 
             // --- Background glow ---
             const bg = ctx.createRadialGradient(cx, cy, 30, cx, cy, 185);
@@ -732,10 +739,10 @@ function CommunityPage() {
                 rewardAmount: data.rewardAmount || 0,
                 tierIndex: tier,
             });
-            // Clear spinning holder after a delay for deceleration
-            setTimeout(() => setSpinningHolder(null), 3000);
-            // Clear result after 8 seconds
-            setTimeout(() => setSpinResult(null), 8000);
+            // Clear spinning holder quickly since cascade handles the reveal
+            setTimeout(() => setSpinningHolder(null), 1000);
+            // Clear result after cascade completes (~18s)
+            setTimeout(() => setSpinResult(null), 20000);
 
             // Update liveData
             setLiveData((prev) => {
