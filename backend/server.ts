@@ -147,7 +147,8 @@ interface SpinRecord {
 }
 
 // Admin spin state
-let holderQueue: string[] = [];       // sorted list of holder wallets (by lifetimeEarned desc)
+let holderQueue: string[] = [];       // sorted list of holder wallets (by stardust wallet balance desc)
+const holderStardustBalances: Map<string, bigint> = new Map(); // wallet -> stardust token balance
 let currentHolderIndex = 0;           // which holder is next in the queue
 const pendingPrizes: Map<string, PendingPrize[]> = new Map(); // wallet -> prizes
 const spinHistory: SpinRecord[] = []; // last 200 spin results
@@ -158,7 +159,8 @@ let totalDistributed = 0;
 const walletWinnings: Map<string, number> = new Map();
 
 const PRIZE_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
-const AUTO_SPIN_INTERVAL = 30 * 1000; // 30 seconds between auto-spins
+const AUTO_SPIN_INTERVAL = 60 * 1000; // 60 seconds between auto-spins
+let nextSpinTime = 0; // timestamp of next scheduled spin
 
 // ============================================
 // SSE: Real-time event broadcasting
@@ -185,14 +187,20 @@ function generatePrizeId(): string {
 }
 
 /**
- * Rebuild the holder queue sorted by lifetimeEarned (descending)
+ * Rebuild the holder queue sorted by stardust wallet balance (descending)
+ * Uses actual SPL token balance in wallet (not lifetime earned)
  * Called periodically and on demand
  */
 function rebuildHolderQueue() {
     const holders = Array.from(earningsStore.entries())
-        .filter(([_, e]) => e.starBalance > 0n) // only holders with tokens
-        .sort((a, b) => Number(b[1].lifetimeEarned - a[1].lifetimeEarned));
-    holderQueue = holders.map(([wallet]) => wallet);
+        .filter(([_, e]) => e.starBalance > 0n) // only holders with GXY tokens
+        .map(([wallet, e]) => {
+            // Use cached stardust wallet balance, fallback to 0
+            const stardustBal = holderStardustBalances.get(wallet) || 0n;
+            return { wallet, stardustBal, starBalance: e.starBalance };
+        })
+        .sort((a, b) => Number(b.stardustBal - a.stardustBal)); // sort by stardust in wallet
+    holderQueue = holders.map(h => h.wallet);
     // Keep index in bounds
     if (currentHolderIndex >= holderQueue.length) {
         currentHolderIndex = 0;
@@ -200,28 +208,34 @@ function rebuildHolderQueue() {
 }
 
 /**
- * Calculate adjusted probabilities based on holder's stardust rank
- * Higher rank (more stardust) = better odds for higher tiers
+ * Calculate adjusted probabilities based on holder's stardust wallet balance
+ * Higher stardust balance = better odds for higher tiers (SUPERNOVA, NEBULA)
  * 
- * Boost formula:
- *   - rank = position in queue (0 = highest earner)
- *   - rankRatio = rank / totalHolders (0.0 = top, 1.0 = bottom)
- *   - boostFactor = 1.0 + 2.0 * (1.0 - rankRatio)  → top holder gets 3x, bottom gets 1x
- *   - Higher tier probabilities are multiplied by boostFactor
- *   - Lower tier probabilities absorb the difference (always sums to 10000)
+ * Formula:
+ *   - Get holder's stardust wallet balance
+ *   - Find max stardust among all holders
+ *   - ratio = holderBalance / maxBalance (0.0 to 1.0)
+ *   - boostFactor = 1.0 + 2.0 * ratio → top holder gets 3x on high tiers
+ *   - Higher tier probabilities (NEBULA, QUASAR, SUPERNOVA) scaled by boostFactor
+ *   - VOID absorbs the difference
  */
 function getAdjustedProbabilities(wallet: string): number[] {
-    const queueIndex = holderQueue.indexOf(wallet);
-    const totalHolders = holderQueue.length;
+    const holderBalance = holderStardustBalances.get(wallet) || 0n;
 
-    if (totalHolders <= 1 || queueIndex < 0) {
+    // Find max stardust among all holders
+    let maxBalance = 0n;
+    for (const bal of holderStardustBalances.values()) {
+        if (bal > maxBalance) maxBalance = bal;
+    }
+
+    if (maxBalance <= 0n || holderBalance <= 0n) {
         return [...BASE_PROBABILITIES];
     }
 
-    const rankRatio = queueIndex / (totalHolders - 1); // 0.0 = top, 1.0 = bottom
-    const boostFactor = 1.0 + 2.0 * (1.0 - rankRatio); // 3.0 for top, 1.0 for bottom
+    const ratio = Number(holderBalance) / Number(maxBalance); // 0.0 to 1.0
+    const boostFactor = 1.0 + 2.0 * ratio; // top holder gets 3x on high tiers
 
-    // Boost higher tiers (indices 2,3,4), reduce lowest tier to compensate
+    // Boost higher tiers (METEORS=2, NEBULA=3, SUPERNOVA=4), reduce VOID to compensate
     const adjusted = [...BASE_PROBABILITIES];
     let totalBoost = 0;
 
@@ -232,7 +246,7 @@ function getAdjustedProbabilities(wallet: string): number[] {
         adjusted[i] = boosted;
     }
 
-    // Subtract boost from lowest tier (VOID), ensure minimum 500 (5%)
+    // Subtract boost from VOID (tier 0), ensure minimum 500 (5%)
     adjusted[0] = Math.max(500, adjusted[0] - totalBoost);
 
     // Re-normalize to 10000
@@ -781,20 +795,50 @@ setTimeout(fetchPoolBalance, 3_000); // 3s delay for connection setup
 setInterval(fetchPoolBalance, 2 * 60 * 1000);
 setTimeout(updateHoldersOnChain, 10_000); // 10s delay for startup
 
-// Auto-spin: spin for next holder every AUTO_SPIN_INTERVAL
-let autoSpinEnabled = false; // Disabled pending full refactor
+// Auto-spin: spin for next holder every AUTO_SPIN_INTERVAL with countdown
+let autoSpinEnabled = true;
+nextSpinTime = Date.now() + AUTO_SPIN_INTERVAL;
+
+// Broadcast countdown timer every second
+setInterval(() => {
+    if (!autoSpinEnabled || holderQueue.length === 0) return;
+    const secondsLeft = Math.max(0, Math.ceil((nextSpinTime - Date.now()) / 1000));
+    const nextWallet = holderQueue[currentHolderIndex];
+    if (!nextWallet) return;
+    const nextStardust = holderStardustBalances.get(nextWallet) || 0n;
+    broadcastSSE('timer', {
+        secondsUntil: secondsLeft,
+        nextHolder: nextWallet,
+        nextHolderShort: nextWallet.slice(0, 4) + '...' + nextWallet.slice(-4),
+        nextHolderStardust: nextStardust.toString(),
+        nextHolderProbabilities: getAdjustedProbabilities(nextWallet),
+        currentIndex: currentHolderIndex,
+        totalHolders: holderQueue.length,
+    });
+}, 1000);
+
 async function autoSpin() {
     if (!autoSpinEnabled || holderQueue.length === 0) return;
     try {
+        // Fetch stardust balances for all holders before spinning
+        for (const wallet of holderQueue) {
+            try {
+                const bal = await fetchStardustTokenBalance(wallet);
+                holderStardustBalances.set(wallet, bal);
+            } catch (e) { /* use cached */ }
+        }
+
         // Broadcast "spinning" event before spin so frontend can show animation
         const currentWallet = holderQueue[currentHolderIndex];
         if (currentWallet) {
+            const stardust = holderStardustBalances.get(currentWallet) || 0n;
             broadcastSSE('spinning', {
                 wallet: currentWallet,
                 walletShort: currentWallet.slice(0, 4) + '...' + currentWallet.slice(-4),
                 queuePosition: currentHolderIndex,
                 totalHolders: holderQueue.length,
                 probabilities: getAdjustedProbabilities(currentWallet),
+                stardustBalance: stardust.toString(),
             });
         }
 
@@ -812,9 +856,10 @@ async function autoSpin() {
         rpcStatus.consecutiveFailures++;
         if (rpcStatus.consecutiveFailures >= 3) rpcStatus.online = false;
         console.error(`[auto-spin] ❌ ${rpcStatus.lastError} (failures: ${rpcStatus.consecutiveFailures})`);
-        // Broadcast error to live viewers
         broadcastSSE('error', { message: rpcStatus.lastError, timestamp: Date.now() });
     }
+    // Schedule next spin
+    nextSpinTime = Date.now() + AUTO_SPIN_INTERVAL;
 }
 setInterval(autoSpin, AUTO_SPIN_INTERVAL);
 
@@ -1573,16 +1618,24 @@ async function handler(req: Request): Promise<Response | null> {
 
     // GET /api/wheel/queue - Public: next holders in auto-spin queue
     if (method === "GET" && path === "/api/wheel/queue") {
-        const upcoming = holderQueue.slice(currentHolderIndex, currentHolderIndex + 5).map((wallet, i) => ({
-            position: currentHolderIndex + i,
-            walletShort: wallet.slice(0, 4) + "..." + wallet.slice(-4),
-            isCurrent: i === 0,
-        }));
+        const upcoming = holderQueue.map((wallet, i) => {
+            const stardust = holderStardustBalances.get(wallet) || 0n;
+            return {
+                position: i,
+                wallet,
+                walletShort: wallet.slice(0, 4) + "..." + wallet.slice(-4),
+                isCurrent: i === currentHolderIndex,
+                stardustBalance: stardust.toString(),
+                probabilities: getAdjustedProbabilities(wallet),
+            };
+        });
         return json({
             queue: upcoming,
             totalHolders: holderQueue.length,
             currentIndex: currentHolderIndex,
             autoSpinEnabled,
+            nextSpinTime,
+            secondsUntilNextSpin: Math.max(0, Math.ceil((nextSpinTime - Date.now()) / 1000)),
         });
     }
 
@@ -1591,6 +1644,7 @@ async function handler(req: Request): Promise<Response | null> {
         const queueWithDetails = holderQueue.map((wallet, i) => {
             const earnings = earningsStore.get(wallet);
             const probabilities = getAdjustedProbabilities(wallet);
+            const stardustBal = holderStardustBalances.get(wallet) || 0n;
             return {
                 position: i,
                 wallet,
@@ -1598,6 +1652,7 @@ async function handler(req: Request): Promise<Response | null> {
                 isCurrent: i === currentHolderIndex,
                 lifetimeEarned: (earnings?.lifetimeEarned ?? 0n).toString(),
                 starBalance: (earnings?.starBalance ?? 0n).toString(),
+                stardustBalance: stardustBal.toString(),
                 probabilities,
                 totalWinnings: walletWinnings.get(wallet) || 0,
             };
@@ -1609,6 +1664,8 @@ async function handler(req: Request): Promise<Response | null> {
             totalHolders: holderQueue.length,
             autoSpinEnabled,
             autoSpinInterval: AUTO_SPIN_INTERVAL,
+            nextSpinTime,
+            secondsUntilNextSpin: Math.max(0, Math.ceil((nextSpinTime - Date.now()) / 1000)),
             recentSpins: spinHistory.slice(-20).reverse(),
             stats: {
                 totalSpins: totalAdminSpins,
@@ -1738,7 +1795,90 @@ async function handler(req: Request): Promise<Response | null> {
         }
     }
 
-    // GET /api/admin/queue - Get holder queue (admin detail view)
+    // POST /api/claim-stardust-tx - Build unsigned claim stardust transaction
+    // Backend signs the user's lifetime earnings, user signs the transaction to mint stardust tokens
+    if (method === "POST" && path === "/api/claim-stardust-tx") {
+        try {
+            const body = await req.json();
+            const { wallet: userWallet } = body;
+            if (!userWallet) return json({ error: "wallet required" }, 400);
+
+            // Get user's lifetime earned stardust
+            const earnings = earningsStore.get(userWallet);
+            if (!earnings || earnings.lifetimeEarned <= 0n) {
+                return json({ error: "no stardust earned yet" }, 400);
+            }
+
+            const userPubkey = new PublicKey(userWallet);
+            const lifetimeEarned = earnings.lifetimeEarned;
+
+            // Create backend-signed Ed25519 verification data
+            const sigData = createSignatureData(userPubkey, lifetimeEarned);
+
+            // Build the transaction with Ed25519 verify + claim_stardust instructions
+            const { Transaction, TransactionInstruction, SystemProgram: SysProgram } = await import("@solana/web3.js");
+            const { getAssociatedTokenAddressSync, ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } = await import("@solana/spl-token");
+
+            const STARDUST_PROGRAM_ID = new PublicKey(config.programId); // HsydRBzU...
+            const stardustMint = new PublicKey(config.stardustMint);
+            const [stardustStatePda] = PublicKey.findProgramAddressSync([Buffer.from("state")], STARDUST_PROGRAM_ID);
+            const [userClaimPda] = PublicKey.findProgramAddressSync(
+                [Buffer.from("user_claim"), userPubkey.toBuffer()],
+                STARDUST_PROGRAM_ID
+            );
+            const userTokenAccount = getAssociatedTokenAddressSync(stardustMint, userPubkey);
+
+            // 1. Ed25519 signature verification instruction
+            const ed25519Ix = new TransactionInstruction({
+                programId: new PublicKey(sigData.ed25519Instruction.programId),
+                keys: [],
+                data: Buffer.from(sigData.ed25519Instruction.data, "base64"),
+            });
+
+            // 2. claim_stardust(lifetime_earned) instruction
+            const crypto = await import("crypto");
+            const claimDiscHash = crypto.createHash("sha256").update("global:claim_stardust").digest();
+            const claimDiscriminator = claimDiscHash.slice(0, 8);
+
+            const claimData = Buffer.alloc(8 + 8); // discriminator + u64 lifetime_earned
+            claimDiscriminator.copy(claimData, 0);
+            claimData.writeBigUInt64LE(lifetimeEarned, 8);
+
+            const INSTRUCTIONS_SYSVAR = new PublicKey("Sysvar1nstructions1111111111111111111111111");
+
+            const claimIx = new TransactionInstruction({
+                programId: STARDUST_PROGRAM_ID,
+                keys: [
+                    { pubkey: userPubkey, isSigner: true, isWritable: true },
+                    { pubkey: userClaimPda, isSigner: false, isWritable: true },
+                    { pubkey: stardustStatePda, isSigner: false, isWritable: false },
+                    { pubkey: stardustMint, isSigner: false, isWritable: true },
+                    { pubkey: userTokenAccount, isSigner: false, isWritable: true },
+                    { pubkey: INSTRUCTIONS_SYSVAR, isSigner: false, isWritable: false },
+                    { pubkey: SysProgram.programId, isSigner: false, isWritable: false },
+                    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+                ],
+                data: claimData,
+            });
+
+            const tx = new Transaction().add(ed25519Ix).add(claimIx);
+            const { blockhash, lastValidBlockHeight } = await getConn().getLatestBlockhash("confirmed");
+            tx.recentBlockhash = blockhash;
+            tx.feePayer = userPubkey;
+
+            const serialized = tx.serialize({ requireAllSignatures: false });
+            return json({
+                transaction: Buffer.from(serialized).toString("base64"),
+                blockhash,
+                lastValidBlockHeight,
+                lifetimeEarned: lifetimeEarned.toString(),
+                authorityPublicKey: authority.publicKey.toBase58(),
+            });
+        } catch (e: any) {
+            console.error("[claim-stardust-tx] Error:", e);
+            return json({ error: e.message || "failed to build claim tx" }, 500);
+        }
+    }
     if (method === "GET" && path === "/api/admin/queue") {
         const page = parseInt(url.searchParams.get("page") || "0");
         const pageSize = 20;
@@ -1795,78 +1935,7 @@ async function handler(req: Request): Promise<Response | null> {
         }
     }
 
-    // GET /api/spin/status?wallet=X - Check daily spin cooldown
-    if (method === "GET" && path === "/api/spin/status") {
-        const wallet = url.searchParams.get("wallet");
-        if (!wallet) return json({ error: "wallet required" }, 400);
-
-        try {
-            const WHEEL_PROGRAM_ID = new PublicKey(WHEEL_PROGRAM_ID_STR);
-            const holderPubkey = new PublicKey(wallet);
-            const [userHistoryPda] = PublicKey.findProgramAddressSync(
-                [Buffer.from("user_history"), holderPubkey.toBuffer()],
-                WHEEL_PROGRAM_ID
-            );
-
-            const accountInfo = await getConn().getAccountInfo(userHistoryPda);
-            if (!accountInfo) {
-                return json({ canSpin: true, cooldownRemaining: 0, lastSpinTimestamp: 0 });
-            }
-
-            // Parse UserSpinHistory: 8(discriminator) + 32(user) + 8(total_spins) + 8(total_won) + 1(last_tier) + 8(last_amount) + 8(last_timestamp)
-            const data = accountInfo.data;
-            const lastSpinTimestamp = Number(data.readBigInt64LE(8 + 32 + 8 + 8 + 1 + 8));
-            const now = Math.floor(Date.now() / 1000);
-            const elapsed = now - lastSpinTimestamp;
-            const cooldownRemaining = Math.max(0, 86400 - elapsed);
-
-            return json({
-                canSpin: elapsed >= 86400,
-                cooldownRemaining,
-                lastSpinTimestamp,
-            });
-        } catch (e: any) {
-            return json({ canSpin: true, cooldownRemaining: 0, lastSpinTimestamp: 0 });
-        }
-    }
-
-    // POST /api/spin - User daily spin (ON-CHAIN manual pool, 24h cooldown)
-    if (method === "POST" && path === "/api/spin") {
-        try {
-            const body = await req.json();
-            const wallet = body.wallet;
-            if (!wallet) return json({ error: "wallet required" }, 400);
-
-            // Check holder exists
-            const earnings = earningsStore.get(wallet);
-            if (!earnings || earnings.starBalance <= 0n) {
-                return json({ error: "not a holder" }, 400);
-            }
-
-            const result = await executeUserSpin(wallet);
-
-            console.log(`🎡 Daily spin: ${wallet.slice(0, 8)}... → ${result.tierName} (${(result.rewardAmount / 1e9).toFixed(3)} SOL) tx:${result.txSignature.slice(0, 12)}...`);
-
-            return json({
-                success: true,
-                wallet,
-                tier: result.rewardTier,
-                tierName: result.tierName,
-                rewardAmount: result.rewardAmount,
-                rewardFormatted: (result.rewardAmount / 1e9).toFixed(3) + " SOL",
-                probabilities: result.probabilities.map(p => (p / 100).toFixed(1) + "%"),
-                txSignature: result.txSignature,
-            });
-        } catch (e: any) {
-            // Check if it's a cooldown error from on-chain
-            const errMsg = e.message || "spin failed";
-            if (errMsg.includes("SpinCooldown") || errMsg.includes("24 hours")) {
-                return json({ error: "Must wait 24 hours between daily spins" }, 429);
-            }
-            console.error("[daily-spin] Error:", e);
-            return json({ error: errMsg }, 500);
-        }
-    }
+    // Manual spin endpoints removed — stardust is claimed via POST /api/claim-stardust-tx
 
     // POST /api/admin/reset-queue - Reset queue position to start
     if (method === "POST" && path === "/api/admin/reset-queue") {
