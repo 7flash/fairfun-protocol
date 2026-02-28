@@ -782,7 +782,7 @@ setInterval(fetchPoolBalance, 2 * 60 * 1000);
 setTimeout(updateHoldersOnChain, 10_000); // 10s delay for startup
 
 // Auto-spin: spin for next holder every AUTO_SPIN_INTERVAL
-let autoSpinEnabled = true;
+let autoSpinEnabled = false; // Disabled pending full refactor
 async function autoSpin() {
     if (!autoSpinEnabled || holderQueue.length === 0) return;
     try {
