@@ -73,11 +73,11 @@ function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
     const ptcRef = useRef<{ ring: number; angle: number; speed: number; sz: number; op: number }[]>([]);
 
     // Per-ring independent state
-    const ringRots = useRef([0, 0, 0, 0, 0]);           // current rotation per ring
-    const ringSpds = useRef([0.04, -0.035, 0.03, -0.025, 0.02]); // speed (sign = direction)
+    const ringRots = useRef([0, 0, 0, 0, 0]);
+    const ringSpds = useRef([0.04, -0.035, 0.03, -0.025, 0.02]);
     const ringLocked = useRef([false, false, false, false, false]);
     const ringTargets = useRef<(number | null)[]>([null, null, null, null, null]);
-    const ringDecel = useRef([0, 0, 0, 0, 0]);          // deceleration rate per ring (rad/frame²)
+    const ringFriction = useRef([1, 1, 1, 1, 1]);       // per-ring friction factor (< 1 = decelerating)
     const cascadeIndex = useRef(-1);
     const cascadeTimer = useRef(0);
     const notifiedRings = useRef([false, false, false, false, false]);
@@ -86,8 +86,9 @@ function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
     const PROB = [0.50, 0.30, 0.15, 0.045, 0.005];
     const ARCS = [5, 4, 3, 2, 1];
     const LOCK_DELAY_MS = 650;
+    const MIN_TRAVEL = Math.PI / 4;   // minimum quarter-turn before stopping
 
-    // Find the nearest active arc's center angle for a ring at current rotation
+    // Find nearest arc center that the ring can reach (quarter-turn+ in spin direction)
     const findNearestArc = (ringIdx: number, currentRot: number, targetAngle: number) => {
         const arcLen = (PROB[ringIdx] / ARCS[ringIdx]) * Math.PI * 2;
         const gapLen = (Math.PI * 2 * (1 - PROB[ringIdx])) / ARCS[ringIdx];
@@ -100,16 +101,15 @@ function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
             const diff = targetRot - currentRot;
             const mod = ((diff % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
             targetRot = currentRot + (dir > 0 ? mod : mod - Math.PI * 2);
-            const minTravel = Math.PI * 2;
-            if (dir > 0 && targetRot < currentRot + minTravel) targetRot += Math.PI * 2;
-            if (dir < 0 && targetRot > currentRot - minTravel) targetRot -= Math.PI * 2;
+            if (dir > 0 && targetRot < currentRot + MIN_TRAVEL) targetRot += Math.PI * 2;
+            if (dir < 0 && targetRot > currentRot - MIN_TRAVEL) targetRot -= Math.PI * 2;
             const dist = Math.abs(targetRot - currentRot);
             if (dist < bestDist) { bestDist = dist; bestTarget = targetRot; }
         }
         return bestTarget;
     };
 
-    // Find a rotation that places NO active arc at targetAngle
+    // Find gap position (miss)
     const findMissAngle = (ringIdx: number, currentRot: number, targetAngle: number) => {
         const arcLen = (PROB[ringIdx] / ARCS[ringIdx]) * Math.PI * 2;
         const gapLen = (Math.PI * 2 * (1 - PROB[ringIdx])) / ARCS[ringIdx];
@@ -119,9 +119,8 @@ function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
         const diff = targetRot - currentRot;
         const mod = ((diff % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
         targetRot = currentRot + (dir > 0 ? mod : mod - Math.PI * 2);
-        const minTravel = Math.PI * 2;
-        if (dir > 0 && targetRot < currentRot + minTravel) targetRot += Math.PI * 2;
-        if (dir < 0 && targetRot > currentRot - minTravel) targetRot -= Math.PI * 2;
+        if (dir > 0 && targetRot < currentRot + MIN_TRAVEL) targetRot += Math.PI * 2;
+        if (dir < 0 && targetRot > currentRot - MIN_TRAVEL) targetRot -= Math.PI * 2;
         return targetRot;
     };
 
@@ -136,7 +135,7 @@ function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
         ptcRef.current = p;
     }, []);
 
-    // Start spinning — randomize directions and speeds
+    // Start spinning — randomize speeds
     useEffect(() => {
         if (spinning) {
             const dirs = [1, -1, 1, -1, 1];
@@ -144,7 +143,7 @@ function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
                 ringSpds.current[i] = dirs[i] * (0.025 + Math.random() * 0.035);
                 ringLocked.current[i] = false;
                 ringTargets.current[i] = null;
-                ringDecel.current[i] = 0;
+                ringFriction.current[i] = 1;
                 notifiedRings.current[i] = false;
             }
             cascadeIndex.current = -1;
@@ -185,15 +184,15 @@ function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
             for (let i = 0; i < 5; i++) {
                 if (ringLocked.current[i]) continue;
 
-                if (cascadeIndex.current === i && ringTargets.current[i] !== null) {
-                    // Physics-based deceleration: ring keeps its direction, speed decreases
-                    const target = ringTargets.current[i]!;
-                    const remaining = target - ringRots.current[i];
-                    const absRemaining = Math.abs(remaining);
-                    const dir = remaining >= 0 ? 1 : -1;
+                if (ringTargets.current[i] !== null) {
+                    // Decelerating toward target — apply friction each frame
+                    ringSpds.current[i] *= ringFriction.current[i];
+                    ringRots.current[i] += ringSpds.current[i];
 
-                    if (absRemaining < 0.001) {
-                        // Close enough — snap and lock
+                    // Check if we've arrived (speed ~0 or passed target)
+                    const target = ringTargets.current[i]!;
+                    const remaining = Math.abs(target - ringRots.current[i]);
+                    if (Math.abs(ringSpds.current[i]) < 0.0008 || remaining < 0.005) {
                         ringRots.current[i] = target;
                         ringLocked.current[i] = true;
                         ringSpds.current[i] = 0;
@@ -203,18 +202,9 @@ function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
                             notifiedRings.current[i] = true;
                         }
                         cascadeTimer.current = now;
-                    } else {
-                        // Decelerate: speed = sqrt(2 * decel * remaining)
-                        // This gives a constant-deceleration profile (like real friction)
-                        const speed = dir * Math.sqrt(2 * ringDecel.current[i] * absRemaining);
-                        ringSpds.current[i] = speed;
-                        ringRots.current[i] += speed;
                     }
-                } else if (cascadeIndex.current >= 0 && i > cascadeIndex.current && !ringLocked.current[i]) {
-                    // Waiting rings — very gentle slowdown
-                    ringSpds.current[i] *= 0.998;
-                    ringRots.current[i] += ringSpds.current[i];
                 } else {
+                    // Free spinning (full speed, no decay)
                     ringRots.current[i] += ringSpds.current[i];
                 }
             }
@@ -223,7 +213,6 @@ function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
             if (rt !== null && cascadeIndex.current >= 0 && cascadeIndex.current < 5) {
                 const ci = cascadeIndex.current;
 
-                // Initialize lock target for current ring
                 if (ringTargets.current[ci] === null) {
                     if (cascadeTimer.current === 0 || now - cascadeTimer.current >= LOCK_DELAY_MS) {
                         const isHit = ci <= rt;
@@ -231,14 +220,19 @@ function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
                             ? findNearestArc(ci, ringRots.current[ci], PTR)
                             : findMissAngle(ci, ringRots.current[ci], PTR);
                         ringTargets.current[ci] = target;
-                        // Compute deceleration: v² = 2*a*d → a = v²/(2d)
+
+                        // Compute friction: geometric series sum = v0/(1-f) = distance
+                        // f = 1 - v0/distance
                         const dist = Math.abs(target - ringRots.current[ci]);
                         const v0 = Math.abs(ringSpds.current[ci]);
-                        ringDecel.current[ci] = (v0 * v0) / (2 * dist);
+                        let f = 1 - v0 / dist;
+                        // Clamp: 0.96 = stops in ~100 frames, 0.995 = stops in ~600 frames
+                        f = Math.max(0.96, Math.min(0.993, f));
+                        ringFriction.current[ci] = f;
                     }
                 }
 
-                // Move to next ring after current finishes + delay
+                // Advance cascade after lock + delay
                 const isLocked = ringLocked.current[ci];
                 const elapsed = isLocked ? now - cascadeTimer.current : -1;
                 if (isLocked && elapsed >= LOCK_DELAY_MS) {
