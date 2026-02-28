@@ -1,8 +1,7 @@
 {
   "programId": "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A",
   "authority": {
-    "publicKey": "HEs5dojCtzJ18sf86LSrsMFbpFxfnXazgGuyc38hsC4Y",
-    "secretKey": "Zluvssav9d+ZoDV50jhFzAF9aQ28zU6Kfay12KVk3r/xSCq4BhYDu2fBDBK6S0zk5/SMdbz/m3VFB3lgQXBvCQ=="
+    "secretKey": "MgWfvya55FmGEw+OmEEKCrrBWXbucMPlH+xHtUE+q+9a16HVM4ZQSa+nqIII0OPO3pUY0R/j4Dn+tjcaU8+8/Q=="
   },
   "stardustMint": "XG3VfC9e8hzjaeQutPHrCs1YE6jwbdCqhfRpY8miWo5",
   "statePda": "ChqtRgWXddBgGMHBt4uSp2YRcfZX6jwRUKuYgeCdBZWu",
