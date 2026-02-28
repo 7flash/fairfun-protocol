@@ -66,17 +66,38 @@ const API = "";
 function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; resultTier: number | null }) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const animRef = useRef<number>(0);
-    const rotRef = useRef(0);
-    const spdRef = useRef(0);
+    const rotRef = useRef(0);       // current rotation (radians, monotonically increasing)
+    const spdRef = useRef(0);       // current angular speed
+    const targetRotRef = useRef<number | null>(null);  // target rotation to land on
+    const decStartRef = useRef(0);  // rotation when deceleration started
+    const decStartSpd = useRef(0);  // speed when deceleration started
+    const decPhase = useRef(0);     // 0-1 deceleration progress
     const ptcRef = useRef<{ ring: number; angle: number; speed: number; sz: number; op: number }[]>([]);
-    const ringOffsetsRef = useRef([0, 0, 0, 0, 0]);
-    const lockedRef = useRef(false);
 
-    // Active arc fraction per ring (= tier probability)
+    // Tier probabilities and arc distribution
     const PROB = [0.50, 0.30, 0.15, 0.045, 0.005];
-    // Number of active arc zones per ring
     const ARCS = [5, 4, 3, 2, 1];
+    // Fixed angular offsets per ring — arranged so active zones don't overlap
+    // These are chosen so that at rotation=0, each ring's arcs are in different angular sectors
+    const RING_OFFSETS = [0, Math.PI * 0.37, Math.PI * 0.73, Math.PI * 1.15, Math.PI * 1.55];
+    // Speed multiplier per ring
+    const RING_SPEEDS = [1.0, 0.85, 0.72, 0.6, 0.5];
 
+    // Helper: check if angle 'a' is inside any active arc of ring 'i' at rotation 'rot'
+    const isInActiveArc = (ringIdx: number, rot: number, testAngle: number) => {
+        const arcPerZone = (PROB[ringIdx] / ARCS[ringIdx]) * Math.PI * 2;
+        const gapPerZone = (Math.PI * 2 * (1 - PROB[ringIdx])) / ARCS[ringIdx];
+        const ringRot = rot * RING_SPEEDS[ringIdx] + RING_OFFSETS[ringIdx];
+        for (let a = 0; a < ARCS[ringIdx]; a++) {
+            const start = (ringRot + a * (arcPerZone + gapPerZone)) % (Math.PI * 2);
+            // Normalize angle difference
+            let diff = ((testAngle - start) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+            if (diff < arcPerZone) return true;
+        }
+        return false;
+    };
+
+    // Initialize particles
     useEffect(() => {
         const p: typeof ptcRef.current = [];
         for (let ring = 0; ring < 5; ring++) {
@@ -87,37 +108,66 @@ function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; result
         ptcRef.current = p;
     }, []);
 
+    // Start spinning
     useEffect(() => {
-        if (spinning) { spdRef.current = 0.06 + Math.random() * 0.03; lockedRef.current = false; }
+        if (spinning) {
+            spdRef.current = 0.06 + Math.random() * 0.03;
+            targetRotRef.current = null;
+            decPhase.current = 0;
+        }
     }, [spinning]);
 
+    // Calculate target landing when result arrives
     useEffect(() => {
         if (resultTier !== null && !spinning) {
-            const dec = () => {
-                if (spdRef.current > 0.0005) { spdRef.current *= 0.96; requestAnimationFrame(dec); }
-                else {
-                    spdRef.current = 0;
-                    if (!lockedRef.current) {
-                        lockedRef.current = true;
-                        const ptr = -Math.PI / 2; // pointer = top
-                        const offs = [...ringOffsetsRef.current];
-                        for (let i = 0; i < 5; i++) {
-                            const spd = 0.8 + i * 0.2;
-                            const arcPerZone = (PROB[i] / ARCS[i]) * Math.PI * 2;
-                            if (i === resultTier) {
-                                offs[i] = ptr - arcPerZone / 2 - rotRef.current * spd;
-                            } else {
-                                offs[i] = ptr + Math.PI + i * 0.4 - rotRef.current * spd;
-                            }
-                        }
-                        ringOffsetsRef.current = offs;
-                    }
+            // Calculate how much more rotation is needed to land correctly
+            // Target: winning ring's arc center is at pointer angle (-PI/2 = top)
+            const ptr = -Math.PI / 2;
+            const curRot = rotRef.current;
+            const curSpd = spdRef.current;
+
+            // We want the final rotation 'R' such that:
+            // (R * RING_SPEEDS[resultTier] + RING_OFFSETS[resultTier]) has an active arc at 'ptr'
+            const arcPerZone = (PROB[resultTier] / ARCS[resultTier]) * Math.PI * 2;
+            const gapPerZone = (Math.PI * 2 * (1 - PROB[resultTier])) / ARCS[resultTier];
+            const stride = arcPerZone + gapPerZone;
+
+            // Find the needed ring rotation for arc center at pointer
+            const neededRingRot = ptr - arcPerZone / 2; // arc start should be at ptr - arcWidth/2
+            // ringRot = R * speed + offset => R = (ringRot - offset) / speed
+            // Find a target R that's ahead of current rotation (at least a few full spins for drama)
+            const minExtraSpins = 3; // at least 3 more full rotations for drama
+            const minTarget = curRot + minExtraSpins * Math.PI * 2;
+
+            // Calculate the base target rotation
+            let baseR = (neededRingRot - RING_OFFSETS[resultTier]) / RING_SPEEDS[resultTier];
+            // Bring it forward past minTarget
+            const period = stride / RING_SPEEDS[resultTier]; // rotation period per arc zone
+            while (baseR < minTarget) baseR += period;
+
+            // Verify no other ring has an active arc at pointer for this landing rotation
+            // If they do, nudge by a small amount (within the winning arc)
+            let finalR = baseR;
+            let attempts = 0;
+            while (attempts < 20) {
+                let conflict = false;
+                for (let i = 0; i < 5; i++) {
+                    if (i === resultTier) continue;
+                    if (isInActiveArc(i, finalR, ptr)) { conflict = true; break; }
                 }
-            };
-            setTimeout(dec, 200);
+                if (!conflict) break;
+                finalR += 0.05; // tiny nudge
+                attempts++;
+            }
+
+            targetRotRef.current = finalR;
+            decStartRef.current = curRot;
+            decStartSpd.current = curSpd;
+            decPhase.current = 0;
         }
     }, [resultTier, spinning]);
 
+    // Main draw loop
     useEffect(() => {
         const c = canvasRef.current; if (!c) return;
         const ctx = c.getContext('2d'); if (!ctx) return;
@@ -132,10 +182,21 @@ function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; result
 
         const draw = () => {
             ctx.clearRect(0, 0, S, S);
-            rotRef.current += spdRef.current;
-            const stopped = spdRef.current < 0.002;
-            const showRes = resultTier !== null && stopped;
             const t = Date.now() * 0.003;
+
+            // Smooth deceleration: interpolate from start to target
+            if (targetRotRef.current !== null && decPhase.current < 1) {
+                decPhase.current = Math.min(1, decPhase.current + 0.008); // ~2s to stop
+                // Ease-out cubic
+                const ease = 1 - Math.pow(1 - decPhase.current, 3);
+                rotRef.current = decStartRef.current + (targetRotRef.current - decStartRef.current) * ease;
+                spdRef.current = decStartSpd.current * (1 - ease);
+            } else if (targetRotRef.current === null) {
+                rotRef.current += spdRef.current;
+            }
+
+            const stopped = decPhase.current >= 1 || (targetRotRef.current !== null && spdRef.current < 0.001);
+            const showRes = resultTier !== null && stopped;
 
             // Background glow
             const bg = ctx.createRadialGradient(cx, cy, 30, cx, cy, 185);
@@ -145,11 +206,11 @@ function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; result
             ctx.fillStyle = bg;
             ctx.beginPath(); ctx.arc(cx, cy, 185, 0, Math.PI * 2); ctx.fill();
 
-            // Pointer beam line (from center to top)
-            if (stopped) {
+            // Pointer beam line (center to top)
+            if (stopped || decPhase.current > 0.7) {
                 ctx.save();
                 ctx.strokeStyle = showRes && resultTier !== null ? TIER_COLORS[resultTier] : '#f59e0b';
-                ctx.globalAlpha = showRes ? 0.5 + Math.sin(t * 2) * 0.2 : 0.15;
+                ctx.globalAlpha = showRes ? 0.5 + Math.sin(t * 2) * 0.2 : 0.1 * decPhase.current;
                 ctx.lineWidth = 2;
                 ctx.setLineDash([4, 6]);
                 ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy - 180);
@@ -167,18 +228,18 @@ function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; result
                 const dr = r * pulse;
                 const dw = isWin ? w + 3 : w;
 
-                const rot = rotRef.current * (0.8 + i * 0.2) + ringOffsetsRef.current[i];
+                const rot = rotRef.current * RING_SPEEDS[i] + RING_OFFSETS[i];
                 const arcPerZone = (PROB[i] / ARCS[i]) * Math.PI * 2;
                 const gapPerZone = (Math.PI * 2 * (1 - PROB[i])) / ARCS[i];
 
-                // Ring background (inactive = very dim full circle)
+                // Ring background (dim full circle)
                 ctx.save();
                 ctx.globalAlpha = alpha * 0.12;
                 ctx.strokeStyle = TIER_COLORS[i]; ctx.lineWidth = dw;
                 ctx.beginPath(); ctx.arc(cx, cy, dr, 0, Math.PI * 2); ctx.stroke();
                 ctx.restore();
 
-                // Glow layer
+                // Glow
                 ctx.save(); ctx.globalAlpha = alpha;
                 ctx.shadowColor = isWin ? TIER_COLORS[i] : TIER_GLOWS[i];
                 ctx.shadowBlur = isWin ? 30 + Math.sin(t * 4) * 10 : 5;
@@ -186,7 +247,7 @@ function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; result
                 ctx.strokeStyle = 'transparent'; ctx.lineWidth = dw + 4; ctx.stroke();
                 ctx.restore();
 
-                // Active arcs (bright segments proportional to probability)
+                // Active arcs
                 for (let a = 0; a < ARCS[i]; a++) {
                     const start = rot + a * (arcPerZone + gapPerZone);
                     const end = start + arcPerZone;
@@ -217,8 +278,8 @@ function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; result
                 }
                 ctx.globalAlpha = 1;
 
-                // Tier label when slow
-                if (spdRef.current < 0.003) {
+                // Tier label
+                if (spdRef.current < 0.003 || stopped) {
                     ctx.save();
                     ctx.font = `700 ${isWin ? 10 : (i === 4 ? 7 : 8)}px Inter, sans-serif`;
                     ctx.fillStyle = TIER_COLORS[i];
@@ -283,8 +344,6 @@ function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; result
 
     return <canvas ref={canvasRef} className={`galaxy-canvas ${spinning ? 'galaxy-spinning' : ''}`} />;
 }
-
-// ============================================
 
 
 // ============================================
