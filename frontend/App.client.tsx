@@ -63,38 +63,68 @@ const API = "";
 // ============================================
 // GALAXY WHEEL — Custom Canvas
 // ============================================
-function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; resultTier: number | null }) {
+function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
+    spinning: boolean;
+    resultTier: number | null;
+    onRingLocked?: (ringIndex: number, hit: boolean) => void;
+}) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const animRef = useRef<number>(0);
-    const rotRef = useRef(0);       // current rotation (radians, monotonically increasing)
-    const spdRef = useRef(0);       // current angular speed
-    const targetRotRef = useRef<number | null>(null);  // target rotation to land on
-    const decStartRef = useRef(0);  // rotation when deceleration started
-    const decStartSpd = useRef(0);  // speed when deceleration started
-    const decPhase = useRef(0);     // 0-1 deceleration progress
     const ptcRef = useRef<{ ring: number; angle: number; speed: number; sz: number; op: number }[]>([]);
 
-    // Tier probabilities and arc distribution
+    // Per-ring independent state
+    const ringRots = useRef([0, 0, 0, 0, 0]);           // current rotation per ring
+    const ringSpds = useRef([0.04, -0.035, 0.03, -0.025, 0.02]); // speed (sign = direction)
+    const ringLocked = useRef([false, false, false, false, false]);
+    const ringTargets = useRef<(number | null)[]>([null, null, null, null, null]);
+    const ringLockPhase = useRef([0, 0, 0, 0, 0]);      // 0-1 ease progress per ring
+    const ringLockStart = useRef([0, 0, 0, 0, 0]);      // rotation when lock started
+    const cascadeIndex = useRef(-1);   // which ring is currently locking (-1 = none, 0-4, 5 = done)
+    const cascadeTimer = useRef(0);    // timestamp when current lock started
+    const notifiedRings = useRef([false, false, false, false, false]);
+
     const PROB = [0.50, 0.30, 0.15, 0.045, 0.005];
     const ARCS = [5, 4, 3, 2, 1];
-    // Fixed angular offsets per ring — arranged so active zones don't overlap
-    // These are chosen so that at rotation=0, each ring's arcs are in different angular sectors
-    const RING_OFFSETS = [0, Math.PI * 0.37, Math.PI * 0.73, Math.PI * 1.15, Math.PI * 1.55];
-    // Speed multiplier per ring
-    const RING_SPEEDS = [1.0, 0.85, 0.72, 0.6, 0.5];
+    const LOCK_DURATION = 60;   // frames (~1s at 60fps)
+    const LOCK_DELAY = 45;      // frames between ring locks (~0.75s)
 
-    // Helper: check if angle 'a' is inside any active arc of ring 'i' at rotation 'rot'
-    const isInActiveArc = (ringIdx: number, rot: number, testAngle: number) => {
-        const arcPerZone = (PROB[ringIdx] / ARCS[ringIdx]) * Math.PI * 2;
-        const gapPerZone = (Math.PI * 2 * (1 - PROB[ringIdx])) / ARCS[ringIdx];
-        const ringRot = rot * RING_SPEEDS[ringIdx] + RING_OFFSETS[ringIdx];
+    // Find the nearest active arc's center angle for a ring at current rotation
+    const findNearestArc = (ringIdx: number, currentRot: number, targetAngle: number) => {
+        const arcLen = (PROB[ringIdx] / ARCS[ringIdx]) * Math.PI * 2;
+        const gapLen = (Math.PI * 2 * (1 - PROB[ringIdx])) / ARCS[ringIdx];
+        const stride = arcLen + gapLen;
+        let bestDist = Infinity, bestTarget = currentRot;
         for (let a = 0; a < ARCS[ringIdx]; a++) {
-            const start = (ringRot + a * (arcPerZone + gapPerZone)) % (Math.PI * 2);
-            // Normalize angle difference
-            let diff = ((testAngle - start) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
-            if (diff < arcPerZone) return true;
+            // Arc center angle relative to ring: a * stride + arcLen/2
+            const arcCenter = a * stride + arcLen / 2;
+            // We need currentRot + arcCenter ≡ targetAngle (mod 2π)
+            // So: targetRot = targetAngle - arcCenter
+            let targetRot = targetAngle - arcCenter;
+            // Bring targetRot to nearest value to currentRot (could be ± full rotations)
+            const diff = targetRot - currentRot;
+            const mod = ((diff % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+            // Choose the nearest forward rotation (at least 1/4 turn for visual drama)
+            targetRot = currentRot + mod;
+            if (targetRot < currentRot + Math.PI / 2) targetRot += Math.PI * 2;
+            const dist = Math.abs(targetRot - currentRot);
+            if (dist < bestDist) { bestDist = dist; bestTarget = targetRot; }
         }
-        return false;
+        return bestTarget;
+    };
+
+    // Find a rotation that places NO active arc at targetAngle
+    const findMissAngle = (ringIdx: number, currentRot: number, targetAngle: number) => {
+        const arcLen = (PROB[ringIdx] / ARCS[ringIdx]) * Math.PI * 2;
+        const gapLen = (Math.PI * 2 * (1 - PROB[ringIdx])) / ARCS[ringIdx];
+        const stride = arcLen + gapLen;
+        // Target: gap center at pointer
+        const gapCenter = arcLen + gapLen / 2; // center of first gap
+        let targetRot = targetAngle - gapCenter;
+        const diff = targetRot - currentRot;
+        const mod = ((diff % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+        targetRot = currentRot + mod;
+        if (targetRot < currentRot + Math.PI / 2) targetRot += Math.PI * 2;
+        return targetRot;
     };
 
     // Initialize particles
@@ -108,62 +138,27 @@ function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; result
         ptcRef.current = p;
     }, []);
 
-    // Start spinning
+    // Start spinning — randomize directions and speeds
     useEffect(() => {
         if (spinning) {
-            spdRef.current = 0.06 + Math.random() * 0.03;
-            targetRotRef.current = null;
-            decPhase.current = 0;
+            const dirs = [1, -1, 1, -1, 1]; // alternating directions
+            for (let i = 0; i < 5; i++) {
+                ringSpds.current[i] = dirs[i] * (0.025 + Math.random() * 0.035);
+                ringLocked.current[i] = false;
+                ringTargets.current[i] = null;
+                ringLockPhase.current[i] = 0;
+                notifiedRings.current[i] = false;
+            }
+            cascadeIndex.current = -1;
+            cascadeTimer.current = 0;
         }
     }, [spinning]);
 
-    // Calculate target landing when result arrives
+    // When result arrives, begin cascade
     useEffect(() => {
         if (resultTier !== null && !spinning) {
-            // Calculate how much more rotation is needed to land correctly
-            // Target: winning ring's arc center is at pointer angle (-PI/2 = top)
-            const ptr = -Math.PI / 2;
-            const curRot = rotRef.current;
-            const curSpd = spdRef.current;
-
-            // We want the final rotation 'R' such that:
-            // (R * RING_SPEEDS[resultTier] + RING_OFFSETS[resultTier]) has an active arc at 'ptr'
-            const arcPerZone = (PROB[resultTier] / ARCS[resultTier]) * Math.PI * 2;
-            const gapPerZone = (Math.PI * 2 * (1 - PROB[resultTier])) / ARCS[resultTier];
-            const stride = arcPerZone + gapPerZone;
-
-            // Find the needed ring rotation for arc center at pointer
-            const neededRingRot = ptr - arcPerZone / 2; // arc start should be at ptr - arcWidth/2
-            // ringRot = R * speed + offset => R = (ringRot - offset) / speed
-            // Find a target R that's ahead of current rotation (at least a few full spins for drama)
-            const minExtraSpins = 3; // at least 3 more full rotations for drama
-            const minTarget = curRot + minExtraSpins * Math.PI * 2;
-
-            // Calculate the base target rotation
-            let baseR = (neededRingRot - RING_OFFSETS[resultTier]) / RING_SPEEDS[resultTier];
-            // Bring it forward past minTarget
-            const period = stride / RING_SPEEDS[resultTier]; // rotation period per arc zone
-            while (baseR < minTarget) baseR += period;
-
-            // Verify no other ring has an active arc at pointer for this landing rotation
-            // If they do, nudge by a small amount (within the winning arc)
-            let finalR = baseR;
-            let attempts = 0;
-            while (attempts < 20) {
-                let conflict = false;
-                for (let i = 0; i < 5; i++) {
-                    if (i === resultTier) continue;
-                    if (isInActiveArc(i, finalR, ptr)) { conflict = true; break; }
-                }
-                if (!conflict) break;
-                finalR += 0.05; // tiny nudge
-                attempts++;
-            }
-
-            targetRotRef.current = finalR;
-            decStartRef.current = curRot;
-            decStartSpd.current = curSpd;
-            decPhase.current = 0;
+            cascadeIndex.current = 0;
+            cascadeTimer.current = 0; // will start counting in draw loop
         }
     }, [resultTier, spinning]);
 
@@ -179,26 +174,76 @@ function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; result
         const cx = S / 2, cy = S / 2;
         const radii = [165, 138, 111, 84, 60];
         const widths = [20, 20, 20, 18, 16];
+        const PTR = -Math.PI / 2; // pointer angle = top
+        let frameCount = 0;
 
         const draw = () => {
             ctx.clearRect(0, 0, S, S);
             const t = Date.now() * 0.003;
+            frameCount++;
 
-            // Smooth deceleration: interpolate from start to target
-            if (targetRotRef.current !== null && decPhase.current < 1) {
-                decPhase.current = Math.min(1, decPhase.current + 0.008); // ~2s to stop
-                // Ease-out cubic
-                const ease = 1 - Math.pow(1 - decPhase.current, 3);
-                rotRef.current = decStartRef.current + (targetRotRef.current - decStartRef.current) * ease;
-                spdRef.current = decStartSpd.current * (1 - ease);
-            } else if (targetRotRef.current === null) {
-                rotRef.current += spdRef.current;
+            // --- Update ring rotations ---
+            for (let i = 0; i < 5; i++) {
+                if (ringLocked.current[i]) continue; // already locked
+
+                // Is this ring currently in lock phase?
+                if (cascadeIndex.current === i && ringTargets.current[i] !== null) {
+                    ringLockPhase.current[i] = Math.min(1, ringLockPhase.current[i] + (1 / LOCK_DURATION));
+                    const ease = 1 - Math.pow(1 - ringLockPhase.current[i], 3);
+                    ringRots.current[i] = ringLockStart.current[i] +
+                        (ringTargets.current[i]! - ringLockStart.current[i]) * ease;
+
+                    if (ringLockPhase.current[i] >= 1) {
+                        ringRots.current[i] = ringTargets.current[i]!;
+                        ringLocked.current[i] = true;
+                        const isHit = resultTier !== null && i <= resultTier;
+                        if (!notifiedRings.current[i] && onRingLocked) {
+                            onRingLocked(i, isHit);
+                            notifiedRings.current[i] = true;
+                        }
+                        cascadeTimer.current = frameCount; // start delay for next ring
+                    }
+                } else if (cascadeIndex.current >= 0 && i > cascadeIndex.current && !ringLocked.current[i]) {
+                    // Rings waiting to lock — keep spinning but slow down slightly
+                    const slowFactor = Math.max(0.4, 1 - (cascadeIndex.current / 5));
+                    ringRots.current[i] += ringSpds.current[i] * slowFactor;
+                } else {
+                    // Free spinning
+                    ringRots.current[i] += ringSpds.current[i];
+                }
             }
 
-            const stopped = decPhase.current >= 1 || (targetRotRef.current !== null && spdRef.current < 0.001);
-            const showRes = resultTier !== null && stopped;
+            // --- Cascade progression ---
+            if (resultTier !== null && cascadeIndex.current >= 0 && cascadeIndex.current < 5) {
+                const ci = cascadeIndex.current;
 
-            // Background glow
+                // Initialize lock target for current ring if not done
+                if (ringTargets.current[ci] === null) {
+                    if (cascadeTimer.current === 0 || frameCount - cascadeTimer.current >= LOCK_DELAY) {
+                        const isHit = ci <= resultTier;
+                        const target = isHit
+                            ? findNearestArc(ci, ringRots.current[ci], PTR)
+                            : findMissAngle(ci, ringRots.current[ci], PTR);
+                        ringTargets.current[ci] = target;
+                        ringLockStart.current[ci] = ringRots.current[ci];
+                        ringLockPhase.current[ci] = 0;
+                    }
+                }
+
+                // Move to next ring after current finishes + delay
+                if (ringLocked.current[ci] && frameCount - cascadeTimer.current >= LOCK_DELAY) {
+                    if (ci < 4) {
+                        cascadeIndex.current = ci + 1;
+                    } else {
+                        cascadeIndex.current = 5; // done
+                    }
+                }
+            }
+
+            const allDone = cascadeIndex.current >= 5;
+            const showingResult = resultTier !== null && cascadeIndex.current >= 0;
+
+            // --- Background glow ---
             const bg = ctx.createRadialGradient(cx, cy, 30, cx, cy, 185);
             bg.addColorStop(0, 'rgba(15,17,26,0.95)');
             bg.addColorStop(0.7, 'rgba(10,11,15,0.6)');
@@ -206,11 +251,12 @@ function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; result
             ctx.fillStyle = bg;
             ctx.beginPath(); ctx.arc(cx, cy, 185, 0, Math.PI * 2); ctx.fill();
 
-            // Pointer beam line (center to top)
-            if (stopped || decPhase.current > 0.7) {
+            // --- Pointer beam line ---
+            if (showingResult) {
                 ctx.save();
-                ctx.strokeStyle = showRes && resultTier !== null ? TIER_COLORS[resultTier] : '#f59e0b';
-                ctx.globalAlpha = showRes ? 0.5 + Math.sin(t * 2) * 0.2 : 0.1 * decPhase.current;
+                const beamColor = allDone && resultTier !== null ? TIER_COLORS[resultTier] : '#f59e0b';
+                ctx.strokeStyle = beamColor;
+                ctx.globalAlpha = 0.25 + Math.sin(t * 2) * 0.15;
                 ctx.lineWidth = 2;
                 ctx.setLineDash([4, 6]);
                 ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy - 180);
@@ -218,31 +264,36 @@ function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; result
                 ctx.restore();
             }
 
-            // 5 orbital rings
+            // --- Draw 5 rings ---
             for (let i = 0; i < 5; i++) {
                 const r = radii[i], w = widths[i];
-                const isWin = showRes && resultTier === i;
-                const isLose = showRes && resultTier !== i;
-                const alpha = isLose ? 0.10 : 1.0;
-                const pulse = isWin ? (1 + Math.sin(t * 3) * 0.06) : 1;
-                const dr = r * pulse;
-                const dw = isWin ? w + 3 : w;
+                const locked = ringLocked.current[i];
+                const locking = cascadeIndex.current === i && ringTargets.current[i] !== null;
+                const isHit = locked && resultTier !== null && i <= resultTier;
+                const isMiss = locked && resultTier !== null && i > resultTier;
+                const isWinTier = allDone && resultTier === i;
+                const isFaded = allDone && resultTier !== null && i !== resultTier;
 
-                const rot = rotRef.current * RING_SPEEDS[i] + RING_OFFSETS[i];
+                const alpha = isMiss ? 0.15 : (isFaded && !isWinTier ? 0.25 : 1.0);
+                const pulse = isWinTier ? (1 + Math.sin(t * 3) * 0.06) : 1;
+                const dr = r * pulse;
+                const dw = isWinTier ? w + 3 : (locked && isHit ? w + 1 : w);
+
+                const rot = ringRots.current[i];
                 const arcPerZone = (PROB[i] / ARCS[i]) * Math.PI * 2;
                 const gapPerZone = (Math.PI * 2 * (1 - PROB[i])) / ARCS[i];
 
-                // Ring background (dim full circle)
+                // Dim full circle background
                 ctx.save();
-                ctx.globalAlpha = alpha * 0.12;
+                ctx.globalAlpha = alpha * 0.10;
                 ctx.strokeStyle = TIER_COLORS[i]; ctx.lineWidth = dw;
                 ctx.beginPath(); ctx.arc(cx, cy, dr, 0, Math.PI * 2); ctx.stroke();
                 ctx.restore();
 
                 // Glow
                 ctx.save(); ctx.globalAlpha = alpha;
-                ctx.shadowColor = isWin ? TIER_COLORS[i] : TIER_GLOWS[i];
-                ctx.shadowBlur = isWin ? 30 + Math.sin(t * 4) * 10 : 5;
+                ctx.shadowColor = (isWinTier || (locked && isHit)) ? TIER_COLORS[i] : TIER_GLOWS[i];
+                ctx.shadowBlur = isWinTier ? 30 + Math.sin(t * 4) * 10 : (locked && isHit ? 15 : 5);
                 ctx.beginPath(); ctx.arc(cx, cy, dr, 0, Math.PI * 2);
                 ctx.strokeStyle = 'transparent'; ctx.lineWidth = dw + 4; ctx.stroke();
                 ctx.restore();
@@ -251,20 +302,22 @@ function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; result
                 for (let a = 0; a < ARCS[i]; a++) {
                     const start = rot + a * (arcPerZone + gapPerZone);
                     const end = start + arcPerZone;
+                    const bright = (locked && isHit) ? 0.95 : (locking ? 0.8 : 0.55);
                     ctx.beginPath(); ctx.arc(cx, cy, dr, start, end);
                     ctx.strokeStyle = TIER_COLORS[i];
-                    ctx.globalAlpha = (isWin ? 0.95 : 0.65) * alpha;
+                    ctx.globalAlpha = bright * alpha;
                     ctx.lineWidth = dw; ctx.lineCap = 'butt'; ctx.stroke();
-                    if (isWin) {
-                        ctx.save(); ctx.shadowColor = TIER_COLORS[i]; ctx.shadowBlur = 12;
+                    // Extra glow on winning/hit arcs
+                    if (isWinTier || (locked && isHit)) {
+                        ctx.save(); ctx.shadowColor = TIER_COLORS[i]; ctx.shadowBlur = 10;
                         ctx.beginPath(); ctx.arc(cx, cy, dr, start, end);
-                        ctx.strokeStyle = TIER_COLORS[i]; ctx.globalAlpha = 0.35;
-                        ctx.lineWidth = dw + 6; ctx.stroke(); ctx.restore();
+                        ctx.strokeStyle = TIER_COLORS[i]; ctx.globalAlpha = 0.3 * alpha;
+                        ctx.lineWidth = dw + 5; ctx.stroke(); ctx.restore();
                     }
                 }
                 ctx.globalAlpha = 1;
 
-                // Inactive zone tick marks
+                // Inactive tick marks
                 for (let a = 0; a < ARCS[i]; a++) {
                     const gStart = rot + a * (arcPerZone + gapPerZone) + arcPerZone;
                     const ticks = Math.max(2, Math.floor(gapPerZone / 0.18));
@@ -272,44 +325,59 @@ function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; result
                     for (let s = 0; s < ticks; s++) {
                         const sa = gStart + s * tickLen;
                         ctx.beginPath(); ctx.arc(cx, cy, dr, sa, sa + tickLen * 0.35);
-                        ctx.strokeStyle = TIER_COLORS[i]; ctx.globalAlpha = 0.06 * alpha;
+                        ctx.strokeStyle = TIER_COLORS[i]; ctx.globalAlpha = 0.05 * alpha;
                         ctx.lineWidth = dw * 0.4; ctx.stroke();
                     }
                 }
                 ctx.globalAlpha = 1;
 
-                // Tier label
-                if (spdRef.current < 0.003 || stopped) {
+                // Tier label (show when locking or locked)
+                if (locked || locking || (!spinning && cascadeIndex.current < 0)) {
                     ctx.save();
-                    ctx.font = `700 ${isWin ? 10 : (i === 4 ? 7 : 8)}px Inter, sans-serif`;
+                    ctx.font = `700 ${isWinTier ? 10 : (i === 4 ? 7 : 8)}px Inter, sans-serif`;
                     ctx.fillStyle = TIER_COLORS[i];
-                    ctx.globalAlpha = isWin ? 1 : (isLose ? 0.15 : 0.6);
+                    ctx.globalAlpha = isWinTier ? 1 : (locked && isHit ? 0.8 : (isMiss ? 0.12 : 0.5));
                     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
                     ctx.fillText(TIER_NAMES[i], cx, cy - dr);
                     ctx.restore();
                 }
+
+                // Lock indicator — checkmark or X
+                if (locked) {
+                    ctx.save();
+                    ctx.font = '700 12px Inter, sans-serif';
+                    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                    if (isHit) {
+                        ctx.fillStyle = TIER_COLORS[i]; ctx.globalAlpha = 0.9;
+                        ctx.fillText('✓', cx + dr + 14, cy);
+                    } else if (isMiss) {
+                        ctx.fillStyle = '#ef4444'; ctx.globalAlpha = 0.7;
+                        ctx.fillText('✗', cx + dr + 14, cy);
+                    }
+                    ctx.restore();
+                }
             }
 
-            // Particles
+            // --- Particles ---
             for (const p of ptcRef.current) {
-                p.angle += p.speed + spdRef.current * 0.6;
+                p.angle += p.speed + Math.abs(ringSpds.current[p.ring]) * 0.3;
                 const pr = radii[p.ring];
-                const winP = showRes && resultTier === p.ring;
-                const loseP = showRes && resultTier !== p.ring;
+                const winP = allDone && resultTier === p.ring;
+                const fadeP = allDone && resultTier !== null && p.ring !== resultTier;
                 ctx.beginPath(); ctx.arc(cx + Math.cos(p.angle) * pr, cy + Math.sin(p.angle) * pr, winP ? p.sz * 1.5 : p.sz, 0, Math.PI * 2);
                 ctx.fillStyle = TIER_COLORS[p.ring];
-                ctx.globalAlpha = (loseP ? 0.06 : 1) * p.op * (0.4 + Math.sin(t * 1.3 + p.angle * 3) * 0.6);
+                ctx.globalAlpha = (fadeP ? 0.04 : 1) * p.op * (0.4 + Math.sin(t * 1.3 + p.angle * 3) * 0.6);
                 ctx.fill();
             }
             ctx.globalAlpha = 1;
 
-            // Center hub
-            const hubR = showRes ? 42 : 38;
+            // --- Center hub ---
+            const hubR = allDone ? 42 : 38;
             const hg = ctx.createRadialGradient(cx, cy, 5, cx, cy, hubR + 2);
             hg.addColorStop(0, '#1e2130'); hg.addColorStop(1, '#0c0d14');
             ctx.beginPath(); ctx.arc(cx, cy, hubR, 0, Math.PI * 2);
             ctx.fillStyle = hg; ctx.fill();
-            if (showRes && resultTier !== null) {
+            if (allDone && resultTier !== null) {
                 ctx.strokeStyle = TIER_COLORS[resultTier]; ctx.lineWidth = 3;
                 ctx.shadowColor = TIER_COLORS[resultTier]; ctx.shadowBlur = 15;
                 ctx.stroke(); ctx.shadowBlur = 0;
@@ -327,10 +395,10 @@ function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; result
                 ctx.fillText('WHEEL', cx, cy + 8);
             }
 
-            // Pointer triangle
+            // --- Pointer triangle ---
             ctx.save();
-            ctx.fillStyle = showRes && resultTier !== null ? TIER_COLORS[resultTier] : '#f59e0b';
-            ctx.shadowColor = showRes && resultTier !== null ? TIER_GLOWS[resultTier] : 'rgba(245,158,11,0.7)';
+            ctx.fillStyle = allDone && resultTier !== null ? TIER_COLORS[resultTier] : '#f59e0b';
+            ctx.shadowColor = allDone && resultTier !== null ? TIER_GLOWS[resultTier] : 'rgba(245,158,11,0.7)';
             ctx.shadowBlur = 14;
             ctx.beginPath();
             ctx.moveTo(cx - 9, 4); ctx.lineTo(cx + 9, 4); ctx.lineTo(cx, 20); ctx.closePath();
@@ -617,6 +685,7 @@ function CommunityPage() {
     const [error, setError] = useState<string | null>(null);
     const [spinningHolder, setSpinningHolder] = useState<string | null>(null);
     const [spinResult, setSpinResult] = useState<{ tierName: string; rewardAmount: number; tierIndex: number } | null>(null);
+    const [lockedTiers, setLockedTiers] = useState<{ [key: number]: boolean }>({});  // ringIndex -> hit/miss
     const sseRef = useRef<EventSource | null>(null);
 
     // Fetch initial live data
@@ -650,6 +719,7 @@ function CommunityPage() {
             const data = JSON.parse(e.data);
             setSpinningHolder(data.wallet);
             setSpinResult(null);
+            setLockedTiers({});
         });
 
         sse.addEventListener("spin", (e) => {
@@ -886,6 +956,7 @@ function CommunityPage() {
                         <GalaxyWheelCanvas
                             spinning={!!spinningHolder}
                             resultTier={spinResult?.tierIndex ?? null}
+                            onRingLocked={(ringIdx, hit) => setLockedTiers(prev => ({ ...prev, [ringIdx]: hit }))}
                         />
 
                         {/* Spinning for / Result */}
@@ -901,19 +972,26 @@ function CommunityPage() {
                             </div>
                         )}
 
-                        {/* Tier Legend */}
+                        {/* Tier Legend — progressive cascade */}
                         <div className="tier-legend">
-                            {TIER_NAMES.slice().reverse().map((name, ri) => {
-                                const i = TIER_NAMES.length - 1 - ri;
-                                const basePct = liveData ? (liveData.baseProbabilities[i] / 100).toFixed(1) : '0';
-                                const rewardPct = ["1%", "4%", "15%", "40%", "100%"];
-                                const isWinner = spinResult?.tierIndex === i;
+                            {TIER_NAMES.map((name, i) => {
+                                const isLocked = i in lockedTiers;
+                                const isHit = lockedTiers[i] === true;
+                                const isMiss = lockedTiers[i] === false;
+                                const isWinTier = spinResult?.tierIndex === i && Object.keys(lockedTiers).length > i;
+                                const treasury = liveData?.stats?.poolBalance ?? 0;
+                                const rewardShares = [0.01, 0.04, 0.15, 0.40, 1.00];
+                                const solReward = (treasury * rewardShares[i] / 1e9).toFixed(4);
                                 return (
-                                    <div key={name} className={`tier-item ${isWinner ? 'tier-winner' : ''}`}>
+                                    <div key={name} className={`tier-item ${isWinTier ? 'tier-winner' : ''} ${isHit ? 'tier-hit' : ''} ${isMiss ? 'tier-miss' : ''}`}
+                                        style={{ opacity: isMiss ? 0.35 : (isLocked ? 1 : 0.5), transition: 'all 0.5s' }}>
                                         <span className="tier-dot" style={{ backgroundColor: TIER_COLORS[i] }} />
                                         <span className="tier-name">{name}</span>
-                                        <span className="tier-pct">{basePct}%</span>
-                                        <span className="tier-reward">{rewardPct[i]}</span>
+                                        <span className="tier-reward" style={{ color: isHit ? TIER_COLORS[i] : '#666' }}>
+                                            {isLocked ? (isHit ? `+${solReward} SOL` : '—') : `${solReward} SOL`}
+                                        </span>
+                                        {isHit && <span style={{ color: TIER_COLORS[i], fontSize: '13px' }}>✓</span>}
+                                        {isMiss && <span style={{ color: '#ef4444', fontSize: '13px' }}>✗</span>}
                                     </div>
                                 );
                             })}
