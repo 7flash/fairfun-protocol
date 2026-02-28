@@ -532,10 +532,6 @@ body {
   transition: width 0.3s;
 }
 
-/* ============================================
-   CENTER COLUMN
-   ============================================ */
-
 .center-col {
   display: flex;
   flex-direction: column;
@@ -552,80 +548,84 @@ body {
   gap: 1rem;
 }
 
-.wheel-display {
-  width: 300px;
-  height: 300px;
+.wheel-container {
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: 360px;
+  height: 360px;
+  flex-shrink: 0;
 }
 
-.wheel-spinning .wheel-rings {
-  animation: spin 2s linear infinite;
-}
-
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.wheel-rings {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.wheel-ring {
+.wheel-pointer-arrow {
   position: absolute;
-  border: 2px solid;
-  border-radius: 50%;
-  opacity: 0.5;
+  top: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 32px;
+  color: var(--accent);
+  text-shadow: 0 4px 12px rgba(0, 0, 0, 0.8);
+  z-index: 20;
+  filter: drop-shadow(0 0 8px rgba(245, 158, 11, 0.5));
 }
 
-.wheel-center {
-  position: relative;
-  z-index: 2;
-  text-align: center;
-  background: var(--bg-card);
-  border: 2px solid var(--accent);
-  border-radius: 50%;
-  width: 90px;
-  height: 90px;
+.wheel-center-label {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  width: 80px;
+  height: 80px;
+  background: var(--bg-primary);
+  border: 3px solid var(--accent);
+  border-radius: 50%;
+  z-index: 10;
 }
 
 .wheel-label {
-  font-size: 0.7rem;
+  font-size: 0.65rem;
   font-weight: 800;
   letter-spacing: 0.15em;
   color: var(--accent);
 }
 
 .wheel-label-sub {
-  font-size: 0.55rem;
+  font-size: 0.5rem;
   font-weight: 500;
   color: var(--text-muted);
   letter-spacing: 0.1em;
 }
 
-.wheel-spinning-for {
-  position: absolute;
-  bottom: -1.5rem;
-  font-size: 0.75rem;
+/* Spin status / result overlay */
+.spin-status {
+  padding: 0.6rem 1.2rem;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+.spin-status.spinning {
+  background: var(--accent-dim);
   color: var(--accent);
-  white-space: nowrap;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.spin-status.result {
+  background: var(--bg-card);
+  border: 2px solid;
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: center;
+}
+
+.result-sol {
+  font-family: var(--mono);
+  font-weight: 700;
+  color: var(--green);
 }
 
 .tier-legend {
@@ -633,7 +633,7 @@ body {
   flex-direction: column;
   gap: 0.35rem;
   width: 100%;
-  max-width: 280px;
+  max-width: 320px;
 }
 
 .tier-item {
@@ -641,8 +641,32 @@ body {
   align-items: center;
   gap: 0.5rem;
   font-size: 0.75rem;
-  padding: 0.3rem 0.5rem;
+  padding: 0.4rem 0.6rem;
   border-radius: var(--radius-sm);
+  transition: all 0.15s;
+}
+
+.tier-item.tier-highlighted {
+  transform: scale(1.02);
+  box-shadow: 0 0 15px rgba(245, 158, 11, 0.2);
+}
+
+.tier-item.tier-winner {
+  background: rgba(34, 197, 94, 0.15) !important;
+  border: 1px solid var(--green);
+  animation: winner-pulse 0.5s ease-in-out 3;
+}
+
+@keyframes winner-pulse {
+
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.04);
+  }
 }
 
 .tier-dot {

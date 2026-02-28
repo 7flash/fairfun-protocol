@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { createRoot } from "react-dom/client";
+import { Wheel } from "react-custom-roulette";
 
 // ============================================
 // TYPES
@@ -57,7 +58,26 @@ interface UserData {
 // ============================================
 const TIER_NAMES = ["VOID", "COSMOS", "METEORS", "NEBULA", "SUPERNOVA"];
 const TIER_COLORS = ["#555", "#22c55e", "#3b82f6", "#a855f7", "#f59e0b"];
+const TIER_SEGMENTS = [50, 30, 15, 4, 1]; // number of segments per tier (= probability * 100)
 const API = "";
+
+// Build wheel data: 100 segments colored by tier
+const buildWheelData = () => {
+    const data: { option: string; style: { backgroundColor: string; textColor: string } }[] = [];
+    const tierIndices: number[] = [];
+    TIER_NAMES.forEach((name, tierIdx) => {
+        for (let i = 0; i < TIER_SEGMENTS[tierIdx]; i++) {
+            data.push({
+                option: '',
+                style: { backgroundColor: TIER_COLORS[tierIdx], textColor: 'white' },
+            });
+            tierIndices.push(tierIdx);
+        }
+    });
+    return { data, tierIndices };
+};
+const { data: WHEEL_DATA, tierIndices: WHEEL_TIER_INDICES } = buildWheelData();
+const TOTAL_SEGMENTS = WHEEL_DATA.length;
 
 // ============================================
 // LANDING PAGE
@@ -329,6 +349,11 @@ function CommunityPage() {
     const [withdrawLoading, setWithdrawLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [spinningHolder, setSpinningHolder] = useState<string | null>(null);
+    const [mustSpin, setMustSpin] = useState(false);
+    const [prizeNumber, setPrizeNumber] = useState(0);
+    const [spinResult, setSpinResult] = useState<{ tierName: string; rewardAmount: number; tierIndex: number } | null>(null);
+    const [highlightedTier, setHighlightedTier] = useState<number | null>(null);
+    const spinResultRef = useRef<{ tier: number } | null>(null);
     const sseRef = useRef<EventSource | null>(null);
 
     // Fetch initial live data
@@ -361,11 +386,22 @@ function CommunityPage() {
         sse.addEventListener("spinning", (e) => {
             const data = JSON.parse(e.data);
             setSpinningHolder(data.wallet);
+            setSpinResult(null);
         });
 
         sse.addEventListener("spin", (e) => {
             const data = JSON.parse(e.data);
-            setSpinningHolder(null);
+            // Start wheel animation pointing at winning tier
+            const tier = data.tier ?? 0;
+            spinResultRef.current = { tier };
+            // Find a segment index for this tier
+            const segments: number[] = [];
+            WHEEL_TIER_INDICES.forEach((t, idx) => { if (t === tier) segments.push(idx); });
+            const targetSegment = segments[Math.floor(Math.random() * segments.length)] ?? 0;
+            setPrizeNumber(targetSegment);
+            setMustSpin(true);
+
+            // Update liveData with new spin result
             setLiveData((prev) => {
                 if (!prev) return prev;
                 const newSpin: SpinResult = {
@@ -580,41 +616,73 @@ function CommunityPage() {
 
                 {/* Center: Wheel + Wallet Actions */}
                 <div className="center-col">
-                    {/* Spinning Indicator */}
                     <div className="wheel-area">
-                        <div className={`wheel-display ${spinningHolder ? "wheel-spinning" : ""}`}>
-                            <div className="wheel-rings">
-                                {TIER_NAMES.map((name, i) => (
-                                    <div
-                                        key={name}
-                                        className="wheel-ring"
-                                        style={{
-                                            width: `${100 - i * 18}%`,
-                                            height: `${100 - i * 18}%`,
-                                            borderColor: TIER_COLORS[i],
-                                        }}
-                                    />
-                                ))}
-                                <div className="wheel-center">
-                                    <div className="wheel-label">GALAXY</div>
-                                    <div className="wheel-label-sub">WHEEL</div>
-                                </div>
+                        <div className="wheel-container">
+                            <Wheel
+                                mustStartSpinning={mustSpin}
+                                prizeNumber={prizeNumber}
+                                data={WHEEL_DATA}
+                                onStopSpinning={() => {
+                                    setMustSpin(false);
+                                    setSpinningHolder(null);
+                                    const tier = spinResultRef.current?.tier ?? 0;
+                                    const latestSpin = liveData?.recentSpins[0];
+                                    setSpinResult({
+                                        tierName: TIER_NAMES[tier] || 'VOID',
+                                        rewardAmount: latestSpin?.rewardAmount || 0,
+                                        tierIndex: tier,
+                                    });
+                                    setHighlightedTier(null);
+                                    // Clear result after 5 seconds
+                                    setTimeout(() => setSpinResult(null), 5000);
+                                }}
+                                backgroundColors={TIER_COLORS}
+                                textColors={['white']}
+                                outerBorderColor="#1e293b"
+                                outerBorderWidth={6}
+                                innerBorderColor="#f59e0b"
+                                innerBorderWidth={3}
+                                innerRadius={18}
+                                radiusLineColor="#0f172a"
+                                radiusLineWidth={1}
+                                spinDuration={0.6}
+                                startingOptionIndex={0}
+                                pointerProps={{ src: undefined, style: { display: 'none' } }}
+                            />
+                            <div className="wheel-pointer-arrow">▼</div>
+                            <div className="wheel-center-label">
+                                <span className="wheel-label">GALAXY</span>
+                                <span className="wheel-label-sub">WHEEL</span>
                             </div>
-                            {spinningHolder && (
-                                <div className="wheel-spinning-for">
-                                    Spinning for {spinningHolder.slice(0, 4)}...{spinningHolder.slice(-4)}
-                                </div>
-                            )}
                         </div>
 
-                        {/* Tier Legend */}
+                        {/* Spinning for / Result */}
+                        {spinningHolder && !spinResult && (
+                            <div className="spin-status spinning">
+                                🎰 Spinning for {spinningHolder.slice(0, 4)}...{spinningHolder.slice(-4)}
+                            </div>
+                        )}
+                        {spinResult && (
+                            <div className="spin-status result" style={{ borderColor: TIER_COLORS[spinResult.tierIndex] }}>
+                                <span style={{ color: TIER_COLORS[spinResult.tierIndex] }}>✦ {spinResult.tierName}</span>
+                                <span className="result-sol">{(spinResult.rewardAmount / 1e9).toFixed(4)} SOL</span>
+                            </div>
+                        )}
+
+                        {/* Tier Legend with highlighting */}
                         <div className="tier-legend">
                             {TIER_NAMES.slice().reverse().map((name, ri) => {
                                 const i = TIER_NAMES.length - 1 - ri;
-                                const basePct = (liveData.baseProbabilities[i] / 100).toFixed(1);
+                                const basePct = liveData ? (liveData.baseProbabilities[i] / 100).toFixed(1) : '0';
                                 const rewardPct = ["1%", "4%", "15%", "40%", "100%"];
+                                const isHighlighted = highlightedTier === i;
+                                const isWinner = spinResult?.tierIndex === i;
                                 return (
-                                    <div key={name} className="tier-item">
+                                    <div
+                                        key={name}
+                                        className={`tier-item ${isHighlighted ? 'tier-highlighted' : ''} ${isWinner ? 'tier-winner' : ''}`}
+                                        style={isHighlighted ? { background: `${TIER_COLORS[i]}30` } : undefined}
+                                    >
                                         <span className="tier-dot" style={{ backgroundColor: TIER_COLORS[i] }} />
                                         <span className="tier-name">{name}</span>
                                         <span className="tier-pct">{basePct}%</span>
