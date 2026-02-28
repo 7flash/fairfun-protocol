@@ -69,6 +69,13 @@ function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; result
     const rotRef = useRef(0);
     const spdRef = useRef(0);
     const ptcRef = useRef<{ ring: number; angle: number; speed: number; sz: number; op: number }[]>([]);
+    const ringOffsetsRef = useRef([0, 0, 0, 0, 0]);
+    const lockedRef = useRef(false);
+
+    // Active arc fraction per ring (= tier probability)
+    const PROB = [0.50, 0.30, 0.15, 0.045, 0.005];
+    // Number of active arc zones per ring
+    const ARCS = [5, 4, 3, 2, 1];
 
     useEffect(() => {
         const p: typeof ptcRef.current = [];
@@ -80,11 +87,33 @@ function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; result
         ptcRef.current = p;
     }, []);
 
-    useEffect(() => { if (spinning) spdRef.current = 0.06 + Math.random() * 0.03; }, [spinning]);
+    useEffect(() => {
+        if (spinning) { spdRef.current = 0.06 + Math.random() * 0.03; lockedRef.current = false; }
+    }, [spinning]);
 
     useEffect(() => {
         if (resultTier !== null && !spinning) {
-            const dec = () => { if (spdRef.current > 0.0005) { spdRef.current *= 0.965; requestAnimationFrame(dec); } else spdRef.current = 0; };
+            const dec = () => {
+                if (spdRef.current > 0.0005) { spdRef.current *= 0.96; requestAnimationFrame(dec); }
+                else {
+                    spdRef.current = 0;
+                    if (!lockedRef.current) {
+                        lockedRef.current = true;
+                        const ptr = -Math.PI / 2; // pointer = top
+                        const offs = [...ringOffsetsRef.current];
+                        for (let i = 0; i < 5; i++) {
+                            const spd = 0.8 + i * 0.2;
+                            const arcPerZone = (PROB[i] / ARCS[i]) * Math.PI * 2;
+                            if (i === resultTier) {
+                                offs[i] = ptr - arcPerZone / 2 - rotRef.current * spd;
+                            } else {
+                                offs[i] = ptr + Math.PI + i * 0.4 - rotRef.current * spd;
+                            }
+                        }
+                        ringOffsetsRef.current = offs;
+                    }
+                }
+            };
             setTimeout(dec, 200);
         }
     }, [resultTier, spinning]);
@@ -104,8 +133,11 @@ function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; result
         const draw = () => {
             ctx.clearRect(0, 0, S, S);
             rotRef.current += spdRef.current;
+            const stopped = spdRef.current < 0.002;
+            const showRes = resultTier !== null && stopped;
+            const t = Date.now() * 0.003;
 
-            // Background radial glow
+            // Background glow
             const bg = ctx.createRadialGradient(cx, cy, 30, cx, cy, 185);
             bg.addColorStop(0, 'rgba(15,17,26,0.95)');
             bg.addColorStop(0.7, 'rgba(10,11,15,0.6)');
@@ -113,82 +145,135 @@ function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; result
             ctx.fillStyle = bg;
             ctx.beginPath(); ctx.arc(cx, cy, 185, 0, Math.PI * 2); ctx.fill();
 
-            // Draw 5 orbital rings
+            // Pointer beam line (from center to top)
+            if (stopped) {
+                ctx.save();
+                ctx.strokeStyle = showRes && resultTier !== null ? TIER_COLORS[resultTier] : '#f59e0b';
+                ctx.globalAlpha = showRes ? 0.5 + Math.sin(t * 2) * 0.2 : 0.15;
+                ctx.lineWidth = 2;
+                ctx.setLineDash([4, 6]);
+                ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy - 180);
+                ctx.stroke(); ctx.setLineDash([]);
+                ctx.restore();
+            }
+
+            // 5 orbital rings
             for (let i = 0; i < 5; i++) {
                 const r = radii[i], w = widths[i];
-                const isWin = resultTier === i && !spinning && spdRef.current < 0.002;
+                const isWin = showRes && resultTier === i;
+                const isLose = showRes && resultTier !== i;
+                const alpha = isLose ? 0.10 : 1.0;
+                const pulse = isWin ? (1 + Math.sin(t * 3) * 0.06) : 1;
+                const dr = r * pulse;
+                const dw = isWin ? w + 3 : w;
 
-                // Outer glow
+                const rot = rotRef.current * (0.8 + i * 0.2) + ringOffsetsRef.current[i];
+                const arcPerZone = (PROB[i] / ARCS[i]) * Math.PI * 2;
+                const gapPerZone = (Math.PI * 2 * (1 - PROB[i])) / ARCS[i];
+
+                // Ring background (inactive = very dim full circle)
                 ctx.save();
-                ctx.shadowColor = isWin ? TIER_COLORS[i] : TIER_GLOWS[i];
-                ctx.shadowBlur = isWin ? 30 : 10;
-                ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
-                ctx.strokeStyle = 'transparent'; ctx.lineWidth = w + 6; ctx.stroke();
+                ctx.globalAlpha = alpha * 0.12;
+                ctx.strokeStyle = TIER_COLORS[i]; ctx.lineWidth = dw;
+                ctx.beginPath(); ctx.arc(cx, cy, dr, 0, Math.PI * 2); ctx.stroke();
                 ctx.restore();
 
-                // Rotating dashed ring
-                const segs = 20 + i * 4;
-                const gap = Math.PI * 2 / segs;
-                for (let s = 0; s < segs; s++) {
-                    const a = rotRef.current * (0.8 + i * 0.2) + s * gap;
-                    const bright = s % 3 === 0 ? (isWin ? 1.0 : 0.7) : (isWin ? 0.6 : 0.2);
-                    ctx.beginPath();
-                    ctx.arc(cx, cy, r, a, a + gap * 0.7);
+                // Glow layer
+                ctx.save(); ctx.globalAlpha = alpha;
+                ctx.shadowColor = isWin ? TIER_COLORS[i] : TIER_GLOWS[i];
+                ctx.shadowBlur = isWin ? 30 + Math.sin(t * 4) * 10 : 5;
+                ctx.beginPath(); ctx.arc(cx, cy, dr, 0, Math.PI * 2);
+                ctx.strokeStyle = 'transparent'; ctx.lineWidth = dw + 4; ctx.stroke();
+                ctx.restore();
+
+                // Active arcs (bright segments proportional to probability)
+                for (let a = 0; a < ARCS[i]; a++) {
+                    const start = rot + a * (arcPerZone + gapPerZone);
+                    const end = start + arcPerZone;
+                    ctx.beginPath(); ctx.arc(cx, cy, dr, start, end);
                     ctx.strokeStyle = TIER_COLORS[i];
-                    ctx.globalAlpha = bright;
-                    ctx.lineWidth = isWin ? w + 2 : w;
-                    ctx.lineCap = 'butt';
-                    ctx.stroke();
+                    ctx.globalAlpha = (isWin ? 0.95 : 0.65) * alpha;
+                    ctx.lineWidth = dw; ctx.lineCap = 'butt'; ctx.stroke();
+                    if (isWin) {
+                        ctx.save(); ctx.shadowColor = TIER_COLORS[i]; ctx.shadowBlur = 12;
+                        ctx.beginPath(); ctx.arc(cx, cy, dr, start, end);
+                        ctx.strokeStyle = TIER_COLORS[i]; ctx.globalAlpha = 0.35;
+                        ctx.lineWidth = dw + 6; ctx.stroke(); ctx.restore();
+                    }
                 }
                 ctx.globalAlpha = 1;
 
-                // Tier label (show when slow)
+                // Inactive zone tick marks
+                for (let a = 0; a < ARCS[i]; a++) {
+                    const gStart = rot + a * (arcPerZone + gapPerZone) + arcPerZone;
+                    const ticks = Math.max(2, Math.floor(gapPerZone / 0.18));
+                    const tickLen = gapPerZone / ticks;
+                    for (let s = 0; s < ticks; s++) {
+                        const sa = gStart + s * tickLen;
+                        ctx.beginPath(); ctx.arc(cx, cy, dr, sa, sa + tickLen * 0.35);
+                        ctx.strokeStyle = TIER_COLORS[i]; ctx.globalAlpha = 0.06 * alpha;
+                        ctx.lineWidth = dw * 0.4; ctx.stroke();
+                    }
+                }
+                ctx.globalAlpha = 1;
+
+                // Tier label when slow
                 if (spdRef.current < 0.003) {
                     ctx.save();
-                    ctx.font = `700 ${i === 4 ? 7 : 8}px Inter, sans-serif`;
+                    ctx.font = `700 ${isWin ? 10 : (i === 4 ? 7 : 8)}px Inter, sans-serif`;
                     ctx.fillStyle = TIER_COLORS[i];
-                    ctx.globalAlpha = isWin ? 1 : 0.6;
+                    ctx.globalAlpha = isWin ? 1 : (isLose ? 0.15 : 0.6);
                     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                    ctx.fillText(TIER_NAMES[i], cx, cy - r);
+                    ctx.fillText(TIER_NAMES[i], cx, cy - dr);
                     ctx.restore();
                 }
             }
 
-            // Particles orbiting rings
+            // Particles
             for (const p of ptcRef.current) {
                 p.angle += p.speed + spdRef.current * 0.6;
-                const r = radii[p.ring];
-                const px = cx + Math.cos(p.angle) * r;
-                const py = cy + Math.sin(p.angle) * r;
-                ctx.beginPath(); ctx.arc(px, py, p.sz, 0, Math.PI * 2);
+                const pr = radii[p.ring];
+                const winP = showRes && resultTier === p.ring;
+                const loseP = showRes && resultTier !== p.ring;
+                ctx.beginPath(); ctx.arc(cx + Math.cos(p.angle) * pr, cy + Math.sin(p.angle) * pr, winP ? p.sz * 1.5 : p.sz, 0, Math.PI * 2);
                 ctx.fillStyle = TIER_COLORS[p.ring];
-                ctx.globalAlpha = p.op * (0.4 + Math.sin(Date.now() * 0.004 + p.angle * 3) * 0.6);
+                ctx.globalAlpha = (loseP ? 0.06 : 1) * p.op * (0.4 + Math.sin(t * 1.3 + p.angle * 3) * 0.6);
                 ctx.fill();
             }
             ctx.globalAlpha = 1;
 
             // Center hub
-            const hg = ctx.createRadialGradient(cx, cy, 5, cx, cy, 40);
+            const hubR = showRes ? 42 : 38;
+            const hg = ctx.createRadialGradient(cx, cy, 5, cx, cy, hubR + 2);
             hg.addColorStop(0, '#1e2130'); hg.addColorStop(1, '#0c0d14');
-            ctx.beginPath(); ctx.arc(cx, cy, 38, 0, Math.PI * 2);
+            ctx.beginPath(); ctx.arc(cx, cy, hubR, 0, Math.PI * 2);
             ctx.fillStyle = hg; ctx.fill();
-            ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2.5; ctx.stroke();
-
-            // Hub text
-            ctx.fillStyle = '#f59e0b'; ctx.font = '800 12px Inter, sans-serif';
-            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-            ctx.fillText('GALAXY', cx, cy - 7);
-            ctx.fillStyle = '#555b6e'; ctx.font = '500 8px Inter, sans-serif';
-            ctx.fillText('WHEEL', cx, cy + 8);
+            if (showRes && resultTier !== null) {
+                ctx.strokeStyle = TIER_COLORS[resultTier]; ctx.lineWidth = 3;
+                ctx.shadowColor = TIER_COLORS[resultTier]; ctx.shadowBlur = 15;
+                ctx.stroke(); ctx.shadowBlur = 0;
+                ctx.fillStyle = TIER_COLORS[resultTier]; ctx.font = '800 11px Inter, sans-serif';
+                ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                ctx.fillText(TIER_NAMES[resultTier], cx, cy - 5);
+                ctx.fillStyle = '#8891a5'; ctx.font = '600 8px Inter, sans-serif';
+                ctx.fillText('★ WINNER', cx, cy + 9);
+            } else {
+                ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2.5; ctx.stroke();
+                ctx.fillStyle = '#f59e0b'; ctx.font = '800 12px Inter, sans-serif';
+                ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                ctx.fillText('GALAXY', cx, cy - 7);
+                ctx.fillStyle = '#555b6e'; ctx.font = '500 8px Inter, sans-serif';
+                ctx.fillText('WHEEL', cx, cy + 8);
+            }
 
             // Pointer triangle
             ctx.save();
-            ctx.fillStyle = '#f59e0b';
-            ctx.shadowColor = 'rgba(245,158,11,0.7)'; ctx.shadowBlur = 14;
+            ctx.fillStyle = showRes && resultTier !== null ? TIER_COLORS[resultTier] : '#f59e0b';
+            ctx.shadowColor = showRes && resultTier !== null ? TIER_GLOWS[resultTier] : 'rgba(245,158,11,0.7)';
+            ctx.shadowBlur = 14;
             ctx.beginPath();
             ctx.moveTo(cx - 9, 4); ctx.lineTo(cx + 9, 4); ctx.lineTo(cx, 20); ctx.closePath();
-            ctx.fill();
-            ctx.restore();
+            ctx.fill(); ctx.restore();
 
             animRef.current = requestAnimationFrame(draw);
         };
@@ -198,6 +283,9 @@ function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; result
 
     return <canvas ref={canvasRef} className={`galaxy-canvas ${spinning ? 'galaxy-spinning' : ''}`} />;
 }
+
+// ============================================
+
 
 // ============================================
 // LANDING PAGE
