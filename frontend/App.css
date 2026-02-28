@@ -548,40 +548,13 @@ body {
   gap: 1rem;
 }
 
-.wheel-container {
-  position: relative;
-  width: 360px;
-  height: 360px;
-  flex-shrink: 0;
-}
-
-.wheel-pointer-arrow {
-  position: absolute;
-  top: -8px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 32px;
-  color: var(--accent);
-  text-shadow: 0 4px 12px rgba(0, 0, 0, 0.8);
-  z-index: 20;
-  filter: drop-shadow(0 0 8px rgba(245, 158, 11, 0.5));
-}
-
-.wheel-center-label {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  width: 80px;
-  height: 80px;
-  background: var(--bg-primary);
-  border: 3px solid var(--accent);
+.galaxy-canvas {
+  display: block;
   border-radius: 50%;
-  z-index: 10;
+}
+
+.galaxy-canvas.galaxy-spinning {
+  filter: drop-shadow(0 0 20px rgba(245, 158, 11, 0.3));
 }
 
 .wheel-label {

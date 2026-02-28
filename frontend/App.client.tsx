@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { createRoot } from "react-dom/client";
-import { Wheel } from "react-custom-roulette";
 
 // ============================================
 // TYPES
@@ -58,26 +57,147 @@ interface UserData {
 // ============================================
 const TIER_NAMES = ["VOID", "COSMOS", "METEORS", "NEBULA", "SUPERNOVA"];
 const TIER_COLORS = ["#555", "#22c55e", "#3b82f6", "#a855f7", "#f59e0b"];
-const TIER_SEGMENTS = [50, 30, 15, 4, 1]; // number of segments per tier (= probability * 100)
+const TIER_GLOWS = ["rgba(85,85,85,0.3)", "rgba(34,197,94,0.4)", "rgba(59,130,246,0.4)", "rgba(168,85,247,0.5)", "rgba(245,158,11,0.6)"];
 const API = "";
 
-// Build wheel data: 100 segments colored by tier
-const buildWheelData = () => {
-    const data: { option: string; style: { backgroundColor: string; textColor: string } }[] = [];
-    const tierIndices: number[] = [];
-    TIER_NAMES.forEach((name, tierIdx) => {
-        for (let i = 0; i < TIER_SEGMENTS[tierIdx]; i++) {
-            data.push({
-                option: '',
-                style: { backgroundColor: TIER_COLORS[tierIdx], textColor: 'white' },
-            });
-            tierIndices.push(tierIdx);
+// ============================================
+// GALAXY WHEEL — Custom Canvas
+// ============================================
+function GalaxyWheelCanvas({ spinning, resultTier }: { spinning: boolean; resultTier: number | null }) {
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const animRef = useRef<number>(0);
+    const rotRef = useRef(0);
+    const spdRef = useRef(0);
+    const ptcRef = useRef<{ ring: number; angle: number; speed: number; sz: number; op: number }[]>([]);
+
+    useEffect(() => {
+        const p: typeof ptcRef.current = [];
+        for (let ring = 0; ring < 5; ring++) {
+            for (let i = 0; i < 6 + ring * 4; i++) {
+                p.push({ ring, angle: Math.random() * Math.PI * 2, speed: 0.002 + Math.random() * 0.005, sz: 0.8 + Math.random() * 2, op: 0.3 + Math.random() * 0.6 });
+            }
         }
-    });
-    return { data, tierIndices };
-};
-const { data: WHEEL_DATA, tierIndices: WHEEL_TIER_INDICES } = buildWheelData();
-const TOTAL_SEGMENTS = WHEEL_DATA.length;
+        ptcRef.current = p;
+    }, []);
+
+    useEffect(() => { if (spinning) spdRef.current = 0.06 + Math.random() * 0.03; }, [spinning]);
+
+    useEffect(() => {
+        if (resultTier !== null && !spinning) {
+            const dec = () => { if (spdRef.current > 0.0005) { spdRef.current *= 0.965; requestAnimationFrame(dec); } else spdRef.current = 0; };
+            setTimeout(dec, 200);
+        }
+    }, [resultTier, spinning]);
+
+    useEffect(() => {
+        const c = canvasRef.current; if (!c) return;
+        const ctx = c.getContext('2d'); if (!ctx) return;
+        const dpr = window.devicePixelRatio || 1;
+        const S = 380;
+        c.width = S * dpr; c.height = S * dpr;
+        c.style.width = S + 'px'; c.style.height = S + 'px';
+        ctx.scale(dpr, dpr);
+        const cx = S / 2, cy = S / 2;
+        const radii = [165, 138, 111, 84, 60];
+        const widths = [20, 20, 20, 18, 16];
+
+        const draw = () => {
+            ctx.clearRect(0, 0, S, S);
+            rotRef.current += spdRef.current;
+
+            // Background radial glow
+            const bg = ctx.createRadialGradient(cx, cy, 30, cx, cy, 185);
+            bg.addColorStop(0, 'rgba(15,17,26,0.95)');
+            bg.addColorStop(0.7, 'rgba(10,11,15,0.6)');
+            bg.addColorStop(1, 'rgba(10,11,15,0)');
+            ctx.fillStyle = bg;
+            ctx.beginPath(); ctx.arc(cx, cy, 185, 0, Math.PI * 2); ctx.fill();
+
+            // Draw 5 orbital rings
+            for (let i = 0; i < 5; i++) {
+                const r = radii[i], w = widths[i];
+                const isWin = resultTier === i && !spinning && spdRef.current < 0.002;
+
+                // Outer glow
+                ctx.save();
+                ctx.shadowColor = isWin ? TIER_COLORS[i] : TIER_GLOWS[i];
+                ctx.shadowBlur = isWin ? 30 : 10;
+                ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+                ctx.strokeStyle = 'transparent'; ctx.lineWidth = w + 6; ctx.stroke();
+                ctx.restore();
+
+                // Rotating dashed ring
+                const segs = 20 + i * 4;
+                const gap = Math.PI * 2 / segs;
+                for (let s = 0; s < segs; s++) {
+                    const a = rotRef.current * (0.8 + i * 0.2) + s * gap;
+                    const bright = s % 3 === 0 ? (isWin ? 1.0 : 0.7) : (isWin ? 0.6 : 0.2);
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, r, a, a + gap * 0.7);
+                    ctx.strokeStyle = TIER_COLORS[i];
+                    ctx.globalAlpha = bright;
+                    ctx.lineWidth = isWin ? w + 2 : w;
+                    ctx.lineCap = 'butt';
+                    ctx.stroke();
+                }
+                ctx.globalAlpha = 1;
+
+                // Tier label (show when slow)
+                if (spdRef.current < 0.003) {
+                    ctx.save();
+                    ctx.font = `700 ${i === 4 ? 7 : 8}px Inter, sans-serif`;
+                    ctx.fillStyle = TIER_COLORS[i];
+                    ctx.globalAlpha = isWin ? 1 : 0.6;
+                    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                    ctx.fillText(TIER_NAMES[i], cx, cy - r);
+                    ctx.restore();
+                }
+            }
+
+            // Particles orbiting rings
+            for (const p of ptcRef.current) {
+                p.angle += p.speed + spdRef.current * 0.6;
+                const r = radii[p.ring];
+                const px = cx + Math.cos(p.angle) * r;
+                const py = cy + Math.sin(p.angle) * r;
+                ctx.beginPath(); ctx.arc(px, py, p.sz, 0, Math.PI * 2);
+                ctx.fillStyle = TIER_COLORS[p.ring];
+                ctx.globalAlpha = p.op * (0.4 + Math.sin(Date.now() * 0.004 + p.angle * 3) * 0.6);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+
+            // Center hub
+            const hg = ctx.createRadialGradient(cx, cy, 5, cx, cy, 40);
+            hg.addColorStop(0, '#1e2130'); hg.addColorStop(1, '#0c0d14');
+            ctx.beginPath(); ctx.arc(cx, cy, 38, 0, Math.PI * 2);
+            ctx.fillStyle = hg; ctx.fill();
+            ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2.5; ctx.stroke();
+
+            // Hub text
+            ctx.fillStyle = '#f59e0b'; ctx.font = '800 12px Inter, sans-serif';
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText('GALAXY', cx, cy - 7);
+            ctx.fillStyle = '#555b6e'; ctx.font = '500 8px Inter, sans-serif';
+            ctx.fillText('WHEEL', cx, cy + 8);
+
+            // Pointer triangle
+            ctx.save();
+            ctx.fillStyle = '#f59e0b';
+            ctx.shadowColor = 'rgba(245,158,11,0.7)'; ctx.shadowBlur = 14;
+            ctx.beginPath();
+            ctx.moveTo(cx - 9, 4); ctx.lineTo(cx + 9, 4); ctx.lineTo(cx, 20); ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+
+            animRef.current = requestAnimationFrame(draw);
+        };
+        animRef.current = requestAnimationFrame(draw);
+        return () => cancelAnimationFrame(animRef.current);
+    }, [resultTier, spinning]);
+
+    return <canvas ref={canvasRef} className={`galaxy-canvas ${spinning ? 'galaxy-spinning' : ''}`} />;
+}
 
 // ============================================
 // LANDING PAGE
@@ -349,11 +469,7 @@ function CommunityPage() {
     const [withdrawLoading, setWithdrawLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [spinningHolder, setSpinningHolder] = useState<string | null>(null);
-    const [mustSpin, setMustSpin] = useState(false);
-    const [prizeNumber, setPrizeNumber] = useState(0);
     const [spinResult, setSpinResult] = useState<{ tierName: string; rewardAmount: number; tierIndex: number } | null>(null);
-    const [highlightedTier, setHighlightedTier] = useState<number | null>(null);
-    const spinResultRef = useRef<{ tier: number } | null>(null);
     const sseRef = useRef<EventSource | null>(null);
 
     // Fetch initial live data
@@ -391,17 +507,20 @@ function CommunityPage() {
 
         sse.addEventListener("spin", (e) => {
             const data = JSON.parse(e.data);
-            // Start wheel animation pointing at winning tier
             const tier = data.tier ?? 0;
-            spinResultRef.current = { tier };
-            // Find a segment index for this tier
-            const segments: number[] = [];
-            WHEEL_TIER_INDICES.forEach((t, idx) => { if (t === tier) segments.push(idx); });
-            const targetSegment = segments[Math.floor(Math.random() * segments.length)] ?? 0;
-            setPrizeNumber(targetSegment);
-            setMustSpin(true);
 
-            // Update liveData with new spin result
+            // Set spin result for canvas wheel to show
+            setSpinResult({
+                tierName: TIER_NAMES[tier] || 'VOID',
+                rewardAmount: data.rewardAmount || 0,
+                tierIndex: tier,
+            });
+            // Clear spinning holder after a delay for deceleration
+            setTimeout(() => setSpinningHolder(null), 3000);
+            // Clear result after 8 seconds
+            setTimeout(() => setSpinResult(null), 8000);
+
+            // Update liveData
             setLiveData((prev) => {
                 if (!prev) return prev;
                 const newSpin: SpinResult = {
@@ -617,49 +736,15 @@ function CommunityPage() {
                 {/* Center: Wheel + Wallet Actions */}
                 <div className="center-col">
                     <div className="wheel-area">
-                        <div className="wheel-container">
-                            <Wheel
-                                mustStartSpinning={mustSpin}
-                                prizeNumber={prizeNumber}
-                                data={WHEEL_DATA}
-                                onStopSpinning={() => {
-                                    setMustSpin(false);
-                                    setSpinningHolder(null);
-                                    const tier = spinResultRef.current?.tier ?? 0;
-                                    const latestSpin = liveData?.recentSpins[0];
-                                    setSpinResult({
-                                        tierName: TIER_NAMES[tier] || 'VOID',
-                                        rewardAmount: latestSpin?.rewardAmount || 0,
-                                        tierIndex: tier,
-                                    });
-                                    setHighlightedTier(null);
-                                    // Clear result after 5 seconds
-                                    setTimeout(() => setSpinResult(null), 5000);
-                                }}
-                                backgroundColors={TIER_COLORS}
-                                textColors={['white']}
-                                outerBorderColor="#1e293b"
-                                outerBorderWidth={6}
-                                innerBorderColor="#f59e0b"
-                                innerBorderWidth={3}
-                                innerRadius={18}
-                                radiusLineColor="#0f172a"
-                                radiusLineWidth={1}
-                                spinDuration={0.6}
-                                startingOptionIndex={0}
-                                pointerProps={{ src: undefined, style: { display: 'none' } }}
-                            />
-                            <div className="wheel-pointer-arrow">▼</div>
-                            <div className="wheel-center-label">
-                                <span className="wheel-label">GALAXY</span>
-                                <span className="wheel-label-sub">WHEEL</span>
-                            </div>
-                        </div>
+                        <GalaxyWheelCanvas
+                            spinning={!!spinningHolder}
+                            resultTier={spinResult?.tierIndex ?? null}
+                        />
 
                         {/* Spinning for / Result */}
                         {spinningHolder && !spinResult && (
                             <div className="spin-status spinning">
-                                🎰 Spinning for {spinningHolder.slice(0, 4)}...{spinningHolder.slice(-4)}
+                                ✦ Spinning for {spinningHolder.slice(0, 4)}...{spinningHolder.slice(-4)}
                             </div>
                         )}
                         {spinResult && (
@@ -669,20 +754,15 @@ function CommunityPage() {
                             </div>
                         )}
 
-                        {/* Tier Legend with highlighting */}
+                        {/* Tier Legend */}
                         <div className="tier-legend">
                             {TIER_NAMES.slice().reverse().map((name, ri) => {
                                 const i = TIER_NAMES.length - 1 - ri;
                                 const basePct = liveData ? (liveData.baseProbabilities[i] / 100).toFixed(1) : '0';
                                 const rewardPct = ["1%", "4%", "15%", "40%", "100%"];
-                                const isHighlighted = highlightedTier === i;
                                 const isWinner = spinResult?.tierIndex === i;
                                 return (
-                                    <div
-                                        key={name}
-                                        className={`tier-item ${isHighlighted ? 'tier-highlighted' : ''} ${isWinner ? 'tier-winner' : ''}`}
-                                        style={isHighlighted ? { background: `${TIER_COLORS[i]}30` } : undefined}
-                                    >
+                                    <div key={name} className={`tier-item ${isWinner ? 'tier-winner' : ''}`}>
                                         <span className="tier-dot" style={{ backgroundColor: TIER_COLORS[i] }} />
                                         <span className="tier-name">{name}</span>
                                         <span className="tier-pct">{basePct}%</span>
