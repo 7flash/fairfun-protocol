@@ -100,5 +100,5 @@ async function handler(req: Request): Promise<Response | null> {
 await init();
 serve(handler);
 
-console.log(\`Stardust Protocol running on port \${process.env.BUN_PORT}\`);
-console.log(\`Backend: \${BACKEND_URL}\`);
+console.log(`Stardust Protocol running on port ${process.env.BUN_PORT}`);
+console.log(`Backend: ${BACKEND_URL}`);
