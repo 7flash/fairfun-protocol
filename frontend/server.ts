@@ -14,7 +14,7 @@ async function init() {
   stylePath = await buildStyle("./App.css");
 }
 
-const html = (script: string, title: string = "Stardust Protocol") => `<!DOCTYPE html>
+const html = (script: string, title: string = "fairfun.xyz") => `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -55,9 +55,13 @@ const html = (script: string, title: string = "Stardust Protocol") => `<!DOCTYPE
 async function handler(req: Request): Promise<Response | null> {
   const url = new URL(req.url);
 
-  // Landing page and community pages all use same SPA
-  if (url.pathname === "/" || url.pathname === "/galaxy" || url.pathname === "/index.html") {
-    const title = url.pathname === "/galaxy" ? "Galaxy | Stardust Protocol" : "Stardust Protocol";
+  // Landing page, community, and token pages all use same SPA
+  if (url.pathname === "/" || url.pathname === "/galaxy" || url.pathname === "/index.html"
+    || url.pathname === "/tokens" || url.pathname.startsWith("/token/")) {
+    const title = url.pathname === "/galaxy" ? "Galaxy Wheel | fairfun.xyz"
+      : url.pathname === "/tokens" ? "Tokens | fairfun.xyz"
+        : url.pathname.startsWith("/token/") ? "Token | fairfun.xyz"
+          : "fairfun.xyz";
     return new Response(html(appScriptPath, title), {
       headers: { "Content-Type": "text/html" },
     });
@@ -101,5 +105,5 @@ async function handler(req: Request): Promise<Response | null> {
 await init();
 serve(handler);
 
-console.log(`Stardust Protocol running on port ${process.env.BUN_PORT}`);
+console.log(`fairfun.xyz running on port ${process.env.BUN_PORT}`);
 console.log(`Backend: ${BACKEND_URL}`);

@@ -83,8 +83,8 @@ function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
     const notifiedRings = useRef([false, false, false, false, false]);
     const resultTierRef = useRef<number | null>(null);
 
-    const PROB = [0.50, 0.30, 0.15, 0.045, 0.005];
-    const ARCS = [5, 4, 3, 2, 1];
+    const PROB = [0.8, 0.8, 0.8, 0.8, 0.8];
+    const ARCS = [9, 9, 9, 9, 9];
     const LOCK_DELAY_MS = 650;
     const MIN_TRAVEL = Math.PI / 4;   // minimum quarter-turn before stopping
 
@@ -318,6 +318,18 @@ function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
                         ctx.strokeStyle = TIER_COLORS[i]; ctx.globalAlpha = 0.3 * alpha;
                         ctx.lineWidth = dw + 5; ctx.stroke(); ctx.restore();
                     }
+
+                    // Draw number inside arc
+                    const mid = (start + end) / 2;
+                    ctx.save();
+                    ctx.translate(cx + Math.cos(mid) * dr, cy + Math.sin(mid) * dr);
+                    ctx.rotate(mid + Math.PI / 2);
+                    ctx.fillStyle = TIER_COLORS[i];
+                    ctx.font = `600 ${i === 4 ? 8 : 10}px Inter, sans-serif`;
+                    ctx.globalAlpha = bright * alpha;
+                    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                    ctx.fillText((a + 1).toString(), 0, 0);
+                    ctx.restore();
                 }
                 ctx.globalAlpha = 1;
 
@@ -335,14 +347,13 @@ function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
                 }
                 ctx.globalAlpha = 1;
 
-                // Tier label (show when locking or locked)
+                // Center indicator instead of tier label (when locking or locked)
                 if (locked || locking || (!spinning && cascadeIndex.current < 0)) {
                     ctx.save();
-                    ctx.font = `700 ${isWinTier ? 10 : (i === 4 ? 7 : 8)}px Inter, sans-serif`;
+                    ctx.font = `700 ${isWinTier ? 12 : 10}px Inter, sans-serif`;
                     ctx.fillStyle = TIER_COLORS[i];
                     ctx.globalAlpha = isWinTier ? 1 : (locked && isHit ? 0.8 : (isMiss ? 0.12 : 0.5));
                     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                    ctx.fillText(TIER_NAMES[i], cx, cy - dr);
                     ctx.restore();
                 }
 
@@ -387,9 +398,9 @@ function GalaxyWheelCanvas({ spinning, resultTier, onRingLocked }: {
                 ctx.stroke(); ctx.shadowBlur = 0;
                 ctx.fillStyle = TIER_COLORS[resultTier]; ctx.font = '800 11px Inter, sans-serif';
                 ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                ctx.fillText(TIER_NAMES[resultTier], cx, cy - 5);
+                ctx.fillText("GALAXY", cx, cy - 5);
                 ctx.fillStyle = '#8891a5'; ctx.font = '600 8px Inter, sans-serif';
-                ctx.fillText('★ WINNER', cx, cy + 9);
+                ctx.fillText('WHEEL', cx, cy + 9);
             } else {
                 ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2.5; ctx.stroke();
                 ctx.fillStyle = '#f59e0b'; ctx.font = '800 12px Inter, sans-serif';
@@ -427,14 +438,14 @@ function LandingPage({ onNavigate }: { onNavigate: (path: string) => void }) {
             <div className="landing-bg" />
             <div className="landing-content">
                 <div className="landing-logo">✦</div>
-                <h1 className="landing-title">Stardust Protocol</h1>
+                <h1 className="landing-title">fairfun.xyz</h1>
                 <p className="landing-subtitle">
                     Provably fair treasury distributions for token communities
                 </p>
                 <p className="landing-desc">
-                    Hold tokens. Accumulate stardust. Win bigger rewards.
+                    Hold tokens. Earn bigger rewards. Every holder gets their fair turn.
                     <br />
-                    Every holder gets their turn at the Galaxy Wheel.
+                    The more you hold, the bigger your slice of the wheel.
                 </p>
 
                 <div className="communities">
@@ -545,7 +556,6 @@ function QueuePanel({
                                 </span>
                                 {holder.isCurrent && <span className="badge badge-spin">SPINNING</span>}
                             </div>
-                            <ProbabilityBar probabilities={holder.probabilities} small />
                         </div>
                     );
                 })}
@@ -738,8 +748,7 @@ function CommunityPage() {
             });
             // Clear spinning holder quickly since cascade handles the reveal
             setTimeout(() => setSpinningHolder(null), 1000);
-            // Clear result after cascade completes (~18s)
-            setTimeout(() => setSpinResult(null), 20000);
+            // spinResult is cleared by the next 'spinning' SSE event (line 725-727)
 
             // Update liveData
             setLiveData((prev) => {
@@ -969,10 +978,15 @@ function CommunityPage() {
                                 ✦ Spinning for {spinningHolder.slice(0, 4)}...{spinningHolder.slice(-4)}
                             </div>
                         )}
-                        {spinResult && (
+                        {spinResult && Object.keys(lockedTiers).length >= 5 && (
                             <div className="spin-status result" style={{ borderColor: TIER_COLORS[spinResult.tierIndex] }}>
                                 <span style={{ color: TIER_COLORS[spinResult.tierIndex] }}>✦ {spinResult.tierName}</span>
                                 <span className="result-sol">{(spinResult.rewardAmount / 1e9).toFixed(4)} SOL</span>
+                            </div>
+                        )}
+                        {spinResult && Object.keys(lockedTiers).length < 5 && (
+                            <div className="spin-status spinning">
+                                ✦ Revealing...
                             </div>
                         )}
 
@@ -1024,6 +1038,257 @@ function CommunityPage() {
 }
 
 // ============================================
+// TOKENS PAGE — /tokens (discover + register)
+// ============================================
+interface TokenInfo {
+    mint: string;
+    name: string;
+    symbol: string;
+    decimals: number;
+    adminWallet: string;
+    treasuryPda: string;
+    createdAt: number;
+    active: boolean;
+    spinInterval: number;
+}
+
+function TokensPage({ onNavigate }: { onNavigate: (path: string) => void }) {
+    const [tokens, setTokens] = useState<TokenInfo[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [showRegister, setShowRegister] = useState(false);
+    const [regMint, setRegMint] = useState('');
+    const [regName, setRegName] = useState('');
+    const [regSymbol, setRegSymbol] = useState('');
+    const [regAdmin, setRegAdmin] = useState('');
+    const [regLoading, setRegLoading] = useState(false);
+    const [regError, setRegError] = useState('');
+
+    useEffect(() => {
+        fetch(`${API}/api/tokens`)
+            .then(r => r.json())
+            .then((d: any) => { setTokens(d.tokens || []); setLoading(false); })
+            .catch(() => setLoading(false));
+    }, []);
+
+    const registerToken = async () => {
+        setRegLoading(true);
+        setRegError('');
+        try {
+            const res = await fetch(`${API}/api/tokens/register`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mint: regMint, name: regName, symbol: regSymbol, adminWallet: regAdmin }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Registration failed');
+            setTokens(prev => [...prev, data.token]);
+            setShowRegister(false);
+            setRegMint(''); setRegName(''); setRegSymbol(''); setRegAdmin('');
+        } catch (e: any) {
+            setRegError(e.message);
+        }
+        setRegLoading(false);
+    };
+
+    return (
+        <div style={{
+            minHeight: '100vh',
+            background: 'linear-gradient(135deg, #0a0a1a 0%, #0d1117 50%, #0a0a2e 100%)',
+            color: 'white',
+            fontFamily: "'Inter', -apple-system, sans-serif",
+            padding: '40px 24px',
+        }}>
+            <div style={{ maxWidth: '900px', margin: '0 auto' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
+                    <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '4px' }}>
+                            <span style={{ cursor: 'pointer', color: '#64748b', fontSize: '14px' }}
+                                onClick={() => onNavigate('/')}>← Home</span>
+                        </div>
+                        <h1 style={{ margin: 0, fontSize: '28px', fontWeight: 800, letterSpacing: '-0.02em' }}>
+                            🪙 Token Communities
+                        </h1>
+                        <p style={{ margin: '4px 0 0 0', color: '#94a3b8', fontSize: '14px' }}>
+                            Browse tokens on fairfun.xyz
+                        </p>
+                    </div>
+                    <button onClick={() => setShowRegister(!showRegister)} style={{
+                        padding: '10px 20px', borderRadius: '10px', border: 'none',
+                        background: 'linear-gradient(135deg, #a855f7, #6366f1)',
+                        color: 'white', fontWeight: 700, fontSize: '13px', cursor: 'pointer',
+                        boxShadow: '0 4px 20px rgba(168,85,247,0.3)',
+                    }}>
+                        {showRegister ? '✕ Cancel' : '+ Register Token'}
+                    </button>
+                </div>
+
+                {/* Registration Form */}
+                {showRegister && (
+                    <div style={{
+                        background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(168,85,247,0.2)',
+                        borderRadius: '16px', padding: '24px', marginBottom: '24px',
+                    }}>
+                        <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', color: '#a855f7' }}>🚀 Register Your Token</h3>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                            <input value={regMint} onChange={(e: any) => setRegMint(e.target.value)}
+                                placeholder="Token Mint Address" style={inputStyle} />
+                            <input value={regAdmin} onChange={(e: any) => setRegAdmin(e.target.value)}
+                                placeholder="Admin Wallet" style={inputStyle} />
+                            <input value={regName} onChange={(e: any) => setRegName(e.target.value)}
+                                placeholder="Token Name" style={inputStyle} />
+                            <input value={regSymbol} onChange={(e: any) => setRegSymbol(e.target.value)}
+                                placeholder="Symbol (e.g. GXY)" style={inputStyle} />
+                        </div>
+                        {regError && <div style={{ color: '#ef4444', fontSize: '12px', marginTop: '8px' }}>{regError}</div>}
+                        <button onClick={registerToken} disabled={regLoading || !regMint || !regName || !regSymbol || !regAdmin}
+                            style={{
+                                marginTop: '16px', padding: '10px 24px', borderRadius: '8px', border: 'none',
+                                background: regLoading ? '#475569' : 'linear-gradient(135deg, #22c55e, #10b981)',
+                                color: 'white', fontWeight: 700, cursor: regLoading ? 'wait' : 'pointer',
+                            }}>
+                            {regLoading ? 'Registering...' : 'Register Token'}
+                        </button>
+                    </div>
+                )}
+
+                {/* Token Grid */}
+                {loading ? (
+                    <div style={{ textAlign: 'center', color: '#64748b', padding: '60px 0' }}>Loading tokens...</div>
+                ) : tokens.length === 0 ? (
+                    <div style={{ textAlign: 'center', color: '#64748b', padding: '60px 0' }}>
+                        No tokens registered yet. Be the first!
+                    </div>
+                ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '16px' }}>
+                        {tokens.map(token => (
+                            <div key={token.mint} onClick={() => onNavigate(`/token/${token.mint}`)}
+                                style={{
+                                    background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
+                                    borderRadius: '16px', padding: '20px', cursor: 'pointer',
+                                    transition: 'all 0.2s', position: 'relative',
+                                }}
+                                onMouseEnter={(e: any) => { e.currentTarget.style.borderColor = 'rgba(168,85,247,0.3)'; e.currentTarget.style.transform = 'translateY(-2px)'; }}
+                                onMouseLeave={(e: any) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)'; e.currentTarget.style.transform = 'none'; }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                                    <div style={{ fontSize: '20px', fontWeight: 800 }}>{token.symbol}</div>
+                                    <div style={{
+                                        width: '8px', height: '8px', borderRadius: '50%',
+                                        background: token.active ? '#22c55e' : '#ef4444',
+                                    }} />
+                                </div>
+                                <div style={{ fontSize: '14px', color: '#e2e8f0', marginBottom: '4px' }}>{token.name}</div>
+                                <div style={{ fontSize: '11px', fontFamily: 'monospace', color: '#64748b' }}>
+                                    {token.mint.slice(0, 8)}...{token.mint.slice(-6)}
+                                </div>
+                                <div style={{ fontSize: '10px', color: '#475569', marginTop: '8px' }}>
+                                    Spin interval: {token.spinInterval}s
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+const inputStyle: React.CSSProperties = {
+    background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+    borderRadius: '8px', padding: '10px 14px', color: 'white', fontSize: '13px',
+    outline: 'none', fontFamily: 'monospace',
+};
+
+// ============================================
+// TOKEN DETAIL PAGE — /token/:mint
+// ============================================
+function TokenDetailPage({ mint, onNavigate }: { mint: string; onNavigate: (path: string) => void }) {
+    const [token, setToken] = useState<any>(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState('');
+
+    useEffect(() => {
+        fetch(`${API}/api/tokens/${mint}`)
+            .then(r => { if (!r.ok) throw new Error('Token not found'); return r.json(); })
+            .then((d: any) => { setToken(d); setLoading(false); })
+            .catch((e: any) => { setError(e.message); setLoading(false); });
+    }, [mint]);
+
+    if (loading) return <div style={{ minHeight: '100vh', background: '#0a0a1a', color: '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>;
+    if (error) return (
+        <div style={{ minHeight: '100vh', background: '#0a0a1a', color: '#ef4444', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '16px' }}>
+            <div style={{ fontSize: '48px' }}>❌</div>
+            <div style={{ fontSize: '18px', fontWeight: 700 }}>{error}</div>
+            <button onClick={() => onNavigate('/tokens')} style={{ padding: '8px 20px', borderRadius: '8px', border: '1px solid #475569', background: 'transparent', color: '#94a3b8', cursor: 'pointer' }}>← Back to Tokens</button>
+        </div>
+    );
+
+    return (
+        <div style={{
+            minHeight: '100vh',
+            background: 'linear-gradient(135deg, #0a0a1a 0%, #0d1117 50%, #0a0a2e 100%)',
+            color: 'white',
+            fontFamily: "'Inter', -apple-system, sans-serif",
+            padding: '40px 24px',
+        }}>
+            <div style={{ maxWidth: '700px', margin: '0 auto' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
+                    <span style={{ cursor: 'pointer', color: '#64748b', fontSize: '14px' }}
+                        onClick={() => onNavigate('/tokens')}>← Tokens</span>
+                </div>
+                <div style={{
+                    background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)',
+                    borderRadius: '20px', padding: '32px',
+                }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                        <div>
+                            <h1 style={{ margin: 0, fontSize: '32px', fontWeight: 800 }}>{token.symbol}</h1>
+                            <div style={{ fontSize: '16px', color: '#94a3b8', marginTop: '2px' }}>{token.name}</div>
+                        </div>
+                        <div style={{
+                            padding: '6px 14px', borderRadius: '20px',
+                            background: token.active ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                            border: `1px solid ${token.active ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`,
+                            color: token.active ? '#22c55e' : '#ef4444',
+                            fontSize: '12px', fontWeight: 600,
+                        }}>
+                            {token.active ? '● Active' : '○ Paused'}
+                        </div>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                        <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '12px', padding: '16px' }}>
+                            <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Mint</div>
+                            <div style={{ fontSize: '12px', fontFamily: 'monospace', color: '#e2e8f0', marginTop: '4px', wordBreak: 'break-all' }}>{token.mint}</div>
+                        </div>
+                        <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '12px', padding: '16px' }}>
+                            <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Treasury PDA</div>
+                            <div style={{ fontSize: '12px', fontFamily: 'monospace', color: '#e2e8f0', marginTop: '4px', wordBreak: 'break-all' }}>{token.treasuryPda}</div>
+                        </div>
+                        <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '12px', padding: '16px' }}>
+                            <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Admin</div>
+                            <div style={{ fontSize: '12px', fontFamily: 'monospace', color: '#e2e8f0', marginTop: '4px', wordBreak: 'break-all' }}>{token.adminWallet}</div>
+                        </div>
+                        <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '12px', padding: '16px' }}>
+                            <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Spin Interval</div>
+                            <div style={{ fontSize: '18px', fontWeight: 700, color: '#f59e0b', marginTop: '4px' }}>{token.spinInterval}s</div>
+                        </div>
+                    </div>
+                    <div style={{ marginTop: '24px', textAlign: 'center' }}>
+                        <button onClick={() => onNavigate('/galaxy')} style={{
+                            padding: '12px 32px', borderRadius: '12px', border: 'none',
+                            background: 'linear-gradient(135deg, #a855f7, #6366f1)',
+                            color: 'white', fontWeight: 700, fontSize: '14px', cursor: 'pointer',
+                            boxShadow: '0 4px 20px rgba(168,85,247,0.3)',
+                        }}>
+                            🌌 View Galaxy Wheel
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ============================================
 // APP ROUTER
 // ============================================
 function App() {
@@ -1042,6 +1307,13 @@ function App() {
 
     if (path === "/galaxy") {
         return <CommunityPage />;
+    }
+    if (path === "/tokens") {
+        return <TokensPage onNavigate={navigate} />;
+    }
+    if (path.startsWith("/token/")) {
+        const mint = path.split("/token/")[1];
+        return <TokenDetailPage mint={mint} onNavigate={navigate} />;
     }
     return <LandingPage onNavigate={navigate} />;
 }

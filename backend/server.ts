@@ -26,9 +26,24 @@ const EarningsSchema = z.object({
     lastUpdated: z.number(),
 });
 
+// Multi-token registry schema
+const TokenRegistrySchema = z.object({
+    mint: z.string(),
+    name: z.string(),
+    symbol: z.string(),
+    decimals: z.number(),
+    adminWallet: z.string(),
+    treasuryPda: z.string(),
+    createdAt: z.number(),
+    spinInterval: z.number(), // seconds between auto-spins
+    tierRewards: z.string(), // JSON string of reward config
+    active: z.number(), // 1 = active, 0 = paused
+});
+
 // Initialize SatiDB for persistence
 const db = new SatiDB("stardust.db", {
     earnings: EarningsSchema,
+    tokens: TokenRegistrySchema,
 });
 
 // Types
@@ -104,8 +119,8 @@ const rpcStatus = {
  */
 async function fetchPoolBalance() {
     try {
-        const WHEEL_PROGRAM_ID = new PublicKey(WHEEL_PROGRAM_ID_STR);
-        const [poolPda] = PublicKey.findProgramAddressSync([Buffer.from("wheel_pool")], WHEEL_PROGRAM_ID);
+        const STARDUST_PROGRAM_ID = new PublicKey(config.programId);
+        const [poolPda] = PublicKey.findProgramAddressSync([Buffer.from("treasury_pool")], STARDUST_PROGRAM_ID);
         const balance = await getConn().getBalance(poolPda, "confirmed");
         poolBalance = balance;
         rpcStatus.online = true;
@@ -205,6 +220,89 @@ function rebuildHolderQueue() {
     if (currentHolderIndex >= holderQueue.length) {
         currentHolderIndex = 0;
     }
+}
+
+// ============================================
+// WEIGHTED WINNER WHEEL
+// ============================================
+
+// Palette for wheel segments
+const SEGMENT_COLORS = [
+    '#f59e0b', '#3b82f6', '#22c55e', '#a855f7', '#ef4444',
+    '#06b6d4', '#ec4899', '#84cc16', '#f97316', '#6366f1',
+    '#14b8a6', '#e11d48', '#0ea5e9', '#d946ef', '#eab308',
+    '#10b981', '#8b5cf6', '#f43f5e', '#0891b2', '#c026d3',
+];
+
+interface WheelSegment {
+    wallet: string;
+    walletShort: string;
+    balance: string;
+    percent: number;
+    color: string;
+    startAngle: number;
+    endAngle: number;
+}
+
+/**
+ * Get wheel segments proportional to starBalance (token holdings).
+ * Each holder gets a segment proportional to their balance.
+ */
+function getWheelSegments(): WheelSegment[] {
+    if (holderQueue.length === 0) return [];
+
+    // Gather balances for all holders in queue
+    const holdersWithBalance = holderQueue.map(wallet => {
+        const earnings = earningsStore.get(wallet);
+        return {
+            wallet,
+            balance: earnings?.starBalance || 0n,
+        };
+    }).filter(h => h.balance > 0n);
+
+    if (holdersWithBalance.length === 0) return [];
+
+    const totalBalance = holdersWithBalance.reduce((sum, h) => sum + h.balance, 0n);
+    if (totalBalance <= 0n) return [];
+
+    let currentAngle = 0;
+    return holdersWithBalance.map((h, i) => {
+        const percent = Number(h.balance * 10000n / totalBalance) / 100; // 2 decimal precision
+        const sweepAngle = (percent / 100) * 360;
+        const segment: WheelSegment = {
+            wallet: h.wallet,
+            walletShort: h.wallet.slice(0, 4) + '...' + h.wallet.slice(-4),
+            balance: h.balance.toString(),
+            percent,
+            color: SEGMENT_COLORS[i % SEGMENT_COLORS.length],
+            startAngle: currentAngle,
+            endAngle: currentAngle + sweepAngle,
+        };
+        currentAngle += sweepAngle;
+        return segment;
+    });
+}
+
+/**
+ * Select a random winner weighted by starBalance (token holdings).
+ * Bigger holders = bigger segment = higher chance.
+ * Splitting across wallets provides ZERO advantage (same total area).
+ */
+function selectWeightedWinner(): { wallet: string; segmentIndex: number } | null {
+    const segments = getWheelSegments();
+    if (segments.length === 0) return null;
+
+    // Random angle on the wheel (0-360)
+    const randomAngle = Math.random() * 360;
+
+    for (let i = 0; i < segments.length; i++) {
+        if (randomAngle >= segments[i].startAngle && randomAngle < segments[i].endAngle) {
+            return { wallet: segments[i].wallet, segmentIndex: i };
+        }
+    }
+
+    // Edge case: land exactly on 360 -> last segment
+    return { wallet: segments[segments.length - 1].wallet, segmentIndex: segments.length - 1 };
 }
 
 /**
@@ -567,6 +665,11 @@ function getCachedGxyPrice(): number {
  * We run every 60s (1 minute), so per-period = price_usd / 60 stardust per token
  */
 async function updateEarnings() {
+    // If RPC is offline, skip updating earnings to prevent zeroing out mock balances
+    if (!rpcStatus.online || rpcStatus.consecutiveFailures >= 3) {
+        return;
+    }
+
     return measure(async (m) => {
         const now = Date.now();
 
@@ -647,21 +750,24 @@ async function updateEarnings() {
  */
 function createSignatureData(
     userPubkey: PublicKey,
-    lifetimeEarned: bigint
+    lifetimeEarned: bigint,
+    solReward: bigint
 ): {
     signature: string;
     message: string;
     publicKey: string;
     lifetimeEarned: string;
+    solReward: string;
     ed25519Instruction: {
         programId: string;
         data: string; // base64
     };
 } {
-    // Message = [UserPubkey(32) | LifetimeEarned(8)]
-    const message = Buffer.alloc(40);
+    // Message = [UserPubkey(32) | LifetimeEarned(8) | SolReward(8)]
+    const message = Buffer.alloc(48);
     message.set(userPubkey.toBuffer(), 0);
     message.writeBigUInt64LE(lifetimeEarned, 32);
+    message.writeBigUInt64LE(solReward, 40);
 
     // Sign the message
     const signature = nacl.sign.detached(message, authority.secretKey);
@@ -679,6 +785,7 @@ function createSignatureData(
         message: bs58.encode(message),
         publicKey: authority.publicKey.toBase58(),
         lifetimeEarned: lifetimeEarned.toString(),
+        solReward: solReward.toString(),
         ed25519Instruction: {
             programId: ed25519Ix.programId.toBase58(),
             data: Buffer.from(ed25519Ix.data).toString("base64"),
@@ -787,351 +894,8 @@ setInterval(cleanupExpiredPrizes, 60 * 1000);
 setInterval(rebuildHolderQueue, 5 * 60 * 1000);
 rebuildHolderQueue();
 
-// Update on-chain holder registry every 5 minutes (and on startup after a delay)
-setInterval(updateHoldersOnChain, 5 * 60 * 1000);
-
-// Fetch real pool balance on startup and every 2 minutes
 setTimeout(fetchPoolBalance, 3_000); // 3s delay for connection setup
 setInterval(fetchPoolBalance, 2 * 60 * 1000);
-setTimeout(updateHoldersOnChain, 10_000); // 10s delay for startup
-
-// Auto-spin: spin for next holder every AUTO_SPIN_INTERVAL with countdown
-let autoSpinEnabled = true;
-nextSpinTime = Date.now() + AUTO_SPIN_INTERVAL;
-
-// Broadcast countdown timer every second
-setInterval(() => {
-    if (!autoSpinEnabled || holderQueue.length === 0) return;
-    const secondsLeft = Math.max(0, Math.ceil((nextSpinTime - Date.now()) / 1000));
-    const nextWallet = holderQueue[currentHolderIndex];
-    if (!nextWallet) return;
-    const nextStardust = holderStardustBalances.get(nextWallet) || 0n;
-    broadcastSSE('timer', {
-        secondsUntil: secondsLeft,
-        nextHolder: nextWallet,
-        nextHolderShort: nextWallet.slice(0, 4) + '...' + nextWallet.slice(-4),
-        nextHolderStardust: nextStardust.toString(),
-        nextHolderProbabilities: getAdjustedProbabilities(nextWallet),
-        currentIndex: currentHolderIndex,
-        totalHolders: holderQueue.length,
-    });
-}, 1000);
-
-async function autoSpin() {
-    if (!autoSpinEnabled || holderQueue.length === 0) return;
-    try {
-        // Fetch stardust balances for all holders before spinning
-        for (const wallet of holderQueue) {
-            try {
-                const bal = await fetchStardustTokenBalance(wallet);
-                holderStardustBalances.set(wallet, bal);
-            } catch (e) { /* use cached */ }
-        }
-
-        // Broadcast "spinning" event before spin so frontend can show animation
-        const currentWallet = holderQueue[currentHolderIndex];
-        if (currentWallet) {
-            const stardust = holderStardustBalances.get(currentWallet) || 0n;
-            broadcastSSE('spinning', {
-                wallet: currentWallet,
-                walletShort: currentWallet.slice(0, 4) + '...' + currentWallet.slice(-4),
-                queuePosition: currentHolderIndex,
-                totalHolders: holderQueue.length,
-                probabilities: getAdjustedProbabilities(currentWallet),
-                stardustBalance: stardust.toString(),
-            });
-        }
-
-        const result = await executeAdminSpin();
-        if (result) {
-            rpcStatus.online = true;
-            rpcStatus.lastSuccess = Date.now();
-            rpcStatus.consecutiveFailures = 0;
-            console.log(`🎲 Auto-spin #${totalAdminSpins}: ${result.wallet.slice(0, 8)}... → ${result.tierName} (${(result.rewardAmount / 1e9).toFixed(3)} SOL) [queue: ${currentHolderIndex}/${holderQueue.length}]`);
-        }
-    } catch (e: any) {
-        const msg = e.message || String(e);
-        rpcStatus.lastError = msg.includes('429') ? 'RPC rate limited (429)' : msg.slice(0, 120);
-        rpcStatus.lastErrorTime = Date.now();
-        rpcStatus.consecutiveFailures++;
-        if (rpcStatus.consecutiveFailures >= 3) rpcStatus.online = false;
-        console.error(`[auto-spin] ❌ ${rpcStatus.lastError} (failures: ${rpcStatus.consecutiveFailures})`);
-        broadcastSSE('error', { message: rpcStatus.lastError, timestamp: Date.now() });
-    }
-    // Schedule next spin
-    nextSpinTime = Date.now() + AUTO_SPIN_INTERVAL;
-}
-setInterval(autoSpin, AUTO_SPIN_INTERVAL);
-
-// Helper: upload holder list to on-chain HolderRegistry
-async function updateHoldersOnChain(): Promise<boolean> {
-    try {
-        if (holderQueue.length === 0) {
-            rebuildHolderQueue();
-            if (holderQueue.length === 0) return false;
-        }
-
-        // Cap at 30 (MAX_HOLDERS on-chain)
-        const holders = holderQueue.slice(0, 30);
-
-        const WHEEL_PROGRAM_ID = new PublicKey(WHEEL_PROGRAM_ID_STR);
-        const [statePda] = PublicKey.findProgramAddressSync([Buffer.from("wheel_state")], WHEEL_PROGRAM_ID);
-        const [registryPda] = PublicKey.findProgramAddressSync([Buffer.from("holder_registry")], WHEEL_PROGRAM_ID);
-
-        const crypto = await import("crypto");
-        const discHash = crypto.createHash("sha256").update("global:update_holders").digest();
-        const discriminator = discHash.slice(0, 8);
-
-        // Instruction data: discriminator + Vec<Pubkey> (4-byte len prefix + 32 * N bytes)
-        const instrData = Buffer.alloc(8 + 4 + 32 * holders.length);
-        discriminator.copy(instrData, 0);
-        instrData.writeUInt32LE(holders.length, 8);
-        for (let i = 0; i < holders.length; i++) {
-            new PublicKey(holders[i]).toBuffer().copy(instrData, 12 + i * 32);
-        }
-
-        const { Transaction, TransactionInstruction, SystemProgram: SysProgram } = await import("@solana/web3.js");
-
-        const updateIx = new TransactionInstruction({
-            programId: WHEEL_PROGRAM_ID,
-            keys: [
-                { pubkey: registryPda, isSigner: false, isWritable: true },
-                { pubkey: statePda, isSigner: false, isWritable: false },
-                { pubkey: authority.publicKey, isSigner: true, isWritable: true },
-                { pubkey: SysProgram.programId, isSigner: false, isWritable: false },
-            ],
-            data: instrData,
-        });
-
-        const tx = new Transaction().add(updateIx);
-        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-        tx.recentBlockhash = blockhash;
-        tx.feePayer = authority.publicKey;
-        tx.sign(authority);
-
-        const txSig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true, preflightCommitment: "confirmed" });
-        await connection.confirmTransaction({ signature: txSig, blockhash, lastValidBlockHeight }, "confirmed");
-
-        console.log(`📋 Holder registry updated on-chain: ${holders.length} holders (tx: ${txSig.slice(0, 12)}...)`);
-        return true;
-    } catch (e: any) {
-        console.error("[update-holders] Error:", e.message);
-        return false;
-    }
-}
-
-// Helper: build and send an on-chain admin_spin transaction
-// Backend picks the next holder from queue, passes their adjusted probabilities
-async function executeAdminSpin(): Promise<{ wallet: string; rewardTier: number; rewardAmount: number; tierName: string; txSignature: string; probabilities: number[] } | null> {
-    if (holderQueue.length === 0) {
-        rebuildHolderQueue();
-        if (holderQueue.length === 0) return null;
-    }
-
-    // Pick the current holder from queue
-    const wallet = holderQueue[currentHolderIndex];
-    if (!wallet) return null;
-
-    // Get per-user adjusted probabilities based on their stardust
-    const adjustedProbs = getAdjustedProbabilities(wallet);
-    const probsArray = new Array(10).fill(0);
-    for (let i = 0; i < adjustedProbs.length; i++) {
-        probsArray[i] = adjustedProbs[i];
-    }
-
-    const WHEEL_PROGRAM_ID = new PublicKey(WHEEL_PROGRAM_ID_STR);
-    const [statePda] = PublicKey.findProgramAddressSync([Buffer.from("wheel_state")], WHEEL_PROGRAM_ID);
-    const [poolPda] = PublicKey.findProgramAddressSync([Buffer.from("wheel_pool")], WHEEL_PROGRAM_ID);
-    const holderPubkey = new PublicKey(wallet);
-    const [userRewardsPda] = PublicKey.findProgramAddressSync(
-        [Buffer.from("user_rewards"), holderPubkey.toBuffer()],
-        WHEEL_PROGRAM_ID
-    );
-
-    const crypto = await import("crypto");
-    const discHash = crypto.createHash("sha256").update("global:admin_spin").digest();
-    const discriminator = discHash.slice(0, 8);
-
-    const instrData = Buffer.alloc(8 + 20);
-    discriminator.copy(instrData, 0);
-    for (let i = 0; i < 10; i++) {
-        instrData.writeUInt16LE(probsArray[i], 8 + i * 2);
-    }
-
-    const { Transaction, TransactionInstruction, SystemProgram: SysProgram } = await import("@solana/web3.js");
-
-    // New instruction format: state, pool, holder, user_rewards, authority, system_program
-    const adminSpinIx = new TransactionInstruction({
-        programId: WHEEL_PROGRAM_ID,
-        keys: [
-            { pubkey: statePda, isSigner: false, isWritable: true },
-            { pubkey: poolPda, isSigner: false, isWritable: true },
-            { pubkey: holderPubkey, isSigner: false, isWritable: false },
-            { pubkey: userRewardsPda, isSigner: false, isWritable: true },
-            { pubkey: authority.publicKey, isSigner: true, isWritable: true },
-            { pubkey: SysProgram.programId, isSigner: false, isWritable: false },
-        ],
-        data: instrData,
-    });
-
-    const tx = new Transaction().add(adminSpinIx);
-    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-    tx.recentBlockhash = blockhash;
-    tx.feePayer = authority.publicKey;
-    tx.sign(authority);
-
-    const txSignature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true, preflightCommitment: "confirmed" });
-    await connection.confirmTransaction({ signature: txSignature, blockhash, lastValidBlockHeight }, "confirmed");
-
-    // Parse result from logs
-    let txDetails = null;
-    try {
-        txDetails = await getConn().getTransaction(txSignature, { maxSupportedTransactionVersion: 0, commitment: "confirmed" });
-    } catch (e: any) {
-        // getTransaction may not be supported on beta RPCs — use fallback
-    }
-    let rewardTier = 0;
-    let rewardAmount = 0;
-    const logs = txDetails?.meta?.logMessages || [];
-    for (const log of logs) {
-        // Log format: "Admin Spin #N: Holder PUBKEY - Tier T - Credited L lamports (available: A)"
-        const match = log.match(/Admin Spin #\d+: Holder (\S+) - Tier (\d+) - Credited (\d+) lamports/);
-        if (match) {
-            rewardTier = parseInt(match[2]);
-            rewardAmount = parseInt(match[3]);
-            break;
-        }
-    }
-
-    // Fallback: if logs couldn't be parsed, estimate reward from pool balance & reward_bps
-    if (rewardAmount === 0 && poolBalance > 0) {
-        // The probabilities determine tier, but we can't know the exact tier without logs
-        // Use VOID (tier 0) as the most likely outcome (50-70%)
-        const voidBps = 100; // 1% of pool for VOID
-        rewardAmount = Math.floor((poolBalance * voidBps) / 10000);
-    }
-
-    const tierName = TIER_NAMES[rewardTier] || `Tier ${rewardTier}`;
-    totalAdminSpins++;
-    totalDistributed += rewardAmount;
-
-    const currentWinnings = walletWinnings.get(wallet) || 0;
-    walletWinnings.set(wallet, currentWinnings + rewardAmount);
-
-    const earnings = earningsStore.get(wallet);
-    const now = Date.now();
-    const record: SpinRecord = {
-        wallet,
-        rewardTier,
-        rewardAmount,
-        tierName,
-        timestamp: now,
-        stardustTotal: earnings?.lifetimeEarned.toString() || "0",
-        txSignature,
-    };
-    spinHistory.push(record);
-    if (spinHistory.length > 200) spinHistory.shift();
-
-    // Advance queue position for sequential iteration
-    currentHolderIndex = (currentHolderIndex + 1) % holderQueue.length;
-
-    // Broadcast spin event to SSE clients (include probabilities for live viewer)
-    broadcastSSE('spin', {
-        wallet,
-        walletShort: wallet.slice(0, 4) + '...' + wallet.slice(-4),
-        tier: rewardTier,
-        tierName,
-        rewardAmount,
-        rewardFormatted: (rewardAmount / 1e9).toFixed(4) + ' SOL',
-        timestamp: now,
-        probabilities: adjustedProbs,
-        txSignature,
-        nextIndex: currentHolderIndex,
-        nextWallet: holderQueue[currentHolderIndex]?.slice(0, 4) + '...' + holderQueue[currentHolderIndex]?.slice(-4),
-    });
-
-    return { wallet, rewardTier, rewardAmount, tierName, txSignature, probabilities: adjustedProbs };
-}
-
-// Helper: build and send on-chain user spin transaction (manual pool, 24h cooldown)
-// Rewards are accumulated in UserRewards PDA (user must withdraw)
-async function executeUserSpin(wallet: string): Promise<{ rewardTier: number; rewardAmount: number; tierName: string; txSignature: string; probabilities: number[] }> {
-    const adjustedProbs = getAdjustedProbabilities(wallet);
-
-    const probsArray = new Array(10).fill(0);
-    for (let i = 0; i < adjustedProbs.length; i++) {
-        probsArray[i] = adjustedProbs[i];
-    }
-
-    const WHEEL_PROGRAM_ID = new PublicKey(WHEEL_PROGRAM_ID_STR);
-    const holderPubkey = new PublicKey(wallet);
-
-    const [statePda] = PublicKey.findProgramAddressSync([Buffer.from("wheel_state")], WHEEL_PROGRAM_ID);
-    const [manualPoolPda] = PublicKey.findProgramAddressSync([Buffer.from("wheel_manual_pool")], WHEEL_PROGRAM_ID);
-    const [userRewardsPda] = PublicKey.findProgramAddressSync(
-        [Buffer.from("user_rewards"), holderPubkey.toBuffer()],
-        WHEEL_PROGRAM_ID
-    );
-    const [userHistoryPda] = PublicKey.findProgramAddressSync([Buffer.from("user_history"), holderPubkey.toBuffer()], WHEEL_PROGRAM_ID);
-
-    const crypto = await import("crypto");
-    const discHash = crypto.createHash("sha256").update("global:spin").digest();
-    const discriminator = discHash.slice(0, 8);
-
-    const instrData = Buffer.alloc(8 + 20);
-    discriminator.copy(instrData, 0);
-    for (let i = 0; i < 10; i++) {
-        instrData.writeUInt16LE(probsArray[i], 8 + i * 2);
-    }
-
-    const { Transaction, TransactionInstruction, SystemProgram: SysProgram } = await import("@solana/web3.js");
-
-    // Updated: includes user_rewards PDA for accumulation
-    const spinIx = new TransactionInstruction({
-        programId: WHEEL_PROGRAM_ID,
-        keys: [
-            { pubkey: statePda, isSigner: false, isWritable: true },
-            { pubkey: manualPoolPda, isSigner: false, isWritable: true },
-            { pubkey: authority.publicKey, isSigner: true, isWritable: true },
-            { pubkey: holderPubkey, isSigner: false, isWritable: false },
-            { pubkey: userRewardsPda, isSigner: false, isWritable: true },
-            { pubkey: userHistoryPda, isSigner: false, isWritable: true },
-            { pubkey: SysProgram.programId, isSigner: false, isWritable: false },
-        ],
-        data: instrData,
-    });
-
-    const tx = new Transaction().add(spinIx);
-    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-    tx.recentBlockhash = blockhash;
-    tx.feePayer = authority.publicKey;
-    tx.sign(authority);
-
-    const txSignature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true, preflightCommitment: "confirmed" });
-    await connection.confirmTransaction({ signature: txSignature, blockhash, lastValidBlockHeight }, "confirmed");
-
-    let txDetails2 = null;
-    try {
-        txDetails2 = await getConn().getTransaction(txSignature, { maxSupportedTransactionVersion: 0, commitment: "confirmed" });
-    } catch (e: any) { }
-    const txDetails = txDetails2;
-    let rewardTier = 0;
-    let rewardAmount = 0;
-    const logs = txDetails?.meta?.logMessages || [];
-    for (const log of logs) {
-        const match = log.match(/Daily Spin #\d+: Holder \S+ - Tier (\d+) - Credited (\d+) lamports/);
-        if (match) {
-            rewardTier = parseInt(match[1]);
-            rewardAmount = parseInt(match[2]);
-            break;
-        }
-    }
-
-    const tierName = TIER_NAMES[rewardTier] || `Tier ${rewardTier}`;
-    return { rewardTier, rewardAmount, tierName, txSignature, probabilities: adjustedProbs };
-}
-
-console.log("🔄 Scheduled: earnings every 1 min, DB flush every 1 hr, prize cleanup every 1 min, queue rebuild every 5 min, auto-spin every 1 min");
 
 // JSON helper
 const json = (data: any, status = 200) =>
@@ -1405,15 +1169,11 @@ async function handler(req: Request): Promise<Response | null> {
         }
     }
 
-    // POST /api/signature - get signature for claim
-    if (method === "POST" && path === "/api/signature") {
+    // GET /api/claim-gravity - get signature and proportional quote for claim
+    if (method === "GET" && path === "/api/claim-gravity") {
         try {
-            const body = await req.json();
-            const wallet = body.wallet as string;
-
-            if (!wallet) {
-                return json({ error: "wallet required" }, 400);
-            }
+            const wallet = url.searchParams.get("wallet");
+            if (!wallet) return json({ error: "wallet required" }, 400);
 
             const earnings = earningsStore.get(wallet);
             if (!earnings || earnings.lifetimeEarned === 0n) {
@@ -1425,13 +1185,27 @@ async function handler(req: Request): Promise<Response | null> {
                 return json({ error: "nothing to claim" }, 400);
             }
 
+            let totalUnclaimed = 0n;
+            for (const e of earningsStore.values()) {
+                totalUnclaimed += (e.lifetimeEarned - e.claimed);
+            }
+
+            let solReward = 0n;
+            if (totalUnclaimed > 0n) {
+                // Percentage of treasury
+                solReward = (unclaimed * BigInt(poolBalance)) / totalUnclaimed;
+            }
+
             const userPubkey = new PublicKey(wallet);
-            const data = createSignatureData(userPubkey, earnings.lifetimeEarned);
+            const data = createSignatureData(userPubkey, earnings.lifetimeEarned, solReward);
 
             return json({
                 ...data,
                 wallet,
                 unclaimed: unclaimed.toString(),
+                totalUnclaimed: totalUnclaimed.toString(),
+                solReward: solReward.toString(),
+                poolBalance: poolBalance.toString(),
             });
         } catch (e) {
             return json({ error: "invalid request" }, 400);
@@ -1560,20 +1334,17 @@ async function handler(req: Request): Promise<Response | null> {
 
     // GET /api/wheel/config - Get wheel configuration
     if (method === "GET" && path === "/api/wheel/config") {
+        const segments = getWheelSegments();
         return json({
-            tiers: TIER_NAMES.map((name, i) => ({
-                name,
-                reward: TIER_REWARDS[i],
-                rewardFormatted: (TIER_REWARDS[i] / 1e9).toFixed(3) + " SOL",
-                baseProbability: (BASE_PROBABILITIES[i] / 100).toFixed(1) + "%",
-            })),
+            mode: 'full-treasury',
+            description: 'Every round, the entire treasury goes to one weighted-random winner',
             poolBalance,
             poolBalanceFormatted: (poolBalance / 1e9).toFixed(2) + " SOL",
-            totalSpins: totalAdminSpins,
+            totalRounds: totalAdminSpins,
             totalDistributed,
             totalDistributedFormatted: (totalDistributed / 1e9).toFixed(3) + " SOL",
-            queueLength: holderQueue.length,
-            currentIndex: currentHolderIndex,
+            holders: holderQueue.length,
+            segments,
         });
     }
     // GET /api/wheel/events - SSE stream for real-time spin events
@@ -1590,7 +1361,7 @@ async function handler(req: Request): Promise<Response | null> {
                     clientId,
                     queueLength: holderQueue.length,
                     currentIndex: currentHolderIndex,
-                    autoSpinEnabled,
+
                     spinInterval: AUTO_SPIN_INTERVAL / 1000,
                 })}\n\n`;
                 controller.enqueue(new TextEncoder().encode(initPayload));
@@ -1616,24 +1387,13 @@ async function handler(req: Request): Promise<Response | null> {
         });
     }
 
-    // GET /api/wheel/queue - Public: next holders in auto-spin queue
+    // GET /api/wheel/queue - Public: holders on the wheel
     if (method === "GET" && path === "/api/wheel/queue") {
-        const upcoming = holderQueue.map((wallet, i) => {
-            const stardust = holderStardustBalances.get(wallet) || 0n;
-            return {
-                position: i,
-                wallet,
-                walletShort: wallet.slice(0, 4) + "..." + wallet.slice(-4),
-                isCurrent: i === currentHolderIndex,
-                stardustBalance: stardust.toString(),
-                probabilities: getAdjustedProbabilities(wallet),
-            };
-        });
+        const segments = getWheelSegments();
         return json({
-            queue: upcoming,
+            segments,
             totalHolders: holderQueue.length,
-            currentIndex: currentHolderIndex,
-            autoSpinEnabled,
+
             nextSpinTime,
             secondsUntilNextSpin: Math.max(0, Math.ceil((nextSpinTime - Date.now()) / 1000)),
         });
@@ -1641,34 +1401,32 @@ async function handler(req: Request): Promise<Response | null> {
 
     // GET /api/wheel/live - Full live state for viewer page
     if (method === "GET" && path === "/api/wheel/live") {
+        const segments = getWheelSegments();
         const queueWithDetails = holderQueue.map((wallet, i) => {
             const earnings = earningsStore.get(wallet);
-            const probabilities = getAdjustedProbabilities(wallet);
             const stardustBal = holderStardustBalances.get(wallet) || 0n;
             return {
                 position: i,
                 wallet,
                 walletShort: wallet.slice(0, 4) + "..." + wallet.slice(-4),
-                isCurrent: i === currentHolderIndex,
                 lifetimeEarned: (earnings?.lifetimeEarned ?? 0n).toString(),
                 starBalance: (earnings?.starBalance ?? 0n).toString(),
                 stardustBalance: stardustBal.toString(),
-                probabilities,
                 totalWinnings: walletWinnings.get(wallet) || 0,
             };
         });
 
         return json({
             queue: queueWithDetails,
-            currentIndex: currentHolderIndex,
+            segments,
             totalHolders: holderQueue.length,
-            autoSpinEnabled,
+
             autoSpinInterval: AUTO_SPIN_INTERVAL,
             nextSpinTime,
             secondsUntilNextSpin: Math.max(0, Math.ceil((nextSpinTime - Date.now()) / 1000)),
             recentSpins: spinHistory.slice(-20).reverse(),
             stats: {
-                totalSpins: totalAdminSpins,
+                totalRounds: totalAdminSpins,
                 totalDistributed,
                 totalDistributedFormatted: (totalDistributed / 1e9).toFixed(4) + " SOL",
                 poolBalance,
@@ -1682,8 +1440,6 @@ async function handler(req: Request): Promise<Response | null> {
                 consecutiveFailures: rpcStatus.consecutiveFailures,
                 poolFetched: rpcStatus.poolFetched,
             },
-            tierNames: TIER_NAMES,
-            baseProbabilities: BASE_PROBABILITIES,
         });
     }
 
@@ -1695,7 +1451,6 @@ async function handler(req: Request): Promise<Response | null> {
         const earnings = earningsStore.get(walletParam);
         const totalWinnings = walletWinnings.get(walletParam) || 0;
         const userSpins = spinHistory.filter(s => s.wallet === walletParam);
-        const probabilities = getAdjustedProbabilities(walletParam);
 
         // Get pending prizes (unclaimed rewards)
         const prizes = pendingPrizes.get(walletParam) || [];
@@ -1724,6 +1479,9 @@ async function handler(req: Request): Promise<Response | null> {
             // Fall back to in-memory data if RPC fails
         }
 
+        const segments = getWheelSegments();
+        const userSegment = segments.find(s => s.wallet === walletParam);
+
         return json({
             wallet: walletParam,
             walletShort: walletParam.slice(0, 4) + "..." + walletParam.slice(-4),
@@ -1733,7 +1491,7 @@ async function handler(req: Request): Promise<Response | null> {
             onChainTotalWithdrawn,
             lifetimeEarned: (earnings?.lifetimeEarned ?? 0n).toString(),
             starBalance: (earnings?.starBalance ?? 0n).toString(),
-            probabilities,
+            wheelPercent: userSegment?.percent || 0,
             recentSpins: userSpins.slice(-10).reverse(),
             pendingPrizes: prizes.filter(p => !p.claimed),
             pendingTotal,
@@ -1795,9 +1553,9 @@ async function handler(req: Request): Promise<Response | null> {
         }
     }
 
-    // POST /api/claim-stardust-tx - Build unsigned claim stardust transaction
-    // Backend signs the user's lifetime earnings, user signs the transaction to mint stardust tokens
-    if (method === "POST" && path === "/api/claim-stardust-tx") {
+    // POST /api/claim-gravity-tx - Build unsigned claim gravity transaction
+    // Backend signs the user's lifetime earnings and SOL reward, user signs the transaction
+    if (method === "POST" && path === "/api/claim-gravity-tx") {
         try {
             const body = await req.json();
             const { wallet: userWallet } = body;
@@ -1811,9 +1569,22 @@ async function handler(req: Request): Promise<Response | null> {
 
             const userPubkey = new PublicKey(userWallet);
             const lifetimeEarned = earnings.lifetimeEarned;
+            const unclaimed = lifetimeEarned - earnings.claimed;
+
+            if (unclaimed <= 0n) return json({ error: "nothing to claim" }, 400);
+
+            let totalUnclaimed = 0n;
+            for (const e of earningsStore.values()) {
+                totalUnclaimed += (e.lifetimeEarned - e.claimed);
+            }
+
+            let solReward = 0n;
+            if (totalUnclaimed > 0n) {
+                solReward = (unclaimed * BigInt(poolBalance)) / totalUnclaimed;
+            }
 
             // Create backend-signed Ed25519 verification data
-            const sigData = createSignatureData(userPubkey, lifetimeEarned);
+            const sigData = createSignatureData(userPubkey, lifetimeEarned, solReward);
 
             // Build the transaction with Ed25519 verify + claim_stardust instructions
             const { Transaction, TransactionInstruction, SystemProgram: SysProgram } = await import("@solana/web3.js");
@@ -1826,6 +1597,8 @@ async function handler(req: Request): Promise<Response | null> {
                 [Buffer.from("user_claim"), userPubkey.toBuffer()],
                 STARDUST_PROGRAM_ID
             );
+            const [treasuryPoolPda] = PublicKey.findProgramAddressSync([Buffer.from("treasury_pool")], STARDUST_PROGRAM_ID);
+
             const userTokenAccount = getAssociatedTokenAddressSync(stardustMint, userPubkey);
 
             // 1. Ed25519 signature verification instruction
@@ -1835,14 +1608,15 @@ async function handler(req: Request): Promise<Response | null> {
                 data: Buffer.from(sigData.ed25519Instruction.data, "base64"),
             });
 
-            // 2. claim_stardust(lifetime_earned) instruction
+            // 2. claim_stardust(lifetime_earned, sol_reward) instruction
             const crypto = await import("crypto");
             const claimDiscHash = crypto.createHash("sha256").update("global:claim_stardust").digest();
             const claimDiscriminator = claimDiscHash.slice(0, 8);
 
-            const claimData = Buffer.alloc(8 + 8); // discriminator + u64 lifetime_earned
+            const claimData = Buffer.alloc(8 + 8 + 8); // discriminator + u64 lifetime_earned + u64 sol_reward
             claimDiscriminator.copy(claimData, 0);
             claimData.writeBigUInt64LE(lifetimeEarned, 8);
+            claimData.writeBigUInt64LE(solReward, 16);
 
             const INSTRUCTIONS_SYSVAR = new PublicKey("Sysvar1nstructions1111111111111111111111111");
 
@@ -1852,6 +1626,7 @@ async function handler(req: Request): Promise<Response | null> {
                     { pubkey: userPubkey, isSigner: true, isWritable: true },
                     { pubkey: userClaimPda, isSigner: false, isWritable: true },
                     { pubkey: stardustStatePda, isSigner: false, isWritable: false },
+                    { pubkey: treasuryPoolPda, isSigner: false, isWritable: true },
                     { pubkey: stardustMint, isSigner: false, isWritable: true },
                     { pubkey: userTokenAccount, isSigner: false, isWritable: true },
                     { pubkey: INSTRUCTIONS_SYSVAR, isSigner: false, isWritable: false },
@@ -1872,10 +1647,11 @@ async function handler(req: Request): Promise<Response | null> {
                 blockhash,
                 lastValidBlockHeight,
                 lifetimeEarned: lifetimeEarned.toString(),
+                solReward: solReward.toString(),
                 authorityPublicKey: authority.publicKey.toBase58(),
             });
         } catch (e: any) {
-            console.error("[claim-stardust-tx] Error:", e);
+            console.error("[claim-gravity-tx] Error:", e);
             return json({ error: e.message || "failed to build claim tx" }, 500);
         }
     }
@@ -1905,29 +1681,24 @@ async function handler(req: Request): Promise<Response | null> {
         });
     }
 
-    // POST /api/admin/spin-next - Admin spins wheel for next holder (ON-CHAIN auto pool)
+    // POST /api/admin/spin-next - Admin triggers a round (full treasury distribution)
     if (method === "POST" && path === "/api/admin/spin-next") {
         try {
-            const result = await executeAdminSpin();
+            return json({ error: "spin-next disabled (migrating to claim model)" }, 400);
             if (!result) {
                 return json({ error: "no holders in queue" }, 400);
             }
 
-            console.log(`🎰 Admin spin #${totalAdminSpins}: ${result.wallet.slice(0, 8)}... → ${result.tierName} (${(result.rewardAmount / 1e9).toFixed(3)} SOL) tx:${result.txSignature.slice(0, 12)}...`);
+            console.log(`🎰 Admin round #${totalAdminSpins}: ${result.wallet.slice(0, 8)}... → ${(result.rewardAmount / 1e9).toFixed(4)} SOL tx:${result.txSignature.slice(0, 12)}...`);
 
             return json({
                 success: true,
-                spinNumber: totalAdminSpins,
+                roundNumber: totalAdminSpins,
                 wallet: result.wallet,
                 walletShort: result.wallet.slice(0, 4) + "..." + result.wallet.slice(-4),
-                tier: result.rewardTier,
-                tierName: result.tierName,
                 rewardAmount: result.rewardAmount,
-                rewardFormatted: (result.rewardAmount / 1e9).toFixed(3) + " SOL",
-                probabilities: result.probabilities.map(p => (p / 100).toFixed(1) + "%"),
+                rewardFormatted: (result.rewardAmount / 1e9).toFixed(4) + " SOL",
                 txSignature: result.txSignature,
-                queuePosition: currentHolderIndex,
-                nextHolder: holderQueue[currentHolderIndex]?.slice(0, 4) + "..." + holderQueue[currentHolderIndex]?.slice(-4),
             });
         } catch (e: any) {
             console.error("[admin-spin] Error:", e);
@@ -2084,6 +1855,137 @@ async function handler(req: Request): Promise<Response | null> {
             totalDistributed,
             totalDistributedFormatted: (totalDistributed / 1e9).toFixed(3) + " SOL",
         });
+    }
+
+    // ============================================
+    // WEIGHTED WINNER WHEEL ENDPOINTS
+    // ============================================
+
+    // GET /api/wheel/segments - Get weighted wheel segments for "Who's Next?" wheel
+    if (method === "GET" && path === "/api/wheel/segments") {
+        const segments = getWheelSegments();
+        const totalBalance = segments.reduce((sum, s) => sum + BigInt(s.balance), 0n);
+        return json({
+            segments: segments.map(s => ({
+                wallet: s.wallet,
+                walletShort: s.walletShort,
+                balance: s.balance,
+                percent: s.percent,
+                color: s.color,
+                startAngle: s.startAngle,
+                endAngle: s.endAngle,
+            })),
+            totalBalance: totalBalance.toString(),
+            totalHolders: segments.length,
+        });
+    }
+
+    // ============================================
+    // MULTI-TOKEN REGISTRY ENDPOINTS
+    // ============================================
+
+    // POST /api/tokens/register - Register a new token for the protocol
+    if (method === "POST" && path === "/api/tokens/register") {
+        try {
+            const body = await req.json() as {
+                mint: string;
+                name: string;
+                symbol: string;
+                decimals?: number;
+                adminWallet: string;
+                spinInterval?: number;
+                tierRewards?: any;
+            };
+
+            if (!body.mint || !body.name || !body.symbol || !body.adminWallet) {
+                return json({ error: "mint, name, symbol, and adminWallet required" }, 400);
+            }
+
+            // Check if already registered
+            const existing = (db as any).tokens.find({ mint: body.mint });
+            if (existing && existing.length > 0) {
+                return json({ error: "token already registered", token: existing[0] }, 409);
+            }
+
+            // Derive a token-specific treasury PDA (using wheel program)
+            const WHEEL_PROGRAM_ID = new PublicKey(WHEEL_PROGRAM_ID_STR);
+            const mintPubkey = new PublicKey(body.mint);
+            const [treasuryPda] = PublicKey.findProgramAddressSync(
+                [Buffer.from("token_treasury"), mintPubkey.toBuffer()],
+                WHEEL_PROGRAM_ID
+            );
+
+            const tokenRecord = {
+                mint: body.mint,
+                name: body.name,
+                symbol: body.symbol,
+                decimals: body.decimals || 6,
+                adminWallet: body.adminWallet,
+                treasuryPda: treasuryPda.toBase58(),
+                createdAt: Date.now(),
+                spinInterval: body.spinInterval || 60,
+                tierRewards: JSON.stringify(body.tierRewards || TIER_REWARDS),
+                active: 1,
+            };
+
+            (db as any).tokens.insert(tokenRecord);
+
+            console.log(`🪙 Token registered: ${body.symbol} (${body.mint.slice(0, 8)}...) treasury: ${treasuryPda.toBase58().slice(0, 8)}...`);
+
+            return json({
+                success: true,
+                token: {
+                    ...tokenRecord,
+                    treasuryPda: treasuryPda.toBase58(),
+                },
+            });
+        } catch (e: any) {
+            return json({ error: e.message || "registration failed" }, 500);
+        }
+    }
+
+    // GET /api/tokens - List all registered tokens
+    if (method === "GET" && path === "/api/tokens") {
+        try {
+            const tokens = (db as any).tokens.find({});
+            return json({
+                tokens: tokens.map((t: any) => ({
+                    mint: t.mint,
+                    name: t.name,
+                    symbol: t.symbol,
+                    decimals: t.decimals,
+                    adminWallet: t.adminWallet,
+                    treasuryPda: t.treasuryPda,
+                    createdAt: t.createdAt,
+                    active: t.active === 1,
+                    spinInterval: t.spinInterval,
+                })),
+                count: tokens.length,
+            });
+        } catch (e: any) {
+            return json({ tokens: [], count: 0 });
+        }
+    }
+
+    // GET /api/tokens/:mint - Get specific token details
+    if (method === "GET" && path.startsWith("/api/tokens/") && !path.includes("/register")) {
+        const mint = path.split("/api/tokens/")[1];
+        if (!mint) return json({ error: "mint required" }, 400);
+
+        try {
+            const tokens = (db as any).tokens.find({ mint });
+            if (!tokens || tokens.length === 0) {
+                return json({ error: "token not found" }, 404);
+            }
+            const token = tokens[0];
+            return json({
+                ...token,
+                active: token.active === 1,
+                tierRewards: JSON.parse(token.tierRewards || "[]"),
+            });
+        } catch (e: any) {
+            return json({ error: e.message || "not found" }, 404);
+        }
     }
 
     return null;

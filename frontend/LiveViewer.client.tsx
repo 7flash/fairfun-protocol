@@ -13,6 +13,16 @@ interface WheelTier {
     reward: number;
 }
 
+interface WheelSegmentData {
+    wallet: string;
+    walletShort: string;
+    balance: string;
+    percent: number;
+    color: string;
+    startAngle: number;
+    endAngle: number;
+}
+
 interface QueueHolder {
     position: number;
     wallet: string;
@@ -40,15 +50,13 @@ interface LiveState {
     autoSpinInterval: number;
     recentSpins: any[];
     stats: {
-        totalSpins: number;
+        totalRounds: number;
         totalDistributed: number;
         totalDistributedFormatted: string;
         poolBalance: number;
         poolBalanceFormatted: string;
     };
     rpcStatus: RpcStatusInfo;
-    tierNames: string[];
-    baseProbabilities: number[];
 }
 
 // ============================================
@@ -152,21 +160,49 @@ function DartboardWheel({ treasuryBalance = 0 }: { treasuryBalance?: number }) {
     }
 
     const segments: React.ReactNode[] = [];
-    let cumulativeAngle = 0;
+    const textLabels: React.ReactNode[] = [];
     WHEEL_CONFIG.forEach((tier, ringIndex) => {
         const reversedIndex = numRings - 1 - ringIndex;
         const ringOuterR = outerRadius - reversedIndex * ringWidth;
         const ringInnerR = outerRadius - (reversedIndex + 1) * ringWidth;
-        const tierAngle = (tier.percent / TOTAL_PERCENT) * 360;
-        const colorStart = cumulativeAngle;
-        const colorEnd = cumulativeAngle + tierAngle;
 
-        if (colorStart > 0.01)
-            segments.push(<path key={`space-before-${ringIndex}`} d={createArcPath(center, center, ringInnerR, ringOuterR, 0, colorStart)} fill={SPACE_COLOR} stroke="#1a1a2e" strokeWidth="0.5" />);
-        segments.push(<path key={`color-${ringIndex}`} d={createArcPath(center, center, ringInnerR, ringOuterR, colorStart, colorEnd)} fill={`url(#lg-${ringIndex})`} stroke={tier.color} strokeWidth="1" style={{ filter: `drop-shadow(0 0 ${4 + (numRings - ringIndex) * 2}px ${tier.glowColor})` }} />);
-        if (colorEnd < 359.99)
-            segments.push(<path key={`space-after-${ringIndex}`} d={createArcPath(center, center, ringInnerR, ringOuterR, colorEnd, 360)} fill={SPACE_COLOR} stroke="#1a1a2e" strokeWidth="0.5" />);
-        cumulativeAngle += tierAngle;
+        for (let i = 0; i < 9; i++) {
+            const startAngle = i * 40;
+            const endAngle = (i + 1) * 40;
+            const midAngle = startAngle + 20;
+            const gap = 0.5;
+
+            segments.push(
+                <path
+                    key={`color-${ringIndex}-${i}`}
+                    d={createArcPath(center, center, ringInnerR, ringOuterR, startAngle + gap, endAngle - gap)}
+                    fill={`url(#lg-${ringIndex})`}
+                    stroke={tier.color}
+                    strokeWidth="1"
+                    style={{ filter: `drop-shadow(0 0 ${4 + (numRings - ringIndex) * 2}px ${tier.glowColor})`, opacity: 0.8 }}
+                />
+            );
+
+            const ringMidR = (ringOuterR + ringInnerR) / 2;
+            const midRad = (midAngle - 90) * (Math.PI / 180);
+            const x = center + ringMidR * Math.cos(midRad);
+            const y = center + ringMidR * Math.sin(midRad);
+
+            textLabels.push(
+                <text
+                    key={`text-${ringIndex}-${i}`}
+                    x={x} y={y + 3}
+                    fill={tier.color}
+                    fontSize={ringIndex === 4 ? "8" : "10"}
+                    fontWeight="700"
+                    textAnchor="middle"
+                    style={{ textShadow: `0 0 6px ${tier.color}, 0 0 12px ${tier.glowColor}` }}
+                    transform={`rotate(${midAngle}, ${x}, ${y})`}
+                >
+                    {(i + 1).toString()}
+                </text>
+            );
+        }
     });
 
     return (
@@ -195,35 +231,176 @@ function DartboardWheel({ treasuryBalance = 0 }: { treasuryBalance?: number }) {
                 const rIdx = numRings - 1 - idx;
                 return <circle key={`sep-${idx}`} cx={center} cy={center} r={outerRadius - (rIdx + 1) * ringWidth} fill="none" stroke="#2a2a4e" strokeWidth="1.5" opacity="0.8" />;
             })}
-            {/* Arc text reward labels */}
-            {WHEEL_CONFIG.map((tier, idx) => {
-                const rIdx = numRings - 1 - idx;
-                const ringMidR = outerRadius - rIdx * ringWidth - ringWidth / 2;
-                const solValue = tier.reward > 0 ? (treasuryBalance * tier.reward / 100) : 0;
-                const rewardText = `${solValue.toFixed(4)} SOL`;
-                const startA = 240, endA = 120;
-                const startRad = (startA - 90) * (Math.PI / 180);
-                const endRad = (endA - 90) * (Math.PI / 180);
-                const x1 = center + ringMidR * Math.cos(startRad);
-                const y1 = center + ringMidR * Math.sin(startRad);
-                const x2 = center + ringMidR * Math.cos(endRad);
-                const y2 = center + ringMidR * Math.sin(endRad);
-                const apId = `live-arc-${idx}`;
-                return (
-                    <g key={`label-${idx}`}>
-                        <defs><path id={apId} d={`M ${x1} ${y1} A ${ringMidR} ${ringMidR} 0 0 0 ${x2} ${y2}`} fill="none" /></defs>
-                        <text fill={tier.color} fontSize="10" fontWeight="700" style={{ textShadow: `0 0 6px ${tier.color}, 0 0 12px ${tier.glowColor}` }}>
-                            <textPath href={`#${apId}`} startOffset="50%" textAnchor="middle">{rewardText}</textPath>
-                        </text>
-                    </g>
-                );
-            })}
+            {/* 9 Numbers in each ring */}
+            {textLabels}
             {/* Hub */}
             <circle cx={center} cy={center} r={hubRadius + 2} fill="none" stroke="#a855f7" strokeWidth="2" opacity="0.5" />
             <circle cx={center} cy={center} r={hubRadius} fill="url(#cosmicBg2)" stroke="#fbbf24" strokeWidth="2" />
             <text x={center} y={center - 6} textAnchor="middle" fill="#fbbf24" fontSize="10" fontWeight="800">GALAXY</text>
             <text x={center} y={center + 8} textAnchor="middle" fill="#a855f7" fontSize="10" fontWeight="800">WHEEL</text>
         </svg>
+    );
+}
+
+// ============================================
+// WINNER WHEEL (proportional holder segments)
+// ============================================
+function WinnerWheel({ segments, spinning, winnerIndex }: {
+    segments: WheelSegmentData[];
+    spinning: boolean;
+    winnerIndex: number | null;
+}) {
+    const size = 280;
+    const center = size / 2;
+    const radius = size / 2 - 16;
+    const innerR = 38;
+
+    const [rotation, setRotation] = useState(0);
+    const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+    const spinAnimRef = useRef<number | null>(null);
+
+    // Animate spin when winner is selected
+    useEffect(() => {
+        if (spinning && winnerIndex !== null && segments.length > 0) {
+            const seg = segments[winnerIndex];
+            if (!seg) return;
+            // Target angle: center of the winner segment (adjusted so top = 0°)
+            const targetAngle = (seg.startAngle + seg.endAngle) / 2;
+            // Spin 4-6 full rotations + land at target
+            const fullSpins = 4 + Math.floor(Math.random() * 3);
+            const totalRotation = fullSpins * 360 + (360 - targetAngle);
+            const startTime = performance.now();
+            const startRot = rotation;
+            const duration = 3500; // 3.5 seconds
+
+            const animateWheel = (now: number) => {
+                const elapsed = now - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                // Ease out cubic
+                const eased = 1 - Math.pow(1 - progress, 3);
+                setRotation(startRot + totalRotation * eased);
+                if (progress < 1) {
+                    spinAnimRef.current = requestAnimationFrame(animateWheel);
+                }
+            };
+            spinAnimRef.current = requestAnimationFrame(animateWheel);
+        }
+        return () => {
+            if (spinAnimRef.current) {
+                cancelAnimationFrame(spinAnimRef.current);
+                spinAnimRef.current = null;
+            }
+        };
+    }, [spinning, winnerIndex]);
+
+    if (segments.length === 0) {
+        return (
+            <div style={{
+                width: size, height: size, display: 'flex', alignItems: 'center',
+                justifyContent: 'center', color: '#475569', fontSize: '13px',
+            }}>
+                No holders to display
+            </div>
+        );
+    }
+
+    const createArcPath = (
+        cx: number, cy: number, r: number, ir: number,
+        startAngle: number, endAngle: number
+    ): string => {
+        const sweep = endAngle - startAngle;
+        if (sweep >= 359.99) {
+            return `M ${cx - r} ${cy} A ${r} ${r} 0 1 1 ${cx + r} ${cy} A ${r} ${r} 0 1 1 ${cx - r} ${cy} M ${cx - ir} ${cy} A ${ir} ${ir} 0 1 0 ${cx + ir} ${cy} A ${ir} ${ir} 0 1 0 ${cx - ir} ${cy}`;
+        }
+        const sRad = (startAngle - 90) * Math.PI / 180;
+        const eRad = (endAngle - 90) * Math.PI / 180;
+        const x1 = cx + r * Math.cos(sRad), y1 = cy + r * Math.sin(sRad);
+        const x2 = cx + r * Math.cos(eRad), y2 = cy + r * Math.sin(eRad);
+        const ix1 = cx + ir * Math.cos(eRad), iy1 = cy + ir * Math.sin(eRad);
+        const ix2 = cx + ir * Math.cos(sRad), iy2 = cy + ir * Math.sin(sRad);
+        const large = sweep > 180 ? 1 : 0;
+        return `M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} L ${ix1} ${iy1} A ${ir} ${ir} 0 ${large} 0 ${ix2} ${iy2} Z`;
+    };
+
+    return (
+        <div style={{ position: 'relative', width: size, height: size }}>
+            {/* Fixed pointer arrow at top */}
+            <div style={{
+                position: 'absolute', top: -4, left: '50%', transform: 'translateX(-50%)',
+                width: 0, height: 0,
+                borderLeft: '10px solid transparent', borderRight: '10px solid transparent',
+                borderTop: '16px solid #fbbf24',
+                zIndex: 20, filter: 'drop-shadow(0 0 8px rgba(251,191,36,0.8))',
+            }} />
+            <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}
+                style={{ transform: `rotate(${rotation}deg)`, transition: spinning ? 'none' : 'transform 0.3s ease' }}>
+                <defs>
+                    <radialGradient id="winnerBg" cx="50%" cy="50%" r="50%">
+                        <stop offset="0%" stopColor="#1a1a3e" />
+                        <stop offset="100%" stopColor="#050510" />
+                    </radialGradient>
+                </defs>
+                <circle cx={center} cy={center} r={radius + 4} fill="none" stroke="#fbbf2440" strokeWidth="1" />
+                <circle cx={center} cy={center} r={radius} fill="url(#winnerBg)" />
+                {segments.map((seg, i) => {
+                    const isWinner = winnerIndex === i && !spinning;
+                    const isHovered = hoveredIdx === i;
+                    return (
+                        <g key={seg.wallet}>
+                            <path
+                                d={createArcPath(center, center, radius - 2, innerR, seg.startAngle, seg.endAngle)}
+                                fill={seg.color + (isWinner ? '' : isHovered ? 'dd' : 'aa')}
+                                stroke={isWinner ? '#fff' : '#0a0a1a'}
+                                strokeWidth={isWinner ? 2 : 0.5}
+                                style={{
+                                    cursor: 'pointer',
+                                    filter: isWinner ? `drop-shadow(0 0 12px ${seg.color})` : 'none',
+                                    transition: 'all 0.2s',
+                                }}
+                                onMouseEnter={() => setHoveredIdx(i)}
+                                onMouseLeave={() => setHoveredIdx(null)}
+                            />
+                            {/* Label (only for segments > 6%) */}
+                            {seg.percent > 6 && (() => {
+                                const midAngle = (seg.startAngle + seg.endAngle) / 2;
+                                const labelR = (radius + innerR) / 2;
+                                const rad = (midAngle - 90) * Math.PI / 180;
+                                const x = center + labelR * Math.cos(rad);
+                                const y = center + labelR * Math.sin(rad);
+                                return (
+                                    <text x={x} y={y} textAnchor="middle" dominantBaseline="middle"
+                                        fill="#fff" fontSize="9" fontWeight="600"
+                                        style={{ pointerEvents: 'none', textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}>
+                                        {seg.walletShort}
+                                    </text>
+                                );
+                            })()}
+                        </g>
+                    );
+                })}
+                {/* Hub */}
+                <circle cx={center} cy={center} r={innerR + 1} fill="none" stroke="#a855f780" strokeWidth="1.5" />
+                <circle cx={center} cy={center} r={innerR} fill="url(#winnerBg)" stroke="#fbbf24" strokeWidth="1.5" />
+                <text x={center} y={center - 5} textAnchor="middle" fill="#fbbf24" fontSize="8" fontWeight="800">WHO'S</text>
+                <text x={center} y={center + 7} textAnchor="middle" fill="#a855f7" fontSize="8" fontWeight="800">NEXT?</text>
+            </svg>
+            {/* Hover tooltip */}
+            {hoveredIdx !== null && segments[hoveredIdx] && (
+                <div style={{
+                    position: 'absolute', bottom: -36, left: '50%', transform: 'translateX(-50%)',
+                    background: 'rgba(0,0,0,0.85)', border: `1px solid ${segments[hoveredIdx].color}50`,
+                    borderRadius: '8px', padding: '4px 12px', whiteSpace: 'nowrap',
+                    fontSize: '11px', color: '#e2e8f0', textAlign: 'center',
+                    boxShadow: `0 0 12px ${segments[hoveredIdx].color}30`,
+                }}>
+                    <span style={{ color: segments[hoveredIdx].color, fontWeight: 600 }}>
+                        {segments[hoveredIdx].walletShort}
+                    </span>
+                    {' — '}
+                    <span style={{ color: '#22c55e' }}>{segments[hoveredIdx].percent.toFixed(1)}%</span>
+                </div>
+            )}
+        </div>
     );
 }
 
@@ -295,6 +472,10 @@ function LiveViewer() {
     const [pointerRotation, setPointerRotation] = useState(0);
     const [currentSpinWallet, setCurrentSpinWallet] = useState('');
     const [countdown, setCountdown] = useState(30);
+    // Weighted winner wheel state
+    const [segments, setSegments] = useState<WheelSegmentData[]>([]);
+    const [winnerWheelSpinning, setWinnerWheelSpinning] = useState(false);
+    const [winnerSegmentIndex, setWinnerSegmentIndex] = useState<number | null>(null);
     const animRef = useRef<number | null>(null);
     const spinStartRef = useRef(0);
     const constantStartRef = useRef(0);
@@ -428,11 +609,26 @@ function LiveViewer() {
             setLastSseError('SSE connection lost');
         };
 
+        eventSource.addEventListener('timer', (event: any) => {
+            try {
+                const data = JSON.parse(event.data);
+                setCountdown(data.secondsUntil ?? 30);
+                if (data.segments) setSegments(data.segments);
+            } catch { }
+        });
+
         eventSource.addEventListener('spinning', (event: any) => {
             const data = JSON.parse(event.data);
             setCurrentSpinWallet(data.walletShort || '');
             startSpinToTier(2);
             setCountdown(30);
+            // Trigger winner wheel spin
+            if (data.segments) setSegments(data.segments);
+            if (typeof data.segmentIndex === 'number') {
+                setWinnerSegmentIndex(data.segmentIndex);
+                setWinnerWheelSpinning(true);
+                setTimeout(() => setWinnerWheelSpinning(false), 3600);
+            }
         });
 
         eventSource.addEventListener('spin', (event: any) => {
@@ -444,10 +640,9 @@ function LiveViewer() {
 
             setLiveState((prev: LiveState | null) => prev ? {
                 ...prev,
-                currentIndex: (prev.currentIndex + 1) % Math.max(prev.totalHolders, 1),
                 stats: {
                     ...prev.stats,
-                    totalSpins: prev.stats.totalSpins + 1,
+                    totalRounds: prev.stats.totalRounds + 1,
                     totalDistributed: prev.stats.totalDistributed + (data.rewardAmount || 0),
                     totalDistributedFormatted: ((prev.stats.totalDistributed + (data.rewardAmount || 0)) / 1e9).toFixed(4) + ' SOL',
                 },
@@ -497,9 +692,9 @@ function LiveViewer() {
                 background: 'rgba(0,0,0,0.3)',
             }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <span style={{ fontSize: '24px' }}>🌀</span>
+                    <span style={{ fontSize: '24px' }}>🎯</span>
                     <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 700, letterSpacing: '-0.02em' }}>
-                        Galaxy Wheel <span style={{ color: '#64748b', fontWeight: 400, fontSize: '14px' }}>LIVE</span>
+                        fairfun.xyz <span style={{ color: '#64748b', fontWeight: 400, fontSize: '14px' }}>LIVE</span>
                     </h1>
                     {/* Connection status */}
                     <div style={{
@@ -553,20 +748,19 @@ function LiveViewer() {
                     </h3>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                         {(liveState?.queue || []).map((holder) => {
-                            const isCurrent = holder.position === liveState?.currentIndex;
                             return (
                                 <div key={holder.wallet} style={{
                                     padding: '10px 12px', borderRadius: '8px',
-                                    background: isCurrent ? (isSpinning ? 'rgba(245,158,11,0.15)' : 'rgba(59,130,246,0.12)') : 'rgba(255,255,255,0.02)',
-                                    border: isCurrent ? `1px solid ${isSpinning ? 'rgba(245,158,11,0.3)' : 'rgba(59,130,246,0.2)'}` : '1px solid transparent',
+                                    background: 'rgba(255,255,255,0.02)',
+                                    border: '1px solid transparent',
                                     transition: 'all 0.3s ease',
                                 }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                            <span style={{ fontSize: '11px', fontWeight: 700, color: isCurrent ? '#f59e0b' : '#475569', width: '20px' }}>
+                                            <span style={{ fontSize: '11px', fontWeight: 700, color: '#475569', width: '20px' }}>
                                                 #{holder.position + 1}
                                             </span>
-                                            <span style={{ fontFamily: 'monospace', fontSize: '12px', color: isCurrent ? '#e2e8f0' : '#94a3b8' }}>
+                                            <span style={{ fontFamily: 'monospace', fontSize: '12px', color: '#94a3b8' }}>
                                                 {holder.walletShort}
                                             </span>
                                         </div>
@@ -576,24 +770,8 @@ function LiveViewer() {
                                                     {(holder.totalWinnings / 1e9).toFixed(3)} SOL
                                                 </span>
                                             )}
-                                            {isCurrent && isSpinning && (
-                                                <span style={{ fontSize: '10px', fontWeight: 700, color: '#f59e0b', animation: 'pulse 1s infinite' }}>
-                                                    SPINNING
-                                                </span>
-                                            )}
                                         </div>
                                     </div>
-                                    {isCurrent && (
-                                        <div style={{ marginTop: '6px', display: 'flex', gap: '2px' }}>
-                                            {WHEEL_CONFIG.map((tier, pi) => (
-                                                <div key={pi} style={{
-                                                    flex: holder.probabilities?.[pi] || WHEEL_CONFIG[pi].percent,
-                                                    height: '3px', borderRadius: '2px',
-                                                    background: tier.color, opacity: 0.8,
-                                                }} />
-                                            ))}
-                                        </div>
-                                    )}
                                 </div>
                             );
                         })}
@@ -622,20 +800,20 @@ function LiveViewer() {
                             </div>
                         ) : isSpinning ? (
                             <div style={{ fontSize: '16px', fontWeight: 700, color: '#f59e0b', animation: 'pulse 1s infinite' }}>
-                                ✨ Spinning for {currentSpinWallet || '...'}
+                                ✨ Picking a winner...
                             </div>
                         ) : spinResult ? (
                             <div style={{ fontSize: '14px', color: '#94a3b8' }}>
-                                Last: <span style={{ color: WHEEL_CONFIG[spinResult.tier || 0]?.color, fontWeight: 700 }}>
-                                    {TIER_EMOJIS[spinResult.tier || 0]} {spinResult.tierName}
-                                </span> — {spinResult.rewardFormatted}
+                                Last: <span style={{ color: '#22c55e', fontWeight: 700 }}>
+                                    🏆 {spinResult.walletShort}
+                                </span> — <span style={{ color: '#fbbf24', fontWeight: 700 }}>{spinResult.rewardFormatted}</span>
                             </div>
                         ) : (
                             <div>
                                 <div style={{ fontSize: '42px', fontWeight: 800, fontFamily: 'monospace', color: '#e2e8f0', letterSpacing: '-0.02em' }}>
                                     {String(Math.floor(countdown / 60)).padStart(2, '0')}:{String(countdown % 60).padStart(2, '0')}
                                 </div>
-                                <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>until next spin</div>
+                                <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>until next round</div>
                             </div>
                         )}
                     </div>
@@ -678,22 +856,23 @@ function LiveViewer() {
                         )}
                     </div>
 
-                    {/* Tier Legend */}
+                    {/* Pool info */}
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', marginTop: '16px' }}>
-                        {WHEEL_CONFIG.map((tier, i) => (
-                            <div key={i} style={{
-                                display: 'flex', alignItems: 'center', gap: '12px', padding: '4px 16px',
-                                borderRadius: '6px', width: '200px',
-                                background: spinResult?.tier === i ? `${tier.color}33` : 'transparent',
-                                border: spinResult?.tier === i ? `1px solid ${tier.color}` : '1px solid transparent',
-                                transition: 'all 0.3s ease',
-                            }}>
-                                <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: tier.color, boxShadow: `0 0 6px ${tier.color}80` }} />
-                                <span style={{ fontSize: '11px', fontWeight: 600, color: tier.color, width: '80px' }}>{tier.label}</span>
-                                <span style={{ fontSize: '10px', color: '#64748b' }}>{tier.percent}%</span>
-                                <span style={{ fontSize: '10px', color: '#94a3b8', marginLeft: 'auto' }}>{tier.reward}%</span>
-                            </div>
-                        ))}
+                        <div style={{ fontSize: '13px', color: '#94a3b8' }}>
+                            Winner takes <span style={{ color: '#fbbf24', fontWeight: 700 }}>100%</span> of treasury each round
+                        </div>
+                    </div>
+
+                    {/* Weighted Winner Wheel */}
+                    <div style={{ marginTop: '24px', textAlign: 'center' }}>
+                        <h3 style={{ margin: '0 0 8px 0', fontSize: '12px', fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                            🎯 Who's Next? {segments.length > 0 && <span style={{ color: '#475569', fontWeight: 400 }}>({segments.length} holders)</span>}
+                        </h3>
+                        <WinnerWheel
+                            segments={segments}
+                            spinning={winnerWheelSpinning}
+                            winnerIndex={winnerSegmentIndex}
+                        />
                     </div>
                 </div>
 
@@ -709,13 +888,11 @@ function LiveViewer() {
                             </div>
                         )}
                         {recentSpins.map((spin: any, i: number) => {
-                            const tierIdx = spin.tier ?? spin.rewardTier ?? 0;
-                            const tierColor = WHEEL_CONFIG[tierIdx]?.color || '#94a3b8';
                             return (
                                 <div key={i} style={{
                                     padding: '10px 12px', borderRadius: '8px',
-                                    background: i === 0 ? `${tierColor}15` : 'rgba(255,255,255,0.02)',
-                                    border: i === 0 ? `1px solid ${tierColor}33` : '1px solid transparent',
+                                    background: i === 0 ? 'rgba(34,197,94,0.08)' : 'rgba(255,255,255,0.02)',
+                                    border: i === 0 ? '1px solid rgba(34,197,94,0.2)' : '1px solid transparent',
                                     animation: i === 0 ? 'fadeIn 0.5s ease' : 'none',
                                 }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -725,8 +902,8 @@ function LiveViewer() {
                                         <span style={{ fontSize: '11px', color: '#475569' }}>{formatTimeAgo(spin.timestamp)}</span>
                                     </div>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
-                                        <span style={{ fontSize: '12px', fontWeight: 600, color: tierColor }}>
-                                            {TIER_EMOJIS[tierIdx]} {spin.tierName}
+                                        <span style={{ fontSize: '12px', fontWeight: 600, color: '#fbbf24' }}>
+                                            🏆 Winner
                                         </span>
                                         <span style={{ fontSize: '12px', fontWeight: 600, color: '#22c55e' }}>
                                             {spin.rewardFormatted || ((spin.rewardAmount / 1e9).toFixed(4) + ' SOL')}

@@ -44,4 +44,7 @@ pub enum StardustError {
 
     #[msg("Lifetime earned cannot be less than already claimed.")]
     InvalidLifetimeEarned,
+
+    #[msg("Insufficient balance in treasury to fulfill claim.")]
+    InsufficientTreasury,
 }

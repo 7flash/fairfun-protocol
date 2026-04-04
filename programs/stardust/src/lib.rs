@@ -41,7 +41,27 @@ pub mod stardust {
         Ok(())
     }
 
-    /// Claim stardust tokens based on backend-signed lifetime earnings
+    /// Fund the treasury pool with SOL
+    pub fn fund_treasury(ctx: Context<FundTreasury>, amount: u64) -> Result<()> {
+        let ix = anchor_lang::solana_program::system_instruction::transfer(
+            &ctx.accounts.funder.key(),
+            &ctx.accounts.treasury_pool.key(),
+            amount,
+        );
+
+        anchor_lang::solana_program::program::invoke(
+            &ix,
+            &[
+                ctx.accounts.funder.to_account_info(),
+                ctx.accounts.treasury_pool.to_account_info(),
+            ],
+        )?;
+
+        msg!("Treasury funded with {} lamports", amount);
+        Ok(())
+    }
+
+    /// Claim stardust tokens and SOL reward based on backend-signed lifetime earnings
     ///
     /// The transaction must contain a preceding Ed25519 instruction verifying
     /// the backend's signature over [user_pubkey | lifetime_earned].
@@ -50,7 +70,8 @@ pub mod stardust {
     ///
     /// # Arguments
     /// * `lifetime_earned` - Total lifetime stardust earned (signed by backend)
-    pub fn claim_stardust(ctx: Context<ClaimStardust>, lifetime_earned: u64) -> Result<()> {
+    /// * `sol_reward` - SOL reward to withdraw from treasury (signed by backend)
+    pub fn claim_stardust(ctx: Context<ClaimStardust>, lifetime_earned: u64, sol_reward: u64) -> Result<()> {
         let user_claim = &mut ctx.accounts.user_claim;
         let state = &ctx.accounts.state;
 
@@ -83,11 +104,12 @@ pub mod stardust {
         let signature_ix = load_instruction_at_checked((current_index - 1) as usize, ixs)?;
 
         // --- STEP 3: Reconstruct expected message ---
-        // Payload = [UserPubkey(32) | LifetimeEarned(8)]
+        // Payload = [UserPubkey(32) | LifetimeEarned(8) | SolReward(8)]
         let user_key = ctx.accounts.user.key();
-        let mut expected_message = Vec::with_capacity(40);
+        let mut expected_message = Vec::with_capacity(48);
         expected_message.extend_from_slice(&user_key.to_bytes());
         expected_message.extend_from_slice(&lifetime_earned.to_le_bytes());
+        expected_message.extend_from_slice(&sol_reward.to_le_bytes());
 
         // --- STEP 4: Verify Ed25519 instruction integrity ---
         verify_ed25519_ix_integrity(
@@ -110,7 +132,35 @@ pub mod stardust {
 
         token::mint_to(cpi_ctx, claimable)?;
 
-        // --- STEP 6: Update user claim state ---
+        // --- STEP 6: Transfer SOL reward from treasury if applicable ---
+        if sol_reward > 0 {
+            let treasury_balance = ctx.accounts.treasury_pool.lamports();
+            if treasury_balance < sol_reward {
+                return err!(StardustError::InsufficientTreasury);
+            }
+
+            let pool_bump = ctx.bumps.treasury_pool;
+            let pool_seeds: &[&[u8]] = &[b"treasury_pool", &[pool_bump]];
+
+            let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
+                &ctx.accounts.treasury_pool.key(),
+                &ctx.accounts.user.key(),
+                sol_reward,
+            );
+
+            anchor_lang::solana_program::program::invoke_signed(
+                &transfer_ix,
+                &[
+                    ctx.accounts.treasury_pool.to_account_info(),
+                    ctx.accounts.user.to_account_info(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
+                &[pool_seeds],
+            )?;
+            msg!("Transferred {} lamports from treasury", sol_reward);
+        }
+
+        // --- STEP 7: Update user claim state ---
         user_claim.claimed_amount = lifetime_earned;
         user_claim.last_claim_timestamp = Clock::get()?.unix_timestamp;
 
@@ -118,6 +168,7 @@ pub mod stardust {
         msg!("User: {}", user_key);
         msg!("Claimed Amount: {}", claimable);
         msg!("Total Lifetime Claimed: {}", lifetime_earned);
+        msg!("SOL Reward: {}", sol_reward);
 
         emit!(StardustClaimed {
             user: user_key,
@@ -205,6 +256,22 @@ pub struct Initialize<'info> {
 }
 
 #[derive(Accounts)]
+pub struct FundTreasury<'info> {
+    /// CHECK: SOL treasury pool PDA
+    #[account(
+        mut,
+        seeds = [b"treasury_pool"],
+        bump
+    )]
+    pub treasury_pool: AccountInfo<'info>,
+
+    #[account(mut)]
+    pub funder: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct ClaimStardust<'info> {
     /// The user claiming stardust
     #[account(mut)]
@@ -227,6 +294,14 @@ pub struct ClaimStardust<'info> {
         has_one = stardust_mint
     )]
     pub state: Account<'info, ProtocolState>,
+
+    /// CHECK: SOL treasury pool PDA
+    #[account(
+        mut,
+        seeds = [b"treasury_pool"],
+        bump
+    )]
+    pub treasury_pool: AccountInfo<'info>,
 
     /// Stardust token mint
     #[account(mut)]
