@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::hash::hash;
 use anchor_spl::token::{Mint};
+use solana_program::hash::hash;
 
 declare_id!("3M12BfitAEYz14WJBMnjahEuSvhsWhjfGJXbzur26o2U");
 

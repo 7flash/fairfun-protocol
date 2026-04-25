@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::hash::hash;
 use anchor_spl::token::{self, Burn, Token, TokenAccount, Mint};
+use solana_program::hash::hash;
 
 declare_id!("HxqX7EZCWbYvjrZDJaVtU5y3ZjVXMEccWiahao9MPeKB");
 
@@ -108,8 +108,7 @@ pub mod star_nft {
             from: ctx.accounts.user_stardust.to_account_info(),
             authority: ctx.accounts.user.to_account_info(),
         };
-        let cpi_program = ctx.accounts.token_program.to_account_info();
-        let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+        let cpi_ctx = CpiContext::new(ctx.accounts.token_program.key(), cpi_accounts);
         
         token::burn(cpi_ctx, state.stardust_cost)?;
         
@@ -162,9 +161,6 @@ pub mod star_nft {
         require!(treasury_balance >= claim_amount, StarNftError::InsufficientTreasury);
         
         // Transfer SOL from treasury to user
-        let seeds = &[b"treasury".as_ref(), &[state.treasury_bump]];
-        let signer_seeds = &[&seeds[..]];
-        
         **ctx.accounts.treasury.try_borrow_mut_lamports()? -= claim_amount;
         **ctx.accounts.user.try_borrow_mut_lamports()? += claim_amount;
         
