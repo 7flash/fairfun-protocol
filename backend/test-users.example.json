@@ -1,0 +1,7 @@
+[
+  {
+    "id": 1,
+    "publicKey": "REPLACE_WITH_TEST_USER_PUBLIC_KEY",
+    "secretKey": "REPLACE_WITH_BASE64_SECRET_KEY"
+  }
+]

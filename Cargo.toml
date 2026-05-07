@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "programs/anchor-fairfun",
+    "programs/fairfun-rewards",
     "programs/star-nft",
     "programs/wheel"
 ]

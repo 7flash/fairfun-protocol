@@ -38,6 +38,8 @@ interface LiveData {
         totalDistributedFormatted: string;
         poolBalance: number;
         poolBalanceFormatted: string;
+        totalTreasuryReceived: number;
+        totalTreasuryReceivedFormatted: string;
     };
     rpcStatus: { online: boolean };
     tierNames: string[];
@@ -671,7 +673,7 @@ function WalletPanel({
                     onClick={onClaimStardust}
                     disabled={claimLoading}
                 >
-                    {claimLoading ? "Signing..." : "Claim Stardust ✦"}
+                    {claimLoading ? "Signing..." : "Claim Rewards ✦"}
                 </button>
                 <button
                     className="btn btn-withdraw"
@@ -827,7 +829,7 @@ function CommunityPage() {
         }
     }, []);
 
-    // Claim stardust
+    // Claim SOL rewards
     const handleClaimStardust = useCallback(async () => {
         if (!connected) return;
         setClaimLoading(true);
@@ -852,7 +854,7 @@ function CommunityPage() {
             await conn.confirmTransaction(sig, "confirmed");
 
             setError(null);
-            alert(`Stardust claimed! Tx: ${sig.slice(0, 12)}...`);
+            alert(`Rewards claimed! Tx: ${sig.slice(0, 12)}...`);
         } catch (e: any) {
             setError(e.message || "Claim failed");
         } finally {
@@ -919,6 +921,10 @@ function CommunityPage() {
                     <div className="stat">
                         <label>Treasury</label>
                         <span className="treasury">{liveData.stats.poolBalanceFormatted}</span>
+                    </div>
+                    <div className="stat">
+                        <label>Total Inflow</label>
+                        <span>{liveData.stats.totalTreasuryReceivedFormatted}</span>
                     </div>
                 </div>
                 <div className="header-right">

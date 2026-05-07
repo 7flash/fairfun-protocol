@@ -1,0 +1,20 @@
+{
+  "programId": "REPLACE_WITH_LOCAL_PROGRAM_ID",
+  "authority": {
+    "publicKey": "REPLACE_WITH_LOCAL_AUTHORITY_PUBLIC_KEY",
+    "secretKey": "REPLACE_WITH_BASE64_SECRET_KEY"
+  },
+  "stardustMint": "REPLACE_WITH_LOCAL_STARDUST_MINT",
+  "statePda": "REPLACE_WITH_LOCAL_STATE_PDA",
+  "starTokenMint": "REPLACE_WITH_LOCAL_STAR_TOKEN_MINT",
+  "testUsers": [
+    {
+      "id": 1,
+      "publicKey": "REPLACE_WITH_TEST_USER_PUBLIC_KEY",
+      "secretKey": "REPLACE_WITH_BASE64_SECRET_KEY",
+      "starTokenAccount": "REPLACE_WITH_STAR_ATA",
+      "stardustTokenAccount": "REPLACE_WITH_STARDUST_ATA",
+      "starBalance": 0
+    }
+  ]
+}

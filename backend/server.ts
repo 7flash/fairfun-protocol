@@ -1,6 +1,7 @@
 import { serve } from "@ments/web";
 import { measure } from "@ments/utils";
 import { SatiDB, z } from "@ments/db";
+import { Database as SqliteDatabase } from "bun:sqlite";
 import {
     Keypair,
     PublicKey,
@@ -74,10 +75,12 @@ interface HolderEarnings {
     claimed: bigint;
     starBalance: bigint; // Real STAR token balance
     lastUpdated: number;
+    source?: "legacy" | "mements";
 }
 
 // In-memory store for earnings
 const earningsStore = new Map<string, HolderEarnings>();
+const MEMENTS_DB_PATH = process.env.MEMENTS_DB_PATH || "C:/Code/mements/data/leaderboard.db";
 
 // ============================================
 // ADMIN-CONTROLLED WHEEL SYSTEM
@@ -101,8 +104,10 @@ const TIER_REWARDS = [
     10 * 1e9,     // SUPERNOVA: 10 SOL
 ];
 
-// Prize pool balance (lamports) — fetched from real treasury PDA
+// Current treasury balance (lamports) — fetched from real rewards treasury PDA
 let poolBalance = 0; // Will be populated from on-chain data
+let poolTotalDeposited = 0n;
+const TREASURY_RENT_EXEMPT_LAMPORTS = 890880n;
 
 // RPC health tracking
 const rpcStatus = {
@@ -114,20 +119,116 @@ const rpcStatus = {
     poolFetched: false,
 };
 
+const REWARDS_CONFIG_SEED = "rewards_config";
+const REWARDS_POOL_SEED = "rewards_pool";
+const REWARDS_TREASURY_SEED = "rewards_treasury";
+const REWARDS_USER_CLAIM_SEED = "rewards_user_claim";
+
+function getRewardsProgramId(): PublicKey {
+    return new PublicKey(config.programId);
+}
+
+function getRewardsTokenMint(): PublicKey {
+    return new PublicKey(config.starTokenMint);
+}
+
+function deriveRewardsConfigPda(): PublicKey {
+    return PublicKey.findProgramAddressSync(
+        [Buffer.from(REWARDS_CONFIG_SEED)],
+        getRewardsProgramId()
+    )[0];
+}
+
+function deriveRewardsPoolPda(tokenMint: PublicKey): PublicKey {
+    return PublicKey.findProgramAddressSync(
+        [Buffer.from(REWARDS_POOL_SEED), tokenMint.toBuffer()],
+        getRewardsProgramId()
+    )[0];
+}
+
+function deriveRewardsTreasuryPda(tokenMint: PublicKey): PublicKey {
+    return PublicKey.findProgramAddressSync(
+        [Buffer.from(REWARDS_TREASURY_SEED), tokenMint.toBuffer()],
+        getRewardsProgramId()
+    )[0];
+}
+
+function deriveRewardsUserClaimPda(pool: PublicKey, user: PublicKey): PublicKey {
+    return PublicKey.findProgramAddressSync(
+        [Buffer.from(REWARDS_USER_CLAIM_SEED), pool.toBuffer(), user.toBuffer()],
+        getRewardsProgramId()
+    )[0];
+}
+
+async function fetchRewardsPoolState() {
+    const tokenMint = getRewardsTokenMint();
+    const poolPda = deriveRewardsPoolPda(tokenMint);
+    const treasuryPda = deriveRewardsTreasuryPda(tokenMint);
+
+    const [poolInfo, treasuryBalance] = await Promise.all([
+        getConn().getAccountInfo(poolPda, "confirmed"),
+        getConn().getBalance(treasuryPda, "confirmed").catch(() => 0),
+    ]);
+
+    if (!poolInfo?.data || poolInfo.data.length < 59) {
+        const distributableTreasuryBalance = treasuryBalance > Number(TREASURY_RENT_EXEMPT_LAMPORTS)
+            ? treasuryBalance - Number(TREASURY_RENT_EXEMPT_LAMPORTS)
+            : 0;
+        return {
+            tokenMint,
+            poolPda,
+            treasuryPda,
+            exists: false,
+            active: false,
+            totalDeposited: 0n,
+            totalClaimed: 0n,
+            treasuryBalance: distributableTreasuryBalance,
+            totalReceived: BigInt(distributableTreasuryBalance),
+        };
+    }
+
+    const distributableTreasuryBalance = treasuryBalance > Number(TREASURY_RENT_EXEMPT_LAMPORTS)
+        ? treasuryBalance - Number(TREASURY_RENT_EXEMPT_LAMPORTS)
+        : 0;
+    const totalClaimed = poolInfo.data.readBigUInt64LE(48);
+    const totalReceivedFromTreasury = BigInt(distributableTreasuryBalance) + totalClaimed;
+
+    return {
+        tokenMint,
+        poolPda,
+        treasuryPda,
+        exists: true,
+        active: poolInfo.data[56] === 1,
+        totalDeposited: poolInfo.data.readBigUInt64LE(40),
+        totalClaimed,
+        treasuryBalance: distributableTreasuryBalance,
+        totalReceived: totalReceivedFromTreasury,
+    };
+}
+
 /**
  * Fetch real pool balance from the wheel_pool PDA on-chain
  */
 async function fetchPoolBalance() {
     try {
-        const STARDUST_PROGRAM_ID = new PublicKey(config.programId);
-        const [poolPda] = PublicKey.findProgramAddressSync([Buffer.from("treasury_pool")], STARDUST_PROGRAM_ID);
-        const balance = await getConn().getBalance(poolPda, "confirmed");
-        poolBalance = balance;
+        const poolState = await fetchRewardsPoolState();
+        poolBalance = poolState.treasuryBalance;
+        poolTotalDeposited = poolState.totalReceived > poolState.totalDeposited
+            ? poolState.totalReceived
+            : poolState.totalDeposited;
         rpcStatus.online = true;
         rpcStatus.lastSuccess = Date.now();
         rpcStatus.consecutiveFailures = 0;
-        rpcStatus.poolFetched = true;
-        console.log(`💰 Pool balance: ${(balance / 1e9).toFixed(4)} SOL (from ${poolPda.toBase58().slice(0, 8)}...)`);
+        rpcStatus.poolFetched = poolState.exists;
+        if (poolState.exists) {
+            console.log(
+                `💰 Rewards treasury: ${(poolState.treasuryBalance / 1e9).toFixed(4)} SOL ` +
+                `(deposited ${(Number(poolState.totalDeposited) / 1e9).toFixed(4)} SOL, ` +
+                `pool ${poolState.poolPda.toBase58().slice(0, 8)}...)`
+            );
+        } else {
+            console.log("⚠ Rewards pool is not initialized onchain yet");
+        }
     } catch (e: any) {
         const msg = e.message || String(e);
         rpcStatus.lastError = msg.includes('429') ? 'RPC rate limited (429 Too Many Requests)' : msg.slice(0, 120);
@@ -169,6 +270,74 @@ const pendingPrizes: Map<string, PendingPrize[]> = new Map(); // wallet -> prize
 const spinHistory: SpinRecord[] = []; // last 200 spin results
 let totalAdminSpins = 0;
 let totalDistributed = 0;
+
+function solToLamports(value: number): bigint {
+    if (!Number.isFinite(value) || value <= 0) return 0n;
+    return BigInt(Math.round(value * 1_000_000_000));
+}
+
+function loadHolderEarningsFromMements(wallet: string): HolderEarnings | null {
+    try {
+        if (!fs.existsSync(MEMENTS_DB_PATH)) return null;
+
+        const sqlite = new SqliteDatabase(MEMENTS_DB_PATH, { readonly: true });
+        try {
+            const row = sqlite
+                .query(
+                    "SELECT address, tokenBalance, totalSolRewardsEarned, totalSolRewardsClaimed, updatedAt FROM holders WHERE lower(address) = lower(?) LIMIT 1"
+                )
+                .get(wallet) as
+                | {
+                    address: string;
+                    tokenBalance: number;
+                    totalSolRewardsEarned: number;
+                    totalSolRewardsClaimed: number;
+                    updatedAt: number;
+                }
+                | null;
+
+            if (!row) return null;
+
+            return {
+                wallet: row.address,
+                lifetimeEarned: solToLamports(row.totalSolRewardsEarned),
+                claimed: solToLamports(row.totalSolRewardsClaimed),
+                starBalance: BigInt(Math.max(0, Math.round(row.tokenBalance))),
+                lastUpdated: row.updatedAt ?? Date.now(),
+                source: "mements",
+            };
+        } finally {
+            sqlite.close();
+        }
+    } catch (error) {
+        console.error("[mements-db] Failed to load holder earnings:", error);
+        return null;
+    }
+}
+
+function getHolderEarningsForClaim(wallet: string): HolderEarnings | null {
+    const fallback = loadHolderEarningsFromMements(wallet);
+    if (fallback) {
+        const current = earningsStore.get(wallet);
+        const merged: HolderEarnings = {
+            wallet: fallback.wallet,
+            lifetimeEarned: fallback.lifetimeEarned,
+            claimed: fallback.claimed,
+            starBalance: current?.starBalance ?? fallback.starBalance,
+            lastUpdated: fallback.lastUpdated,
+            source: fallback.source,
+        };
+        earningsStore.set(wallet, merged);
+        return merged;
+    }
+
+    const existing = earningsStore.get(wallet);
+    if (existing && existing.lifetimeEarned > 0n) {
+        return existing;
+    }
+
+    return existing ?? null;
+}
 
 // Track total winnings per wallet (for leaderboard)
 const walletWinnings: Map<string, number> = new Map();
@@ -519,13 +688,8 @@ async function fetchUserStarBalance(walletPubkey: string): Promise<bigint> {
 async function fetchClaimedStardust(walletPubkey: string): Promise<bigint> {
     return measure(async (m) => {
         const wallet = new PublicKey(walletPubkey);
-        const programId = new PublicKey(config.programId);
-
-        // Derive UserClaim PDA: ["user_claim", user_pubkey]
-        const [userClaimPda] = PublicKey.findProgramAddressSync(
-            [Buffer.from("user_claim"), wallet.toBuffer()],
-            programId
-        );
+        const poolPda = deriveRewardsPoolPda(getRewardsTokenMint());
+        const userClaimPda = deriveRewardsUserClaimPda(poolPda, wallet);
 
         // Fetch the account data
         const accountInfo = await m(
@@ -537,15 +701,12 @@ async function fetchClaimedStardust(walletPubkey: string): Promise<bigint> {
             return 0n; // User hasn't claimed yet
         }
 
-        // Parse UserClaim account data:
-        // [8 bytes discriminator] [32 bytes user] [8 bytes claimed_amount] [8 bytes timestamp] [1 byte bump]
         const data = accountInfo.data;
-        if (data.length < 48) {
+        if (data.length < 81) {
             return 0n; // Invalid data
         }
 
-        // Read u64 little-endian at offset 40
-        const claimedAmount = data.readBigUInt64LE(40);
+        const claimedAmount = data.readBigUInt64LE(72);
         return claimedAmount;
     }, { label: 'fetchClaimedStardust', wallet: walletPubkey.slice(0, 8) });
 }
@@ -743,31 +904,35 @@ async function updateEarnings() {
 }
 
 /**
- * Create Ed25519 signature data for claim verification
- * 
- * The message format is: [UserPubkey(32) | LifetimeEarned(8)]
- * This matches what the on-chain program expects
+ * Create Ed25519 signature data for claim verification.
+ *
+ * Message layout:
+ * [user(32) | pool(32) | cumulative_earned(8) | observed_total_deposits(8) | expires_at(8)]
  */
 function createSignatureData(
     userPubkey: PublicKey,
-    lifetimeEarned: bigint,
-    solReward: bigint
+    poolPubkey: PublicKey,
+    cumulativeEarned: bigint,
+    observedTotalDeposits: bigint,
+    expiresAt: bigint,
 ): {
     signature: string;
     message: string;
     publicKey: string;
-    lifetimeEarned: string;
-    solReward: string;
+    cumulativeEarned: string;
+    observedTotalDeposits: string;
+    expiresAt: string;
     ed25519Instruction: {
         programId: string;
         data: string; // base64
     };
 } {
-    // Message = [UserPubkey(32) | LifetimeEarned(8) | SolReward(8)]
-    const message = Buffer.alloc(48);
+    const message = Buffer.alloc(88);
     message.set(userPubkey.toBuffer(), 0);
-    message.writeBigUInt64LE(lifetimeEarned, 32);
-    message.writeBigUInt64LE(solReward, 40);
+    message.set(poolPubkey.toBuffer(), 32);
+    message.writeBigUInt64LE(cumulativeEarned, 64);
+    message.writeBigUInt64LE(observedTotalDeposits, 72);
+    message.writeBigInt64LE(expiresAt, 80);
 
     // Sign the message
     const signature = nacl.sign.detached(message, authority.secretKey);
@@ -784,8 +949,9 @@ function createSignatureData(
         signature: bs58.encode(signature),
         message: bs58.encode(message),
         publicKey: authority.publicKey.toBase58(),
-        lifetimeEarned: lifetimeEarned.toString(),
-        solReward: solReward.toString(),
+        cumulativeEarned: cumulativeEarned.toString(),
+        observedTotalDeposits: observedTotalDeposits.toString(),
+        expiresAt: expiresAt.toString(),
         ed25519Instruction: {
             programId: ed25519Ix.programId.toBase58(),
             data: Buffer.from(ed25519Ix.data).toString("base64"),
@@ -1175,7 +1341,12 @@ async function handler(req: Request): Promise<Response | null> {
             const wallet = url.searchParams.get("wallet");
             if (!wallet) return json({ error: "wallet required" }, 400);
 
-            const earnings = earningsStore.get(wallet);
+            const poolState = await fetchRewardsPoolState();
+            if (!poolState.exists) {
+                return json({ error: "rewards pool not initialized" }, 400);
+            }
+
+            const earnings = getHolderEarningsForClaim(wallet);
             if (!earnings || earnings.lifetimeEarned === 0n) {
                 return json({ error: "no earnings found" }, 404);
             }
@@ -1185,27 +1356,36 @@ async function handler(req: Request): Promise<Response | null> {
                 return json({ error: "nothing to claim" }, 400);
             }
 
-            let totalUnclaimed = 0n;
-            for (const e of earningsStore.values()) {
-                totalUnclaimed += (e.lifetimeEarned - e.claimed);
-            }
-
-            let solReward = 0n;
-            if (totalUnclaimed > 0n) {
-                // Percentage of treasury
-                solReward = (unclaimed * BigInt(poolBalance)) / totalUnclaimed;
-            }
-
             const userPubkey = new PublicKey(wallet);
-            const data = createSignatureData(userPubkey, earnings.lifetimeEarned, solReward);
+            const solReward = earnings.source === "mements" ? unclaimed : (() => {
+                let totalUnclaimed = 0n;
+                for (const e of earningsStore.values()) {
+                    totalUnclaimed += (e.lifetimeEarned - e.claimed);
+                }
+                if (totalUnclaimed <= 0n) return 0n;
+                return (unclaimed * BigInt(poolBalance)) / totalUnclaimed;
+            })();
+            const cumulativeEarned = earnings.source === "mements"
+                ? earnings.lifetimeEarned
+                : earnings.claimed + solReward;
+            const data = createSignatureData(
+                userPubkey,
+                poolState.poolPda,
+                cumulativeEarned,
+                poolState.totalReceived,
+                BigInt(Math.floor(Date.now() / 1000) + 300),
+            );
 
             return json({
                 ...data,
                 wallet,
                 unclaimed: unclaimed.toString(),
-                totalUnclaimed: totalUnclaimed.toString(),
+                totalUnclaimed: earnings.source === "mements" ? unclaimed.toString() : "0",
                 solReward: solReward.toString(),
                 poolBalance: poolBalance.toString(),
+                pool: poolState.poolPda.toBase58(),
+                treasury: poolState.treasuryPda.toBase58(),
+                totalDeposited: poolState.totalReceived.toString(),
             });
         } catch (e) {
             return json({ error: "invalid request" }, 400);
@@ -1340,6 +1520,8 @@ async function handler(req: Request): Promise<Response | null> {
             description: 'Every round, the entire treasury goes to one weighted-random winner',
             poolBalance,
             poolBalanceFormatted: (poolBalance / 1e9).toFixed(2) + " SOL",
+            totalTreasuryReceived: Number(poolTotalDeposited),
+            totalTreasuryReceivedFormatted: (Number(poolTotalDeposited) / 1e9).toFixed(2) + " SOL",
             totalRounds: totalAdminSpins,
             totalDistributed,
             totalDistributedFormatted: (totalDistributed / 1e9).toFixed(3) + " SOL",
@@ -1431,6 +1613,8 @@ async function handler(req: Request): Promise<Response | null> {
                 totalDistributedFormatted: (totalDistributed / 1e9).toFixed(4) + " SOL",
                 poolBalance,
                 poolBalanceFormatted: (poolBalance / 1e9).toFixed(4) + " SOL",
+                totalTreasuryReceived: Number(poolTotalDeposited),
+                totalTreasuryReceivedFormatted: (Number(poolTotalDeposited) / 1e9).toFixed(4) + " SOL",
             },
             rpcStatus: {
                 online: rpcStatus.online,
@@ -1555,14 +1739,22 @@ async function handler(req: Request): Promise<Response | null> {
 
     // POST /api/claim-gravity-tx - Build unsigned claim gravity transaction
     // Backend signs the user's lifetime earnings and SOL reward, user signs the transaction
-    if (method === "POST" && path === "/api/claim-gravity-tx") {
+    if (method === "POST" && (path === "/api/claim-gravity-tx" || path === "/api/claim-stardust-tx")) {
         try {
             const body = await req.json();
             const { wallet: userWallet } = body;
             if (!userWallet) return json({ error: "wallet required" }, 400);
 
+            const poolState = await fetchRewardsPoolState();
+            if (!poolState.exists) {
+                return json({ error: "rewards pool not initialized" }, 400);
+            }
+            if (!poolState.active) {
+                return json({ error: "rewards pool is paused" }, 400);
+            }
+
             // Get user's lifetime earned stardust
-            const earnings = earningsStore.get(userWallet);
+            const earnings = getHolderEarningsForClaim(userWallet);
             if (!earnings || earnings.lifetimeEarned <= 0n) {
                 return json({ error: "no stardust earned yet" }, 400);
             }
@@ -1573,33 +1765,38 @@ async function handler(req: Request): Promise<Response | null> {
 
             if (unclaimed <= 0n) return json({ error: "nothing to claim" }, 400);
 
-            let totalUnclaimed = 0n;
-            for (const e of earningsStore.values()) {
-                totalUnclaimed += (e.lifetimeEarned - e.claimed);
+            const solReward = earnings.source === "mements" ? unclaimed : (() => {
+                let totalUnclaimed = 0n;
+                for (const e of earningsStore.values()) {
+                    totalUnclaimed += (e.lifetimeEarned - e.claimed);
+                }
+                if (totalUnclaimed <= 0n) return 0n;
+                return (unclaimed * BigInt(poolBalance)) / totalUnclaimed;
+            })();
+            if (solReward <= 0n) {
+                return json({ error: "nothing to claim" }, 400);
             }
 
-            let solReward = 0n;
-            if (totalUnclaimed > 0n) {
-                solReward = (unclaimed * BigInt(poolBalance)) / totalUnclaimed;
-            }
+            const cumulativeEarned = earnings.source === "mements"
+                ? earnings.lifetimeEarned
+                : earnings.claimed + solReward;
+            const observedTotalDeposits = poolState.totalReceived;
+            const expiresAt = BigInt(Math.floor(Date.now() / 1000) + 300);
 
             // Create backend-signed Ed25519 verification data
-            const sigData = createSignatureData(userPubkey, lifetimeEarned, solReward);
-
-            // Build the transaction with Ed25519 verify + claim_stardust instructions
-            const { Transaction, TransactionInstruction, SystemProgram: SysProgram } = await import("@solana/web3.js");
-            const { getAssociatedTokenAddressSync, ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } = await import("@solana/spl-token");
-
-            const STARDUST_PROGRAM_ID = new PublicKey(config.programId); // HsydRBzU...
-            const stardustMint = new PublicKey(config.stardustMint);
-            const [stardustStatePda] = PublicKey.findProgramAddressSync([Buffer.from("state")], STARDUST_PROGRAM_ID);
-            const [userClaimPda] = PublicKey.findProgramAddressSync(
-                [Buffer.from("user_claim"), userPubkey.toBuffer()],
-                STARDUST_PROGRAM_ID
+            const sigData = createSignatureData(
+                userPubkey,
+                poolState.poolPda,
+                cumulativeEarned,
+                observedTotalDeposits,
+                expiresAt,
             );
-            const [treasuryPoolPda] = PublicKey.findProgramAddressSync([Buffer.from("treasury_pool")], STARDUST_PROGRAM_ID);
 
-            const userTokenAccount = getAssociatedTokenAddressSync(stardustMint, userPubkey);
+            // Build the transaction with Ed25519 verify + rewards claim instructions
+            const { Transaction, TransactionInstruction, SystemProgram: SysProgram } = await import("@solana/web3.js");
+            const rewardsProgramId = getRewardsProgramId();
+            const configPda = deriveRewardsConfigPda();
+            const userClaimPda = deriveRewardsUserClaimPda(poolState.poolPda, userPubkey);
 
             // 1. Ed25519 signature verification instruction
             const ed25519Ix = new TransactionInstruction({
@@ -1608,30 +1805,29 @@ async function handler(req: Request): Promise<Response | null> {
                 data: Buffer.from(sigData.ed25519Instruction.data, "base64"),
             });
 
-            // 2. claim_stardust(lifetime_earned, sol_reward) instruction
+            // 2. claim(cumulative_earned, observed_total_deposits, expires_at)
             const crypto = await import("crypto");
-            const claimDiscHash = crypto.createHash("sha256").update("global:claim_stardust").digest();
+            const claimDiscHash = crypto.createHash("sha256").update("global:claim").digest();
             const claimDiscriminator = claimDiscHash.slice(0, 8);
 
-            const claimData = Buffer.alloc(8 + 8 + 8); // discriminator + u64 lifetime_earned + u64 sol_reward
+            const claimData = Buffer.alloc(8 + 8 + 8 + 8);
             claimDiscriminator.copy(claimData, 0);
-            claimData.writeBigUInt64LE(lifetimeEarned, 8);
-            claimData.writeBigUInt64LE(solReward, 16);
+            claimData.writeBigUInt64LE(cumulativeEarned, 8);
+            claimData.writeBigUInt64LE(observedTotalDeposits, 16);
+            claimData.writeBigInt64LE(expiresAt, 24);
 
             const INSTRUCTIONS_SYSVAR = new PublicKey("Sysvar1nstructions1111111111111111111111111");
 
             const claimIx = new TransactionInstruction({
-                programId: STARDUST_PROGRAM_ID,
+                programId: rewardsProgramId,
                 keys: [
                     { pubkey: userPubkey, isSigner: true, isWritable: true },
                     { pubkey: userClaimPda, isSigner: false, isWritable: true },
-                    { pubkey: stardustStatePda, isSigner: false, isWritable: false },
-                    { pubkey: treasuryPoolPda, isSigner: false, isWritable: true },
-                    { pubkey: stardustMint, isSigner: false, isWritable: true },
-                    { pubkey: userTokenAccount, isSigner: false, isWritable: true },
+                    { pubkey: configPda, isSigner: false, isWritable: false },
+                    { pubkey: poolState.poolPda, isSigner: false, isWritable: true },
+                    { pubkey: poolState.treasuryPda, isSigner: false, isWritable: true },
                     { pubkey: INSTRUCTIONS_SYSVAR, isSigner: false, isWritable: false },
                     { pubkey: SysProgram.programId, isSigner: false, isWritable: false },
-                    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
                 ],
                 data: claimData,
             });
@@ -1646,8 +1842,11 @@ async function handler(req: Request): Promise<Response | null> {
                 transaction: Buffer.from(serialized).toString("base64"),
                 blockhash,
                 lastValidBlockHeight,
-                lifetimeEarned: lifetimeEarned.toString(),
+                cumulativeEarned: cumulativeEarned.toString(),
+                observedTotalDeposits: observedTotalDeposits.toString(),
                 solReward: solReward.toString(),
+                pool: poolState.poolPda.toBase58(),
+                treasury: poolState.treasuryPda.toBase58(),
                 authorityPublicKey: authority.publicKey.toBase58(),
             });
         } catch (e: any) {

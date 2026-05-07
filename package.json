@@ -1,10 +1,10 @@
 {
-    "name": "stardust-protocol",
+    "name": "fairfun-protocol",
     "version": "0.1.0",
     "description": "FairFun protocol workspace",
     "scripts": {
-        "build": "cargo build-sbf --manifest-path programs/anchor-fairfun/Cargo.toml && cargo build-sbf --manifest-path programs/star-nft/Cargo.toml && cargo build-sbf --manifest-path programs/wheel/Cargo.toml",
-        "test": "npm run build && cargo test -p anchor-fairfun && cargo check --workspace"
+        "build": "cargo build-sbf --manifest-path programs/anchor-fairfun/Cargo.toml && cargo build-sbf --manifest-path programs/fairfun-rewards/Cargo.toml && cargo build-sbf --manifest-path programs/star-nft/Cargo.toml && cargo build-sbf --manifest-path programs/wheel/Cargo.toml",
+        "test": "npm run build && cargo test -p anchor-fairfun && cargo test -p fairfun-rewards && cargo check --workspace"
     },
     "dependencies": {
         "@coral-xyz/anchor": "^0.32.1",

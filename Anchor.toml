@@ -7,16 +7,19 @@ skip-lint = false
 
 [programs.localnet]
 anchor_fairfun = "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A"
+fairfun_rewards = "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A"
 wheel = "GXY4Red3mPt1onXkV1C2A3m5dR7xFdZiP8A9gN7K4bE5"
 star_nft = "HxqX7EZCWbYvjrZDJaVtU5y3ZjVXMEccWiahao9MPeKB"
 
 [programs.devnet]
 anchor_fairfun = "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A"
+fairfun_rewards = "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A"
 wheel = "GXY4Red3mPt1onXkV1C2A3m5dR7xFdZiP8A9gN7K4bE5"
 star_nft = "HxqX7EZCWbYvjrZDJaVtU5y3ZjVXMEccWiahao9MPeKB"
 
 [programs.mainnet]
 anchor_fairfun = "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A"
+fairfun_rewards = "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A"
 wheel = "3M12BfitAEYz14WJBMnjahEuSvhsWhjfGJXbzur26o2U"
 
 [registry]

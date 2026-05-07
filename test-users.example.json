@@ -1,0 +1,10 @@
+[
+  {
+    "id": 1,
+    "publicKey": "REPLACE_WITH_TEST_USER_PUBLIC_KEY",
+    "secretKey": "REPLACE_WITH_BASE64_SECRET_KEY",
+    "starTokenAccount": "REPLACE_WITH_STAR_ATA",
+    "stardustTokenAccount": "REPLACE_WITH_STARDUST_ATA",
+    "starBalance": 0
+  }
+]

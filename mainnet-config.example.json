@@ -1,0 +1,12 @@
+{
+  "programId": "REPLACE_WITH_MAINNET_PROGRAM_ID",
+  "authority": {
+    "publicKey": "REPLACE_WITH_MAINNET_AUTHORITY_PUBLIC_KEY",
+    "secretKey": "REPLACE_WITH_BASE64_SECRET_KEY"
+  },
+  "stardustMint": "REPLACE_WITH_MAINNET_STARDUST_MINT",
+  "statePda": "REPLACE_WITH_MAINNET_STATE_PDA",
+  "starTokenMint": "REPLACE_WITH_MAINNET_STAR_TOKEN_MINT",
+  "network": "mainnet-beta",
+  "rpcUrl": "https://api.mainnet-beta.solana.com"
+}
