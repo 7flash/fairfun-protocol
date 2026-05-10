@@ -1,21 +1,17 @@
 {
     "compilerOptions": {
-        "types": [
-            "mocha",
-            "chai",
-            "node"
-        ],
-        "typeRoots": [
-            "./node_modules/@types"
-        ],
-        "lib": [
-            "es2020"
-        ],
-        "module": "commonjs",
-        "target": "es2020",
+        "types": ["bun", "node"],
+        "lib": ["ESNext", "DOM", "DOM.Iterable"],
+        "jsx": "react-jsx",
+        "jsxImportSource": "tradjs/client",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "target": "ESNext",
         "esModuleInterop": true,
         "resolveJsonModule": true,
         "strict": true,
+        "noEmit": true,
         "skipLibCheck": true
-    }
+    },
+    "include": ["app/**/*", "lib/**/*", "server.ts", "indexer.ts", "scripts/**/*.ts"]
 }

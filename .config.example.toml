@@ -1,0 +1,26 @@
+[app]
+port = 3000
+site_title = "FairFun Rewards"
+project_name = "FairFun"
+hero_badge = "Built for Solana Frontier Hackathon"
+hero_title = "Reward the holders who held."
+hero_description = "FairFun measures loyalty in USD-minutes. Every minute, each wallet adds gravity equal to the current dollar value of the project's token balance. Revenue is split by gravity, not by last-minute snapshots."
+
+[chain]
+rpc_url = "https://solana-rpc.publicnode.com"
+
+[token]
+mint = "REPLACE_WITH_YOUR_TOKEN_MINT"
+symbol = "TOKEN"
+
+[rewards]
+program_id = "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A"
+treasury_address = "REPLACE_WITH_YOUR_TREASURY_PDA"
+claim_api_url = ""
+explorer_tx_base_url = "https://solscan.io/tx/"
+
+[indexer]
+db_path = "./data/leaderboard.db"
+interval_ms = 60000
+launch_timestamp = 0
+token_price_usd = 0

@@ -6,6 +6,8 @@ target
 test-ledger
 *.db
 *.log
+data/
+.config.toml
 
 # Local machine and secret-bearing config
 local-config.json

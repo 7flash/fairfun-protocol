@@ -1,16 +1,31 @@
 {
     "name": "fairfun-protocol",
     "version": "0.1.0",
-    "description": "FairFun rewards protocol",
+    "description": "FairFun rewards protocol, indexer, and tradjs app",
     "scripts": {
         "build": "cargo build-sbf --manifest-path programs/fairfun-rewards/Cargo.toml",
-        "test": "npm run build && cargo test -p fairfun-rewards && cargo check --workspace"
+        "check:program": "cargo check --workspace",
+        "test:program": "cargo test -p fairfun-rewards",
+        "typecheck": "tsc --noEmit",
+        "dev:web": "bun --watch server.ts",
+        "dev:indexer": "bun --watch indexer.ts",
+        "start:web": "bun server.ts",
+        "start:indexer": "bun indexer.ts",
+        "test": "npm run build && npm run test:program && npm run check:program && npm run typecheck"
     },
     "dependencies": {
         "@coral-xyz/anchor": "^0.32.1",
-        "@solana/web3.js": "^1.98.4"
+        "@solana/web3.js": "^1.98.4",
+        "autoprefixer": "^10.5.0",
+        "measure-fn": "^3.11.0",
+        "postcss": "^8.5.14",
+        "sqlite-zod-orm": "^3.26.1",
+        "tailwindcss": "^4.3.0",
+        "tradjs": "^4.0.0",
+        "zod": "^3.25.67"
     },
     "devDependencies": {
+        "@types/bun": "^1.3.13",
         "@types/node": "^20.10.0",
         "typescript": "^5.3.3"
     }
