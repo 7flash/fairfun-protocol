@@ -2,34 +2,101 @@
 
 Built for Solana Frontier Hackathon.
 
-## Reward The Holders Who Held
+## What FairFun Is
 
-FairFun is a Solana rewards program that measures loyalty in `USD-minutes`.
+FairFun is a Solana rewards program.
 
-Every minute, each wallet earns gravity equal to the current dollar value of the project's token it holds. Revenue share, continuous airdrops, and other recurring distributions flow to gravity, not to whoever showed up an hour ago.
+Its job is simple:
 
-The current FairFun landing flow and backend in this repo are built around that model.
+- measure how long people really held
+- measure how much value they really held
+- pay rewards to those holders fairly
+
+Most airdrops are based on a snapshot.
+
+That is weak.
+
+Someone can buy right before the snapshot and get treated like a real long-term holder.
+
+FairFun uses a different idea.
+
+FairFun measures loyalty in `USD-minutes`.
+
+## The Core Idea
+
+Every wallet has one number:
+
+`gravity`
+
+Gravity means:
+
+how much dollar value this wallet held, multiplied by how long it held it.
+
+Every minute:
+
+```text
+gravity += current USD value of the wallet's token balance
+```
+
+Example:
+
+- hold `$1,000` for `60` minutes -> earn `60,000 gravity`
+- hold `$5,000` for `10` minutes -> earn `50,000 gravity`
+
+If a holder sells, future gravity grows more slowly.
+
+Past gravity stays earned.
+
+That is the whole system.
+
+## Why This Is Better
+
+Snapshot rewards measure presence.
+
+FairFun rewards measure commitment.
+
+That means:
+
+- long-term holders naturally gain more weight
+- late entrants do not get the same treatment as loyal holders
+- rewards can run continuously instead of through one-off snapshot games
+
+## How Rewards Are Split
+
+When a project wants to share revenue or run an airdrop, FairFun looks at each wallet's share of total gravity.
+
+Formula:
+
+```text
+user share = user gravity / total gravity
+user payout = reward pool * user share
+```
+
+So rewards go to the wallets that actually held value over time.
 
 ## Live Example: `$GXY`
 
-The live FairFun demo uses `$GXY` leaderboard data to simulate a continuous airdrop:
+The current FairFun demo uses `$GXY`.
+
+It simulates a continuous airdrop with:
 
 - heartbeat: `60s`
 - metric: `USD-minutes`
 - network: `Solana`
-- revenue shared continuously with gravity-weighted distribution
+- revenue shared continuously by gravity weight
 - mint: `PKikg1HNZinFvMgqk76aBDY4fF1fgGYQ3tv9kKypump`
 
-In the product, the simulation shows:
+The live demo shows:
 
-- current revenue-per-minute inflow
-- simulated time progression
-- each wallet's USD-held position
-- accumulated gravity
+- revenue per minute
+- each wallet's USD-held amount
+- gravity
 - gravity share
-- projected payout
+- payout projection
 
-The point of the demo is simple: gravity increases every minute a wallet actually holds value, and payout share follows that gravity.
+The point of the demo is simple:
+
+if a wallet holds more value for more time, it earns more gravity, and therefore gets a larger share of rewards.
 
 ### `$GXY` Onchain Addresses
 
@@ -40,72 +107,63 @@ For the current live `$GXY` setup:
 - rewards pool PDA: `JymMcQ1vgbBexcx8QHTNDSyzGvN5aYkmaUGJ4U7YGwq`
 - rewards treasury PDA: `9PjzMHWupLg8WmHhrHpZ8ksFDunYoNexpVWosyna7qh`
 
-They are derived deterministically from the program ID and token mint:
+They are derived deterministically:
 
 ```text
 pool PDA     = PDA(["rewards_pool", token_mint], program_id)
 treasury PDA = PDA(["rewards_treasury", token_mint], program_id)
 ```
 
-So for `$GXY` specifically:
+For `$GXY` specifically:
 
 ```text
 pool PDA     = PDA(["rewards_pool", "PKikg1HNZinFvMgqk76aBDY4fF1fgGYQ3tv9kKypump"], "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A")
 treasury PDA = PDA(["rewards_treasury", "PKikg1HNZinFvMgqk76aBDY4fF1fgGYQ3tv9kKypump"], "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A")
 ```
 
-This is the same derivation used by the backend and pool registration helper in:
+This is the same derivation used in:
 
 - [backend/server.ts](/C:/Code/fairfun-protocol/backend/server.ts:123)
 - [scripts/create-pool.ts](/C:/Code/fairfun-protocol/scripts/create-pool.ts:1)
 
-## How It Works
+## How The System Is Built
 
-FairFun reduces holder rewards to one number per wallet: `gravity`.
+FairFun has two parts:
 
-Gravity is a monotonic integer that tracks cumulative `USD-minutes` of holding.
+1. offchain gravity calculation
+2. onchain reward settlement
 
-### 1. A holder buys the token
+### Offchain
 
-The wallet becomes part of the tracked holder set for the configured mint.
+The backend:
 
-### 2. Every minute, gravity ticks up
+- tracks holder balances
+- prices those balances in USD
+- updates each wallet's cumulative earned amount
+- signs claim payloads for users
 
-For each holder:
+### Onchain
 
-```text
-gravity += current_usd_value_of_wallet_balance
-```
+The Solana program:
 
-Hold `$1,000` for `60` minutes and that wallet earns `60,000` gravity.
+- verifies the backend signature
+- verifies that the claim is still valid
+- verifies that the pool has enough funds
+- transfers only the user's unclaimed amount
 
-### 3. Selling cools future accrual
+This hybrid design is intentional.
 
-Gravity is based on the balance actually held now. If the wallet sells or transfers out, future accrual drops with it. Previously earned gravity remains earned.
+Computing holder balances and USD value continuously is much easier offchain.
 
-### 4. Rewards flow by gravity share
+Moving money must still be guarded onchain.
 
-When revenue or airdrop capital enters the system, distribution is proportional to each wallet's share of total gravity at that moment.
+## The Onchain Program
 
-That is the core FairFun claim:
+The current production-facing program in this repo is:
 
-- long-term holders keep compounding their weight
-- short-term entrants do not get equal treatment just for appearing near distribution time
-- recurring rewards can run continuously instead of as ad hoc snapshots
+`fairfun_rewards`
 
-## Program Model
-
-The onchain program currently implemented in this repo is `fairfun_rewards`.
-
-It uses:
-
-- one global config PDA with an admin and backend signing authority
-- one reward pool PDA per tracked token mint
-- one SOL treasury PDA per pool
-- one user-claim PDA per `(pool, user)` pair
-- backend-authorized claims verified with Solana Ed25519 instruction introspection
-
-Current deployed program ID:
+Program ID:
 
 `HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A`
 
@@ -119,16 +177,53 @@ Program source:
 
 - [programs/fairfun-rewards/src/lib.rs](/C:/Code/fairfun-protocol/programs/fairfun-rewards/src/lib.rs:1)
 
-## Current Claim Flow
+## Program Structure
 
-The current backend/frontend flow in this repo is:
+The program uses four main accounts.
 
-1. The backend derives the reward pool and treasury PDAs for the configured token mint.
-2. The backend computes each wallet's current cumulative earned amount.
-3. The backend signs a short-lived claim payload.
-4. The frontend requests an unsigned claim transaction.
-5. The user signs and submits it.
-6. The program verifies the signature and transfers the unclaimed SOL delta from the treasury PDA.
+### 1. Global config PDA
+
+`rewards_config`
+
+Stores:
+
+- admin
+- backend authority public key
+
+### 2. Pool PDA
+
+`rewards_pool + token_mint`
+
+Stores:
+
+- which token mint this pool is for
+- total deposited
+- total claimed
+- whether the pool is active
+
+### 3. Treasury PDA
+
+`rewards_treasury + token_mint`
+
+Stores:
+
+- the SOL used to pay rewards
+
+### 4. User claim PDA
+
+`rewards_user_claim + pool + user`
+
+Stores:
+
+- how much cumulative value the user has already claimed
+
+## How Claims Work
+
+The backend does not sign "pay this wallet exactly X right now".
+
+It signs the user's cumulative earned amount.
+
+That is important.
 
 The signed message is:
 
@@ -136,18 +231,65 @@ The signed message is:
 [user | pool | cumulative_earned | observed_total_deposits | expires_at]
 ```
 
-The contract stores prior claimed cumulative value and only lets the wallet withdraw the delta.
+The program then calculates:
 
-## Why This Design
+```text
+claimable = cumulative_earned - previously_claimed
+```
 
-The important design choice is that the backend signs `cumulative_earned`, not a one-off reward amount.
+That means the user can only withdraw the delta.
 
-That gives FairFun:
+This makes accounting simple and monotonic.
 
-- monotonic accounting
-- replay resistance via expiry and cumulative claim state
-- pool-bounded payouts
-- flexible offchain gravity calculation without losing onchain settlement guarantees
+## What The Program Checks
+
+Before paying, the program checks:
+
+- the signature is valid
+- the signer matches the configured backend authority
+- the signature is not expired
+- the pool is active
+- `cumulative_earned` did not go backwards
+- the observed deposits do not exceed onchain received funds
+- the treasury has enough SOL
+
+If those checks pass, the program sends the user's unclaimed amount from the treasury PDA.
+
+## Trust Model
+
+FairFun is not fully trustless.
+
+The backend is trusted to:
+
+- compute gravity correctly
+- use correct price data
+- sign honest cumulative values
+
+But payout settlement is still protected onchain.
+
+That is the tradeoff:
+
+- heavy continuous accounting happens offchain
+- money movement and claim limits are enforced onchain
+
+## Integrate
+
+The integration model is simple:
+
+1. choose your token mint
+2. deploy `fairfun_rewards`
+3. initialize the backend signer
+4. register a pool for your mint
+5. fund the treasury PDA with SOL
+6. run gravity accounting offchain
+7. let users claim their share
+
+FairFun handles:
+
+- gravity-based reward logic
+- pool accounting
+- claim authorization format
+- onchain payout settlement
 
 ## Repository Layout
 
@@ -157,27 +299,7 @@ That gives FairFun:
 - `scripts/create-pool.ts` helper for registering a rewards pool
 - `tests/` and Rust tests under `programs/fairfun-rewards/tests/`
 
-This workspace also still contains adjacent modules such as `anchor_fairfun`, `wheel`, and `star_nft`, but FairFun Rewards is the main production-facing holder rewards flow documented here.
-
-## Integrate
-
-Ship fair rewards in an afternoon.
-
-The intended integration model is:
-
-1. point FairFun at your token mint
-2. track holder balances and price them in USD
-3. accumulate gravity continuously
-4. fund the rewards treasury with revenue, incentives, or airdrop budget
-5. let holders claim their gravity-weighted share
-
-What FairFun handles:
-
-- gravity bookkeeping
-- pool state
-- claim authorization format
-- proportional payout settlement
-- recurring, automated reward claims against a funded treasury
+This workspace also contains older and adjacent modules such as `anchor_fairfun`, `wheel`, and `star_nft`, but `fairfun_rewards` is the main holder-rewards program documented here.
 
 ## Local Development
 
@@ -189,7 +311,7 @@ Prerequisites:
 4. Node.js and npm
 5. Anchor-compatible wallet config
 
-Install dependencies:
+Install:
 
 ```bash
 npm install
@@ -232,14 +354,14 @@ Important backend values:
 
 ## Deploying `fairfun_rewards`
 
-This repo includes a tracked pool-registration helper, but not a full polished tracked deployment runner for the entire initialize flow. The safe deployment order is:
+The deployment order is:
 
 1. build the program
-2. deploy the `fairfun_rewards` binary
-3. initialize the global config with your backend signer public key
-4. register a pool for your token mint
-5. fund the pool treasury PDA with SOL
-6. point the backend at the deployed program ID, signer, and token mint
+2. deploy the binary
+3. initialize the global config with the backend signer public key
+4. register a pool for the token mint
+5. fund the treasury PDA with SOL
+6. point the backend at the correct program ID, signer, and mint
 
 ### Build
 
@@ -263,7 +385,9 @@ Accounts:
 
 ### Register A Pool
 
-Use [scripts/create-pool.ts](/C:/Code/fairfun-protocol/scripts/create-pool.ts:1) with your preferred TypeScript runner in an Anchor-aware environment. It derives:
+Use [scripts/create-pool.ts](/C:/Code/fairfun-protocol/scripts/create-pool.ts:1) with your preferred TypeScript runner in an Anchor-aware environment.
+
+It derives:
 
 - `rewards_config`
 - `rewards_pool + token_mint`
@@ -277,7 +401,9 @@ register_pool(token_mint)
 
 ### Fund The Treasury
 
-After pool creation, send SOL into the treasury PDA. The `deposit(amount)` instruction is the intended path when you want onchain pool accounting to track inflow consistently.
+After pool creation, send SOL into the treasury PDA.
+
+If you want onchain accounting to reflect inflow cleanly, use the program's `deposit(amount)` path.
 
 ## Production Notes
 
@@ -285,5 +411,5 @@ After pool creation, send SOL into the treasury PDA. The `deposit(amount)` instr
 - claims fail if cumulative earned decreases
 - claims fail if observed deposits exceed onchain received funds
 - claims fail if the pool is paused
-- the treasury PDA must hold enough SOL for settlement
-- the backend signer is critical secret material and should be handled accordingly
+- treasury must hold enough SOL
+- the backend signer is critical secret material
