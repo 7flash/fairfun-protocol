@@ -4,7 +4,6 @@
 node_modules
 target
 test-ledger
-backend/stardust.db
 *.db
 *.log
 
@@ -13,6 +12,3 @@ local-config.json
 mainnet-config.json
 mainnet-authority.json
 test-users.json
-backend/test-users.json
-backend/authority.json
-scripts/run-mements.cmd

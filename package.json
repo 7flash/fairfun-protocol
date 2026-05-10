@@ -1,27 +1,17 @@
 {
     "name": "fairfun-protocol",
     "version": "0.1.0",
-    "description": "FairFun protocol workspace",
+    "description": "FairFun rewards protocol",
     "scripts": {
-        "build": "cargo build-sbf --manifest-path programs/anchor-fairfun/Cargo.toml && cargo build-sbf --manifest-path programs/fairfun-rewards/Cargo.toml && cargo build-sbf --manifest-path programs/star-nft/Cargo.toml && cargo build-sbf --manifest-path programs/wheel/Cargo.toml",
-        "test": "npm run build && cargo test -p anchor-fairfun && cargo test -p fairfun-rewards && cargo check --workspace"
+        "build": "cargo build-sbf --manifest-path programs/fairfun-rewards/Cargo.toml",
+        "test": "npm run build && cargo test -p fairfun-rewards && cargo check --workspace"
     },
     "dependencies": {
         "@coral-xyz/anchor": "^0.32.1",
-        "@ments/db": "^1.6.1",
-        "@ments/utils": "^1.6.1",
-        "@ments/web": "^1.15.0",
-        "@solana/spl-token": "^0.4.14",
-        "@solana/web3.js": "^1.98.4",
-        "tweetnacl": "^1.0.3"
+        "@solana/web3.js": "^1.98.4"
     },
     "devDependencies": {
-        "@types/chai": "^4.3.11",
-        "@types/mocha": "^10.0.6",
         "@types/node": "^20.10.0",
-        "chai": "^4.3.10",
-        "mocha": "^10.2.0",
-        "ts-mocha": "^10.0.0",
         "typescript": "^5.3.3"
     }
 }

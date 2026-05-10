@@ -1,5 +1,0 @@
-# Frontend config
-BUN_PORT = 3001
-
-# Backend URL for API proxy
-BACKEND_URL = "http://localhost:3005"
