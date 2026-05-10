@@ -18,6 +18,7 @@ The live FairFun demo uses `$GXY` leaderboard data to simulate a continuous aird
 - metric: `USD-minutes`
 - network: `Solana`
 - revenue shared continuously with gravity-weighted distribution
+- mint: `PKikg1HNZinFvMgqk76aBDY4fF1fgGYQ3tv9kKypump`
 
 In the product, the simulation shows:
 
@@ -29,6 +30,34 @@ In the product, the simulation shows:
 - projected payout
 
 The point of the demo is simple: gravity increases every minute a wallet actually holds value, and payout share follows that gravity.
+
+### `$GXY` Onchain Addresses
+
+For the current live `$GXY` setup:
+
+- rewards program: `HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A`
+- token mint: `PKikg1HNZinFvMgqk76aBDY4fF1fgGYQ3tv9kKypump`
+- rewards pool PDA: `JymMcQ1vgbBexcx8QHTNDSyzGvN5aYkmaUGJ4U7YGwq`
+- rewards treasury PDA: `9PjzMHWupLg8WmHhrHpZ8ksFDunYoNexpVWosyna7qh`
+
+They are derived deterministically from the program ID and token mint:
+
+```text
+pool PDA     = PDA(["rewards_pool", token_mint], program_id)
+treasury PDA = PDA(["rewards_treasury", token_mint], program_id)
+```
+
+So for `$GXY` specifically:
+
+```text
+pool PDA     = PDA(["rewards_pool", "PKikg1HNZinFvMgqk76aBDY4fF1fgGYQ3tv9kKypump"], "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A")
+treasury PDA = PDA(["rewards_treasury", "PKikg1HNZinFvMgqk76aBDY4fF1fgGYQ3tv9kKypump"], "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A")
+```
+
+This is the same derivation used by the backend and pool registration helper in:
+
+- [backend/server.ts](/C:/Code/fairfun-protocol/backend/server.ts:123)
+- [scripts/create-pool.ts](/C:/Code/fairfun-protocol/scripts/create-pool.ts:1)
 
 ## How It Works
 
