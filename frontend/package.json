@@ -14,7 +14,6 @@
         "@solana/web3.js": "^1.87.6",
         "bs58": "^5.0.0",
         "react": "^18.2.0",
-        "react-custom-roulette": "^1.4.1",
         "react-dom": "^18.2.0",
         "tweetnacl": "^1.0.3"
     }

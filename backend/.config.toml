@@ -1,4 +1,4 @@
-# Backend config for stardust-protocol
+# Backend config for fairfun-rewards
 BUN_PORT = 3005
 
 [solana]

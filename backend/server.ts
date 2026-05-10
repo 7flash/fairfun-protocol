@@ -611,7 +611,7 @@ function loadConfig(): LocalConfig {
         }
     }
     throw new Error(
-        "Config not found. Run 'bun run scripts/setup-local.ts' or 'bun run scripts/init-mainnet.ts' first!"
+        "Config not found. Create local-config.json or mainnet-config.json from the tracked example templates first."
     );
 }
 
@@ -995,7 +995,7 @@ try {
     console.log(`   Test Users: ${config.testUsers.length}`);
 } catch (e: any) {
     console.error("❌ Failed to load config:", e.message);
-    console.error("   Run: bun run scripts/setup-local.ts");
+    console.error("   Create local-config.json or mainnet-config.json from the tracked example templates.");
     process.exit(1);
 }
 

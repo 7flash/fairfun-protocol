@@ -35,8 +35,7 @@ const html = (script: string, title: string = "fairfun.xyz") => `<!DOCTYPE html>
       "@solana/spl-token": "https://esm.sh/@solana/spl-token@0.4.5",
       "bs58": "https://esm.sh/bs58@5.0.0",
       "tweetnacl": "https://esm.sh/tweetnacl@1.0.3",
-      "buffer": "https://esm.sh/buffer@6.0.3",
-      "react-custom-roulette": "https://esm.sh/react-custom-roulette@1.4.1?external=react,react-dom"
+      "buffer": "https://esm.sh/buffer@6.0.3"
     }
   }
   </script>
