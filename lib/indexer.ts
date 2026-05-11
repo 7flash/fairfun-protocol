@@ -9,6 +9,7 @@ import {
     resetAllHolderRewards,
     resetExcludedHolders,
     setMeta,
+    TreasuryEventInput,
     updateGravityForIndexedHolders,
     upsertHolderSnapshot,
     zeroMissingHolderBalances
@@ -51,7 +52,8 @@ async function getTreasuryInflowStats(now: number) {
         return {
             totalFeesAccumulatedSol: getMetaNumber('totalFeesAccumulatedSol', 0),
             feeDeltaSol: 0,
-            latestSignature: getMeta('lastTreasurySignatureSeen') ?? ''
+            latestSignature: getMeta('lastTreasurySignatureSeen') ?? '',
+            events: [] as TreasuryEventInput[],
         };
     }
 
@@ -76,6 +78,7 @@ async function getTreasuryInflowStats(now: number) {
     let stop = false;
     let newestSeen = '';
     let feeDeltaSol = 0;
+    const events: TreasuryEventInput[] = [];
     let processed = 0;
     const MAX_TRANSACTIONS_PER_RUN = 1000;
 
@@ -111,7 +114,14 @@ async function getTreasuryInflowStats(now: number) {
             const postDistributable = Math.max(0, post / 1_000_000_000 - rentReserveSol);
             const deltaLamports = Math.round((postDistributable - preDistributable) * 1_000_000_000);
             if (deltaLamports > 0) {
-                feeDeltaSol += deltaLamports / 1_000_000_000;
+                const amountSol = deltaLamports / 1_000_000_000;
+                feeDeltaSol += amountSol;
+                events.push({
+                    signature: signatureInfo.signature,
+                    amountSol,
+                    slot: signatureInfo.slot,
+                    timestamp: signatureInfo.blockTime ? signatureInfo.blockTime * 1000 : now,
+                });
             }
         }
 
@@ -119,10 +129,21 @@ async function getTreasuryInflowStats(now: number) {
         if (signatures.length < 100) break;
     }
 
+    const orderedEvents = events.reverse();
+    let runningObservedTotal = existingTotal;
+    const observedEvents = orderedEvents.map((event) => {
+        runningObservedTotal += event.amountSol;
+        return {
+            ...event,
+            observedTotalDepositsSol: runningObservedTotal,
+        };
+    });
+
     return {
         totalFeesAccumulatedSol: existingTotal + feeDeltaSol,
         feeDeltaSol,
-        latestSignature: newestSeen || lastProcessedSignature
+        latestSignature: newestSeen || lastProcessedSignature,
+        events: observedEvents,
     };
 }
 
@@ -190,7 +211,7 @@ export async function indexLeaderboardSnapshot() {
                 zeroMissingHolderBalances(activeAddresses, now);
                 updateGravityForIndexedHolders(now);
 
-                const feeDistribution = distributeTreasuryFees({ feeDeltaSol: treasuryInflowStats.feeDeltaSol, now });
+                const feeDistribution = distributeTreasuryFees({ events: treasuryInflowStats.events, now });
                 const totalFeesAccumulatedSol = treasuryInflowStats.totalFeesAccumulatedSol;
                 const configuredLaunchTimestamp = config.indexer.launchTimestamp;
                 const launchTimestamp = configuredLaunchTimestamp > 0

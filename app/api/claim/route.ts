@@ -1,4 +1,6 @@
-import { config } from '../../../lib/config';
+import { PublicKey } from '@solana/web3.js';
+import { getHolder, getMetaNumber, updateHolderRewards } from '../../../lib/database';
+import { buildClaimTransaction, claimSigningEnabled, fetchRewardPoolState, fetchUserClaimState, lamportsToSolNumber, solToLamportsBigInt } from '../../../lib/fairfun-program';
 
 const LAMPORT_IN_SOL = 1_000_000_000;
 const MIN_CLAIMABLE_SOL = 1 / LAMPORT_IN_SOL;
@@ -9,8 +11,8 @@ function clampSolAmount(value: number) {
 
 export async function POST(req: Request) {
     try {
-        if (!config.rewards.claimApiUrl) {
-            return Response.json({ success: false, error: 'Claim signer not configured.' }, { status: 501 });
+        if (!claimSigningEnabled()) {
+            return Response.json({ success: false, error: 'Backend signer keypair is not configured.' }, { status: 501 });
         }
 
         const body = await req.json() as { address?: string };
@@ -19,14 +21,33 @@ export async function POST(req: Request) {
             return Response.json({ success: false, error: 'Missing wallet address' }, { status: 400 });
         }
 
-        const response = await fetch(`${config.rewards.claimApiUrl}/api/claim-transaction`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ wallet: address })
-        });
+        const holder = getHolder(address);
+        if (!holder) {
+            return Response.json({ success: false, error: 'Wallet has no indexed rewards yet.' }, { status: 404 });
+        }
 
-        const data = await response.json();
-        return Response.json(data, { status: response.status });
+        const pool = await fetchRewardPoolState();
+        if (!pool.active) {
+            return Response.json({ success: false, error: 'Rewards pool is paused.' }, { status: 409 });
+        }
+
+        const cumulativeEarned = solToLamportsBigInt(holder.totalSolRewardsEarned);
+        const observedTotalDeposits = solToLamportsBigInt(getMetaNumber('totalFeesAccumulatedSol'));
+        if (cumulativeEarned <= 0n || observedTotalDeposits <= 0n) {
+            return Response.json({ success: false, error: 'Nothing to claim yet.' }, { status: 409 });
+        }
+
+        const transactionResult = await buildClaimTransaction(new PublicKey(address), cumulativeEarned, observedTotalDeposits);
+        return Response.json({
+            success: true,
+            transaction: transactionResult.transaction.serialize({ requireAllSignatures: false }).toString('base64'),
+            blockhash: transactionResult.blockhash,
+            lastValidBlockHeight: transactionResult.lastValidBlockHeight,
+            expiresAt: transactionResult.expiresAt,
+            observedTotalDeposits: observedTotalDeposits.toString(),
+            cumulativeEarned: cumulativeEarned.toString(),
+            signer: transactionResult.signerPubkey,
+        });
     } catch (error) {
         console.error('Error building claim transaction:', error);
         return Response.json(
@@ -38,8 +59,8 @@ export async function POST(req: Request) {
 
 export async function PUT(req: Request) {
     try {
-        if (!config.rewards.claimApiUrl) {
-            return Response.json({ success: false, error: 'Claim signer not configured.' }, { status: 501 });
+        if (!claimSigningEnabled()) {
+            return Response.json({ success: false, error: 'Backend signer keypair is not configured.' }, { status: 501 });
         }
 
         const body = await req.json() as { address?: string; signature?: string };
@@ -49,26 +70,14 @@ export async function PUT(req: Request) {
             return Response.json({ success: false, error: 'Missing wallet address or signature' }, { status: 400 });
         }
 
-        const confirmedResponse = await fetch(`${config.rewards.claimApiUrl}/api/claim-confirmed`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ wallet: address, signature })
-        });
-        const confirmedData = await confirmedResponse.json();
-        if (!confirmedResponse.ok) {
-            return Response.json(confirmedData, { status: confirmedResponse.status });
+        const claimState = await fetchUserClaimState(new PublicKey(address));
+        if (!claimState) {
+            return Response.json({ success: false, error: 'Onchain claim state was not created yet.' }, { status: 409 });
         }
 
-        const earningsResponse = await fetch(`${config.rewards.claimApiUrl}/api/earnings/${address}`);
-        const earningsData = await earningsResponse.json();
-        if (!earningsResponse.ok) {
-            return Response.json({ success: false, error: 'Failed to refresh claimed totals' }, { status: 500 });
-        }
-
-        const { getHolder, updateHolderRewards } = await import('../../../lib/database');
         const holder = getHolder(address);
         if (holder) {
-            const claimedSol = clampSolAmount(Number(earningsData.claimed ?? 0) / LAMPORT_IN_SOL);
+            const claimedSol = clampSolAmount(lamportsToSolNumber(claimState.claimedAmount));
             const claimable = clampSolAmount(Math.max(0, holder.totalSolRewardsEarned - claimedSol));
             updateHolderRewards(address, {
                 totalSolRewardsClaimed: claimedSol,
@@ -80,7 +89,7 @@ export async function PUT(req: Request) {
             success: true,
             address,
             signature,
-            claimed: earningsData.claimed ?? '0'
+            claimed: claimState.claimedAmount.toString()
         });
     } catch (error) {
         console.error('Error finalizing claim:', error);

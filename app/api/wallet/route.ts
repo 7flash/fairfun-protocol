@@ -1,8 +1,9 @@
 import { measure } from 'measure-fn';
+import { PublicKey } from '@solana/web3.js';
 import { getHolder, getHolderRank, getMetaNumber } from '../../../lib/database';
 import { formatAddress } from '../../../lib/solana';
 import { formatGravity, formatSOL, formatUSD } from '../../../lib/gravity';
-import { config } from '../../../lib/config';
+import { claimSigningEnabled, fetchUserClaimState, lamportsToSolNumber } from '../../../lib/fairfun-program';
 
 const LAMPORT_IN_SOL = 1_000_000_000;
 const MIN_CLAIMABLE_SOL = 1 / LAMPORT_IN_SOL;
@@ -43,9 +44,9 @@ export async function GET(req: Request) {
                     claimableSolRewards: 0,
                     claimableSolRewardsFormatted: '0 SOL',
                     claimEnabled: false,
-                    claimDisabledReason: config.rewards.claimApiUrl
+                    claimDisabledReason: claimSigningEnabled()
                         ? 'No claimable rewards yet.'
-                        : 'Claim signer not configured for this deployment.'
+                        : 'Backend signer keypair is not configured on the web process.'
                 }
             });
         }
@@ -53,22 +54,19 @@ export async function GET(req: Request) {
         let claimedSol = holder.totalSolRewardsClaimed;
         let claimableSol = holder.claimableSolRewards;
 
-        if (config.rewards.claimApiUrl) {
-            try {
-                const earningsResponse = await fetch(`${config.rewards.claimApiUrl}/api/earnings/${address}`);
-                if (earningsResponse.ok) {
-                    const earnings = await earningsResponse.json();
-                    claimedSol = clampSolAmount(Number(earnings.claimed ?? 0) / LAMPORT_IN_SOL);
-                    claimableSol = clampSolAmount(Math.max(0, holder.totalSolRewardsEarned - claimedSol));
-                }
-            } catch {
-                // Fall back to local indexed values if backend refresh is unavailable.
+        try {
+            const claimState = await fetchUserClaimState(new PublicKey(address));
+            if (claimState) {
+                claimedSol = clampSolAmount(lamportsToSolNumber(claimState.claimedAmount));
+                claimableSol = clampSolAmount(Math.max(0, holder.totalSolRewardsEarned - claimedSol));
             }
+        } catch {
+            // Fall back to indexed claim state if the onchain read fails.
         }
 
         claimedSol = clampSolAmount(claimedSol);
         claimableSol = clampSolAmount(claimableSol);
-        const claimConfigured = Boolean(config.rewards.claimApiUrl);
+        const claimConfigured = claimSigningEnabled();
         const claimEnabled = claimConfigured && claimableSol > 0;
 
         return Response.json({
@@ -96,7 +94,7 @@ export async function GET(req: Request) {
                 claimEnabled,
                 claimDisabledReason: claimEnabled
                     ? ''
-                    : (claimConfigured ? 'No claimable rewards yet.' : 'Claim signer not configured for this deployment.')
+                    : (claimConfigured ? 'No claimable rewards yet.' : 'Backend signer keypair is not configured on the web process.')
             }
         });
     }, (error) => {

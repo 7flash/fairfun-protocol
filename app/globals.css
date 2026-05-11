@@ -567,6 +567,42 @@ a {
     border-radius: 20px;
 }
 
+.board-tabs {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    display: flex;
+    gap: 10px;
+    padding: 16px 16px 0;
+    background: rgba(11, 18, 32, 0.98);
+    backdrop-filter: blur(18px);
+}
+
+.board-tab {
+    padding: 10px 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.board-tab:hover {
+    border-color: var(--line-strong);
+    color: var(--soft);
+}
+
+.board-tab.is-active {
+    background: rgba(82, 243, 209, 0.1);
+    border-color: rgba(82, 243, 209, 0.3);
+    color: var(--cyan);
+}
+
 .leaderboard-table {
     width: 100%;
     border-collapse: collapse;
@@ -578,7 +614,7 @@ a {
 
 .leaderboard-table th {
     position: sticky;
-    top: 0;
+    top: 58px;
     z-index: 2;
     padding: 16px 24px;
     text-align: left;
@@ -697,6 +733,17 @@ a {
 
 .td-emerald {
     color: var(--emerald);
+}
+
+.tx-link {
+    color: var(--cyan-2);
+    font-family: ui-monospace, monospace;
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+
+.tx-link:hover {
+    color: var(--cyan);
 }
 
 .state-row {
@@ -857,6 +904,9 @@ a {
     }
     .leaderboard-panel {
         overflow-x: auto;
+    }
+    .board-tabs {
+        min-width: 720px;
     }
     .leaderboard-table {
         min-width: 720px;

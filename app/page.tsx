@@ -11,7 +11,7 @@ export default function HomePage() {
                 data-treasury-address={config.rewards.treasuryAddress}
                 data-rpc-url={config.chain.rpcUrl}
                 data-explorer-tx-base-url={config.rewards.explorerTxBaseUrl}
-                data-claim-api-configured={config.rewards.claimApiUrl ? 'true' : 'false'}
+                data-claim-enabled={config.rewards.backendKeypairPath ? 'true' : 'false'}
                 hidden
             />
 

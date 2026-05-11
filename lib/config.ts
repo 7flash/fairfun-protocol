@@ -21,7 +21,8 @@ export interface RuntimeConfig {
     rewards: {
         programId: string;
         treasuryAddress: string;
-        claimApiUrl: string;
+        backendKeypairPath: string;
+        claimExpiresInSeconds: number;
         explorerTxBaseUrl: string;
     };
     indexer: {
@@ -95,7 +96,8 @@ function parseConfig(): RuntimeConfig {
         rewards: {
             programId: requireString(rewards.program_id, 'rewards.program_id'),
             treasuryAddress: requireString(rewards.treasury_address, 'rewards.treasury_address'),
-            claimApiUrl: getOptionalString(rewards.claim_api_url),
+            backendKeypairPath: getOptionalString(rewards.backend_keypair_path),
+            claimExpiresInSeconds: Math.max(30, getNumber(rewards.claim_expires_in_seconds, 600)),
             explorerTxBaseUrl: getOptionalString(rewards.explorer_tx_base_url, 'https://solscan.io/tx/'),
         },
         indexer: {

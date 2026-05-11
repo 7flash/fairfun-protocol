@@ -16,7 +16,8 @@ symbol = "TOKEN"
 [rewards]
 program_id = "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A"
 treasury_address = "REPLACE_WITH_YOUR_TREASURY_PDA"
-claim_api_url = ""
+backend_keypair_path = ""
+claim_expires_in_seconds = 600
 explorer_tx_base_url = "https://solscan.io/tx/"
 
 [indexer]

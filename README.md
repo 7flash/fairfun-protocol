@@ -30,7 +30,7 @@ This repo now contains the full FairFun stack:
 
 - the Solana program
 - a separate offchain indexer process
-- a separate TradJS app
+- a separate TradJS app with built-in claim signing
 
 ## Repo Layout
 
@@ -87,13 +87,14 @@ The web app does not own this job anymore.
 
 The app is a separate Bun server started from [server.ts](/C:/Code/fairfun-protocol/server.ts:1).
 
-It does three jobs:
+It does four jobs:
 
 - renders the landing page and leaderboard
 - reads indexed state from SQLite
-- optionally proxies claim requests to an external signer service
+- builds claim transactions
+- signs claim payloads with the configured backend authority keypair
 
-Branding, token identity, RPC, treasury address, and site title all come from `.config.toml`.
+Branding, token identity, RPC, treasury address, signer keypair path, and site title all come from `.config.toml`.
 
 ## Config
 
@@ -115,7 +116,8 @@ Then set:
 - `token.symbol`
 - `rewards.program_id`
 - `rewards.treasury_address`
-- `rewards.claim_api_url` if you run an external claim signer
+- `rewards.backend_keypair_path`
+- `rewards.claim_expires_in_seconds`
 - `indexer.db_path`
 - `indexer.interval_ms`
 - `indexer.launch_timestamp`
@@ -182,7 +184,7 @@ The sequence is:
 
 1. build the program
 2. deploy the binary
-3. initialize global config with your backend signer pubkey
+3. initialize global config with the backend signer pubkey used by the web process
 4. register a rewards pool for your token mint
 5. fund the treasury PDA with SOL
 
@@ -243,17 +245,15 @@ For deployment:
 3. run `bun run start:web`
 4. put a reverse proxy in front if needed
 
-Optional claim support:
+Claim support:
 
-- if `rewards.claim_api_url` is empty, the app stays read-only
-- if you provide `rewards.claim_api_url`, the app will proxy:
-  - `POST /api/claim-transaction`
-  - `POST /api/claim-confirmed`
-  - `GET /api/earnings/:wallet`
+- if `rewards.backend_keypair_path` is empty, the app stays read-only
+- if `rewards.backend_keypair_path` points to the backend authority keypair, the app signs claims directly in the web process
+- claim expiry is controlled by `rewards.claim_expires_in_seconds`
 
 ## Claim Model
 
-The external signer should sign cumulative earned value, not a one-off payout:
+The web process should sign cumulative earned value, not a one-off payout:
 
 ```text
 [user | pool | cumulative_earned | observed_total_deposits | expires_at]

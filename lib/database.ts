@@ -39,15 +39,33 @@ export const db = new Database(dbPath, {
     metadata: z.object({
         key: z.string(),
         value: z.string()
+    }),
+    treasuryEvents: z.object({
+        signature: z.string(),
+        amountSol: z.number(),
+        observedTotalDepositsSol: z.number().default(0),
+        slot: z.number().default(0),
+        timestamp: z.number().default(0),
+        createdAt: z.number().default(0)
+    }),
+    treasuryPayouts: z.object({
+        signature: z.string(),
+        address: z.string(),
+        amountSol: z.number(),
+        createdAt: z.number().default(0)
     })
 }, {
     indexes: {
         holders: ['address', 'tokenBalance', 'accumulatedGravity', 'claimableSolRewards'],
-        metadata: ['key']
+        metadata: ['key'],
+        treasuryEvents: ['signature', 'timestamp'],
+        treasuryPayouts: ['signature', 'address']
     },
     unique: {
         holders: [['address']],
-        metadata: [['key']]
+        metadata: [['key']],
+        treasuryEvents: [['signature']],
+        treasuryPayouts: [['signature', 'address']]
     }
 });
 
@@ -70,6 +88,32 @@ export interface HolderSnapshotInput {
     tokenBalance: number;
     tokenValueUsd: number;
     now?: number;
+}
+
+export interface TreasuryEventRecord {
+    id?: number;
+    signature: string;
+    amountSol: number;
+    observedTotalDepositsSol: number;
+    slot: number;
+    timestamp: number;
+    createdAt: number;
+}
+
+export interface TreasuryPayoutRecord {
+    id?: number;
+    signature: string;
+    address: string;
+    amountSol: number;
+    createdAt: number;
+}
+
+export interface TreasuryEventInput {
+    signature: string;
+    amountSol: number;
+    observedTotalDepositsSol?: number;
+    slot?: number;
+    timestamp?: number;
 }
 
 export function getMeta(key: string): string | null {
@@ -202,11 +246,11 @@ export function resetExcludedHolders(excludedAddresses: Set<string>, now = Date.
 }
 
 export function distributeTreasuryFees(params: {
-    feeDeltaSol: number;
+    events: TreasuryEventInput[];
     now?: number;
 }) {
     const now = params.now ?? Date.now();
-    if (params.feeDeltaSol <= 0) {
+    if (params.events.length === 0) {
         return {
             distributed: 0,
             totalGravity: getTotalAccumulatedGravity()
@@ -219,23 +263,81 @@ export function distributeTreasuryFees(params: {
         return { distributed: 0, totalGravity };
     }
 
-    for (const holder of holders) {
-        if (!holder.id) continue;
-        const earnedDelta = params.feeDeltaSol * (holder.accumulatedGravity / totalGravity);
-        const totalEarned = holder.totalSolRewardsEarned + earnedDelta;
-        const claimable = Math.max(0, totalEarned - holder.totalSolRewardsClaimed);
+    let distributed = 0;
 
-        db.holders.update(holder.id, {
-            totalSolRewardsEarned: totalEarned,
-            claimableSolRewards: claimable,
-            updatedAt: now
-        });
+    for (const event of params.events) {
+        if (event.amountSol <= 0) continue;
+
+        db.treasuryEvents.upsert(
+            { signature: event.signature },
+            {
+                signature: event.signature,
+                amountSol: event.amountSol,
+                observedTotalDepositsSol: event.observedTotalDepositsSol ?? 0,
+                slot: event.slot ?? 0,
+                timestamp: event.timestamp ?? now,
+                createdAt: now,
+            }
+        );
+
+        for (const holder of holders) {
+            if (!holder.id) continue;
+            const earnedDelta = event.amountSol * (holder.accumulatedGravity / totalGravity);
+            const totalEarned = holder.totalSolRewardsEarned + earnedDelta;
+            const claimable = Math.max(0, totalEarned - holder.totalSolRewardsClaimed);
+
+            db.holders.update(holder.id, {
+                totalSolRewardsEarned: totalEarned,
+                claimableSolRewards: claimable,
+                updatedAt: now
+            });
+
+            db.treasuryPayouts.upsert(
+                { signature: event.signature, address: holder.address },
+                {
+                    signature: event.signature,
+                    address: holder.address,
+                    amountSol: earnedDelta,
+                    createdAt: now,
+                }
+            );
+        }
+
+        distributed += event.amountSol;
+        const observedTotalDepositsSol = event.observedTotalDepositsSol ?? 0;
+        if (observedTotalDepositsSol > 0) {
+            setMeta('lastObservedTotalDepositsSol', observedTotalDepositsSol);
+        }
     }
 
     return {
-        distributed: params.feeDeltaSol,
+        distributed,
         totalGravity
     };
+}
+
+export function getRecentTreasuryEvents(limit = 25, walletAddress?: string) {
+    const events = db.treasuryEvents.select()
+        .orderBy('timestamp', 'desc')
+        .limit(limit)
+        .all() as TreasuryEventRecord[];
+
+    const walletLower = walletAddress?.toLowerCase();
+    return events.map((event) => {
+        let payoutAmountSol = 0;
+        if (walletLower) {
+            const payout = db.treasuryPayouts.select().where({
+                signature: event.signature,
+                address: { $eq: walletAddress as string }
+            }).get() as TreasuryPayoutRecord | undefined;
+            payoutAmountSol = payout?.amountSol ?? 0;
+        }
+
+        return {
+            ...event,
+            payoutAmountSol
+        };
+    });
 }
 
 export function updateHolderRewards(

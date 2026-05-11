@@ -13,6 +13,14 @@ interface LeaderboardEntry {
     totalSolRewardsEarned: number;
 }
 
+interface TreasuryEvent {
+    signature: string;
+    amountSol: number;
+    payoutAmountSol: number;
+    observedTotalDepositsSol: number;
+    timestamp: number;
+}
+
 interface WalletTotals {
     address: string;
     addressShort: string;
@@ -40,6 +48,12 @@ interface LeaderboardResponse {
     totalAccumulatedGravity: number;
 }
 
+interface TreasuryResponse {
+    success: boolean;
+    events: TreasuryEvent[];
+    total: number;
+}
+
 interface WalletResponse {
     success: boolean;
     wallet: WalletTotals;
@@ -52,6 +66,7 @@ interface ToastState {
 }
 
 type NumberFormatKind = 'tokens' | 'usd' | 'gravity' | 'sol' | 'int';
+type ActivityTab = 'leaderboard' | 'treasury';
 
 interface RuntimeConfig {
     rpcUrl: string;
@@ -60,7 +75,7 @@ interface RuntimeConfig {
     tokenSymbol: string;
     projectName: string;
     explorerTxBaseUrl: string;
-    claimApiConfigured: boolean;
+    claimEnabled: boolean;
 }
 
 function shortAddress(address: string) {
@@ -77,7 +92,7 @@ function getRuntimeConfig(): RuntimeConfig {
         tokenSymbol: configRoot?.getAttribute('data-token-symbol') ?? 'TOKEN',
         projectName: configRoot?.getAttribute('data-project-name') ?? 'FairFun',
         explorerTxBaseUrl: configRoot?.getAttribute('data-explorer-tx-base-url') ?? 'https://solscan.io/tx/',
-        claimApiConfigured: configRoot?.getAttribute('data-claim-api-configured') === 'true',
+        claimEnabled: configRoot?.getAttribute('data-claim-enabled') === 'true',
     };
 }
 
@@ -126,15 +141,15 @@ function AnimatedValue({ value, kind }: { value: number; kind: NumberFormatKind 
 
 function animateNumbers(scope: ParentNode) {
     const nodes = scope.querySelectorAll<HTMLElement>('[data-animate-number="true"]');
-    for (const node of nodes) {
+    nodes.forEach((node) => {
         const target = Number(node.dataset.target ?? '0');
         const kind = (node.dataset.format ?? 'int') as NumberFormatKind;
         const current = Number(node.dataset.current ?? '0');
-        if (!Number.isFinite(target)) continue;
+        if (!Number.isFinite(target)) return;
         if (Math.abs(target - current) < 0.0000001) {
             node.textContent = formatNumber(target, kind);
             node.dataset.current = String(target);
-            continue;
+            return;
         }
 
         const start = current;
@@ -155,7 +170,7 @@ function animateNumbers(scope: ParentNode) {
             }
         };
         requestAnimationFrame(step);
-    }
+    });
 }
 
 function HeroMetrics({
@@ -272,7 +287,7 @@ function PositionPanel({
                 </div>
                 <div className="connect-state">
                     <h2 className="connect-title">Connect your wallet</h2>
-                    <p className="connect-copy">See your gravity share, accumulated rewards, and claimable balance.</p>
+                    <p className="connect-copy">See your gravity share, accumulated rewards, claimable balance, and treasury payouts.</p>
                     <button onClick={connect} className="primary-button connect-cta" type="button">
                         <span>⬢</span>
                         <span>CONNECT PHANTOM WALLET</span>
@@ -286,7 +301,7 @@ function PositionPanel({
     const claimableRewards = walletTotals?.claimableSolRewards ?? 0;
     const canClaim = Boolean(walletTotals?.claimEnabled && claimableRewards > 0);
     const disabledReason = walletTotals?.claimDisabledReason
-        || (!runtimeConfig.claimApiConfigured ? 'Claim signer not configured for this deployment.' : 'No claimable rewards yet.');
+        || (!runtimeConfig.claimEnabled ? 'Backend signer keypair is not configured on the web process.' : 'No claimable rewards yet.');
 
     return (
         <div className={`position-panel ${walletTotals?.rank ? 'is-ranked' : ''}`}>
@@ -377,56 +392,174 @@ function LeaderboardTable({
     const displayEntries = entries.slice(0, 150);
 
     return (
+        <table className="leaderboard-table">
+            <thead>
+                <tr>
+                    <th className="th-rank">#</th>
+                    <th>Wallet</th>
+                    <th className="th-num">{tokenSymbol}</th>
+                    <th className="th-num header-tooltip" data-tooltip="Gravity is the cumulative USD-minutes held by each wallet.">
+                        Gravity
+                    </th>
+                    <th className="th-num header-tooltip" data-tooltip="Ownership is your share of total gravity, not your spot balance at a single snapshot.">
+                        Ownership
+                    </th>
+                    <th className="th-num">SOL Earned</th>
+                </tr>
+            </thead>
+            <tbody>
+                {error ? (
+                    <tr><td className="state-row error-state" colSpan={6}>{error}</td></tr>
+                ) : loading && entries.length === 0 ? (
+                    <SkeletonRows />
+                ) : entries.length === 0 ? (
+                    <tr><td className="state-row" colSpan={6}>No indexed holders found yet.</td></tr>
+                ) : (
+                    <>
+                        {displayEntries.map((entry) => {
+                            const isYou = connectedAddressLower === entry.address.toLowerCase();
+                            const medalClass = entry.rank <= 3 ? `rank-${entry.rank}` : '';
+                            return (
+                                <tr className={`leaderboard-row ${isYou ? 'is-you' : ''}`} key={entry.address}>
+                                    <td><span className={`rank-cell ${medalClass}`.trim()}>{entry.rank}</span></td>
+                                    <td>
+                                        <span className="wallet-mono">{entry.addressShort}</span>
+                                        {isYou ? <span className="you-tag">YOU</span> : null}
+                                        <div className="wallet-sub">Supply {entry.percentSupplyFormatted}</div>
+                                    </td>
+                                    <td className="td-num">
+                                        <div>{formatNumber(entry.tokenBalance, 'tokens')}</div>
+                                        <div className="num-sub">{formatNumber(entry.tokenValueUsd, 'usd')}</div>
+                                    </td>
+                                    <td className="td-num td-cyan">{formatNumber(entry.accumulatedGravity, 'gravity')}</td>
+                                    <td className="td-num">{entry.gravityShareFormatted}</td>
+                                    <td className="td-num td-emerald">{formatNumber(entry.totalSolRewardsEarned, 'sol')}</td>
+                                </tr>
+                            );
+                        })}
+                    </>
+                )}
+            </tbody>
+        </table>
+    );
+}
+
+function TreasuryTable({
+    runtimeConfig,
+    events,
+    loading,
+    error,
+    connectedAddress,
+}: {
+    runtimeConfig: RuntimeConfig;
+    events: TreasuryEvent[];
+    loading: boolean;
+    error: string | null;
+    connectedAddress: string | null;
+}) {
+    return (
+        <table className="leaderboard-table">
+            <thead>
+                <tr>
+                    <th>When</th>
+                    <th className="th-num">Treasury Added</th>
+                    <th className="th-num">You Got</th>
+                    <th className="th-num">Total Deposits</th>
+                    <th>Transaction</th>
+                </tr>
+            </thead>
+            <tbody>
+                {error ? (
+                    <tr><td className="state-row error-state" colSpan={5}>{error}</td></tr>
+                ) : loading && events.length === 0 ? (
+                    <SkeletonRows />
+                ) : events.length === 0 ? (
+                    <tr><td className="state-row" colSpan={5}>No treasury additions have been indexed yet.</td></tr>
+                ) : (
+                    events.map((event) => (
+                        <tr className="leaderboard-row" key={event.signature}>
+                            <td>
+                                <div>{formatRelativeTime(event.timestamp)}</div>
+                                <div className="wallet-sub">{new Date(event.timestamp).toLocaleString()}</div>
+                            </td>
+                            <td className="td-num td-emerald">{formatNumber(event.amountSol, 'sol')}</td>
+                            <td className="td-num td-cyan">
+                                {connectedAddress ? formatNumber(event.payoutAmountSol, 'sol') : 'Connect wallet'}
+                            </td>
+                            <td className="td-num">{formatNumber(event.observedTotalDepositsSol, 'sol')}</td>
+                            <td>
+                                <a
+                                    className="tx-link"
+                                    href={`${runtimeConfig.explorerTxBaseUrl}${event.signature}`}
+                                    rel="noreferrer"
+                                    target="_blank"
+                                >
+                                    {shortAddress(event.signature)}
+                                </a>
+                            </td>
+                        </tr>
+                    ))
+                )}
+            </tbody>
+        </table>
+    );
+}
+
+function ActivityPanel({
+    runtimeConfig,
+    activeTab,
+    setActiveTab,
+    entries,
+    treasuryEvents,
+    loading,
+    error,
+    connectedAddress,
+}: {
+    runtimeConfig: RuntimeConfig;
+    activeTab: ActivityTab;
+    setActiveTab: (tab: ActivityTab) => void;
+    entries: LeaderboardEntry[];
+    treasuryEvents: TreasuryEvent[];
+    loading: boolean;
+    error: string | null;
+    connectedAddress: string | null;
+}) {
+    return (
         <div className="leaderboard-panel">
-            <table className="leaderboard-table">
-                <thead>
-                    <tr>
-                        <th className="th-rank">#</th>
-                        <th>Wallet</th>
-                        <th className="th-num">{tokenSymbol}</th>
-                        <th className="th-num header-tooltip" data-tooltip="Gravity is the cumulative USD-minutes held by each wallet.">
-                            Gravity
-                        </th>
-                        <th className="th-num header-tooltip" data-tooltip="Ownership is your share of total gravity, not your spot balance at a single snapshot.">
-                            Ownership
-                        </th>
-                        <th className="th-num">SOL Earned</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {error ? (
-                        <tr><td className="state-row error-state" colSpan={6}>{error}</td></tr>
-                    ) : loading && entries.length === 0 ? (
-                        <SkeletonRows />
-                    ) : entries.length === 0 ? (
-                        <tr><td className="state-row" colSpan={6}>No indexed holders found yet.</td></tr>
-                    ) : (
-                        <>
-                            {displayEntries.map((entry) => {
-                                const isYou = connectedAddressLower === entry.address.toLowerCase();
-                                const medalClass = entry.rank <= 3 ? `rank-${entry.rank}` : '';
-                                return (
-                                    <tr className={`leaderboard-row ${isYou ? 'is-you' : ''}`} key={entry.address}>
-                                        <td><span className={`rank-cell ${medalClass}`.trim()}>{entry.rank}</span></td>
-                                        <td>
-                                            <span className="wallet-mono">{entry.addressShort}</span>
-                                            {isYou ? <span className="you-tag">YOU</span> : null}
-                                            <div className="wallet-sub">Supply {entry.percentSupplyFormatted}</div>
-                                        </td>
-                                        <td className="td-num">
-                                            <div>{formatNumber(entry.tokenBalance, 'tokens')}</div>
-                                            <div className="num-sub">{formatNumber(entry.tokenValueUsd, 'usd')}</div>
-                                        </td>
-                                        <td className="td-num td-cyan">{formatNumber(entry.accumulatedGravity, 'gravity')}</td>
-                                        <td className="td-num">{entry.gravityShareFormatted}</td>
-                                        <td className="td-num td-emerald">{formatNumber(entry.totalSolRewardsEarned, 'sol')}</td>
-                                    </tr>
-                                );
-                            })}
-                        </>
-                    )}
-                </tbody>
-            </table>
+            <div className="board-tabs">
+                <button
+                    className={`board-tab ${activeTab === 'leaderboard' ? 'is-active' : ''}`}
+                    onClick={() => setActiveTab('leaderboard')}
+                    type="button"
+                >
+                    Leaderboard
+                </button>
+                <button
+                    className={`board-tab ${activeTab === 'treasury' ? 'is-active' : ''}`}
+                    onClick={() => setActiveTab('treasury')}
+                    type="button"
+                >
+                    Treasury Additions
+                </button>
+            </div>
+
+            {activeTab === 'leaderboard' ? (
+                <LeaderboardTable
+                    entries={entries}
+                    loading={loading}
+                    error={error}
+                    connectedAddress={connectedAddress}
+                    tokenSymbol={runtimeConfig.tokenSymbol}
+                />
+            ) : (
+                <TreasuryTable
+                    runtimeConfig={runtimeConfig}
+                    events={treasuryEvents}
+                    loading={loading}
+                    error={error}
+                    connectedAddress={connectedAddress}
+                />
+            )}
         </div>
     );
 }
@@ -454,10 +587,12 @@ export default function mount() {
     const toastRoot = document.getElementById('toast-root');
     const refreshButton = document.getElementById('refresh-button') as HTMLButtonElement | null;
     const summary = document.getElementById('leaderboard-summary');
+    const boardTitle = document.querySelector('.board-title');
 
     if (!leaderboardRoot || !positionRoot || !metricsRoot || !toastRoot || !addressRoot) return;
 
     let entries: LeaderboardEntry[] = [];
+    let treasuryEvents: TreasuryEvent[] = [];
     let total = 0;
     let totalSupply = 0;
     let tokenPriceUsd = 0;
@@ -465,6 +600,7 @@ export default function mount() {
     let totalFeesAccumulatedSol = 0;
     let treasuryBalanceSol = 0;
     let totalAccumulatedGravity = 0;
+    let activeTab: ActivityTab = 'leaderboard';
     let loading = true;
     let error: string | null = null;
     let walletError: string | null = null;
@@ -521,22 +657,35 @@ export default function mount() {
         );
 
         render(
-            <LeaderboardTable
+            <ActivityPanel
+                runtimeConfig={runtimeConfig}
+                activeTab={activeTab}
+                setActiveTab={(tab) => {
+                    activeTab = tab;
+                    update();
+                }}
                 entries={entries}
+                treasuryEvents={treasuryEvents}
                 loading={loading}
                 error={error}
                 connectedAddress={connectedAddress}
-                tokenSymbol={runtimeConfig.tokenSymbol}
             />,
             leaderboardRoot
         );
 
         render(<Toast toast={toast} explorerTxBaseUrl={runtimeConfig.explorerTxBaseUrl} />, toastRoot);
 
+        if (boardTitle) {
+            boardTitle.textContent = activeTab === 'leaderboard' ? 'Gravity Leaderboard' : 'Recent Treasury Additions';
+        }
         if (summary) {
-            summary.textContent = total > 0
-                ? `${total.toLocaleString()} holders · ${formatNumber(totalFeesAccumulatedSol, 'sol')} revenue · updated ${formatRelativeTime(lastRefreshAt)}`
-                : 'Waiting for indexer data...';
+            summary.textContent = activeTab === 'leaderboard'
+                ? (total > 0
+                    ? `${total.toLocaleString()} holders · ${formatNumber(totalFeesAccumulatedSol, 'sol')} revenue · updated ${formatRelativeTime(lastRefreshAt)}`
+                    : 'Waiting for indexer data...')
+                : (treasuryEvents.length > 0
+                    ? `${treasuryEvents.length.toLocaleString()} recent additions · treasury balance ${formatNumber(treasuryBalanceSol, 'sol')} · updated ${formatRelativeTime(lastRefreshAt)}`
+                    : 'Waiting for treasury additions...');
         }
 
         if (refreshButton) refreshButton.classList.toggle('is-loading', loading);
@@ -569,7 +718,7 @@ export default function mount() {
             const result = await provider.connect({ onlyIfTrusted: false });
             connectedAddress = String(result.publicKey ?? '');
             showToast({ kind: 'success', message: `Connected ${shortAddress(connectedAddress)}` });
-            await fetchLeaderboard();
+            await fetchAll();
             return;
         } catch (connectError: any) {
             walletError = typeof connectError?.message === 'string' ? connectError.message : 'Wallet connection failed.';
@@ -588,8 +737,8 @@ export default function mount() {
                 update();
                 return;
             }
-            if (!runtimeConfig.claimApiConfigured) {
-                walletError = 'Claim signer is not configured for this deployment.';
+            if (!runtimeConfig.claimEnabled) {
+                walletError = 'Backend signer keypair is not configured on the web process.';
                 update();
                 return;
             }
@@ -635,8 +784,7 @@ export default function mount() {
                 body: JSON.stringify({ address: connectedAddress, signature }),
             });
 
-            await loadWalletTotals();
-            await fetchLeaderboard();
+            await fetchAll();
             showToast({ kind: 'success', message: 'Rewards claimed successfully.', txSignature: signature });
         } catch (claimError: any) {
             walletError = claimError?.message || 'Claim request failed.';
@@ -646,17 +794,22 @@ export default function mount() {
         update();
     }
 
-    async function fetchLeaderboard() {
+    async function fetchAll() {
         try {
             loading = true;
             update();
 
             const suffix = connectedAddress ? `?wallet=${encodeURIComponent(connectedAddress)}` : '';
-            const response = await fetch(`/api/leaderboard${suffix}`);
-            const data: LeaderboardResponse = await response.json();
+            const [leaderboardResponse, treasuryResponse] = await Promise.all([
+                fetch(`/api/leaderboard${suffix}`),
+                fetch(`/api/treasury${suffix}`),
+            ]);
 
-            if (data.success) {
-                entries = data.entries
+            const leaderboardData: LeaderboardResponse = await leaderboardResponse.json();
+            const treasuryData: TreasuryResponse = await treasuryResponse.json();
+
+            if (leaderboardData.success) {
+                entries = leaderboardData.entries
                     .filter((entry) => entry.tokenBalance > 0)
                     .sort((a, b) => {
                         if (b.gravityShare !== a.gravityShare) return b.gravityShare - a.gravityShare;
@@ -665,36 +818,43 @@ export default function mount() {
                     })
                     .map((entry, index) => ({ ...entry, rank: index + 1 }));
                 total = entries.length;
-                totalSupply = data.totalSupply;
-                tokenPriceUsd = data.tokenPriceUsd;
-                epochIndex = data.epochIndex;
-                totalFeesAccumulatedSol = data.totalFeesAccumulatedSol;
-                treasuryBalanceSol = data.treasuryBalanceSol;
-                totalAccumulatedGravity = data.totalAccumulatedGravity;
+                totalSupply = leaderboardData.totalSupply;
+                tokenPriceUsd = leaderboardData.tokenPriceUsd;
+                epochIndex = leaderboardData.epochIndex;
+                totalFeesAccumulatedSol = leaderboardData.totalFeesAccumulatedSol;
+                treasuryBalanceSol = leaderboardData.treasuryBalanceSol;
+                totalAccumulatedGravity = leaderboardData.totalAccumulatedGravity;
                 lastRefreshAt = Date.now();
                 error = null;
-                await loadWalletTotals();
             } else {
                 error = 'Failed to load indexed leaderboard.';
             }
+
+            if (treasuryData.success) {
+                treasuryEvents = treasuryData.events;
+            } else if (!error) {
+                error = 'Failed to load treasury additions.';
+            }
+
+            await loadWalletTotals();
         } catch {
-            error = 'Error fetching indexed leaderboard data.';
+            error = 'Error fetching indexed activity data.';
         } finally {
             loading = false;
             update();
         }
     }
 
-    refreshButton?.addEventListener('click', fetchLeaderboard);
+    refreshButton?.addEventListener('click', fetchAll);
 
-    void fetchLeaderboard();
-    const refreshInterval = setInterval(fetchLeaderboard, 30000);
+    void fetchAll();
+    const refreshInterval = setInterval(fetchAll, 30000);
     const relativeTimeInterval = setInterval(update, 5000);
 
     return () => {
         clearInterval(refreshInterval);
         clearInterval(relativeTimeInterval);
-        refreshButton?.removeEventListener('click', fetchLeaderboard);
+        refreshButton?.removeEventListener('click', fetchAll);
         if (toastTimeout) clearTimeout(toastTimeout);
         render(null, leaderboardRoot);
         render(null, positionRoot);
