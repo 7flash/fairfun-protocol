@@ -1,3 +1,4 @@
+import { createMeasure, type MeasureFn, type MeasureSyncFn } from 'measure-fn';
 import { render } from 'tradjs/client';
 
 interface LeaderboardEntry {
@@ -80,6 +81,9 @@ interface RuntimeConfig {
     explorerTxBaseUrl: string;
     claimEnabled: boolean;
 }
+
+const frontendMeasure = createMeasure('frontend');
+const { measure: measureFrontend, measureSync: measureFrontendSync } = frontendMeasure;
 
 function shortAddress(address: string) {
     if (address.length <= 10) return address;
@@ -604,289 +608,401 @@ function Toast({ toast, explorerTxBaseUrl }: { toast: ToastState | null; explore
 }
 
 export default function mount() {
-    const runtimeConfig = getRuntimeConfig();
-    const leaderboardRoot = document.getElementById('leaderboard-root');
-    const positionRoot = document.getElementById('wallet-position-root');
-    const metricsRoot = document.getElementById('hero-metrics-root');
-    const addressRoot = document.getElementById('address-containers-root');
-    const toastRoot = document.getElementById('toast-root');
-    const refreshButton = document.getElementById('refresh-button') as HTMLButtonElement | null;
-    const summary = document.getElementById('leaderboard-summary');
-    const boardTitle = document.querySelector('.board-title');
+    return measureFrontendSync('mount page client', () => {
+        const runtimeConfig = getRuntimeConfig();
+        const leaderboardRoot = document.getElementById('leaderboard-root');
+        const positionRoot = document.getElementById('wallet-position-root');
+        const metricsRoot = document.getElementById('hero-metrics-root');
+        const addressRoot = document.getElementById('address-containers-root');
+        const toastRoot = document.getElementById('toast-root');
+        const refreshButton = document.getElementById('refresh-button') as HTMLButtonElement | null;
+        const summary = document.getElementById('leaderboard-summary');
+        const boardTitle = document.querySelector('.board-title');
 
-    if (!leaderboardRoot || !positionRoot || !metricsRoot || !toastRoot || !addressRoot) return;
+        if (!leaderboardRoot || !positionRoot || !metricsRoot || !toastRoot || !addressRoot) return;
 
-    let entries: LeaderboardEntry[] = [];
-    let treasuryEvents: TreasuryEvent[] = [];
-    let total = 0;
-    let totalSupply = 0;
-    let tokenPriceUsd = 0;
-    let epochIndex = 0;
-    let totalFeesAccumulatedSol = 0;
-    let treasuryBalanceSol = 0;
-    let totalAccumulatedGravity = 0;
-    let activeTab: ActivityTab = 'leaderboard';
-    let loading = true;
-    let error: string | null = null;
-    let walletError: string | null = null;
-    let connectedAddress: string | null = null;
-    let walletTotals: WalletTotals | null = null;
-    let toast: ToastState | null = null;
-    let toastTimeout: ReturnType<typeof setTimeout> | null = null;
-    let lastRefreshAt = Date.now();
+        let entries: LeaderboardEntry[] = [];
+        let treasuryEvents: TreasuryEvent[] = [];
+        let total = 0;
+        let totalSupply = 0;
+        let tokenPriceUsd = 0;
+        let epochIndex = 0;
+        let totalFeesAccumulatedSol = 0;
+        let treasuryBalanceSol = 0;
+        let totalAccumulatedGravity = 0;
+        let activeTab: ActivityTab = 'leaderboard';
+        let loading = true;
+        let error: string | null = null;
+        let walletError: string | null = null;
+        let connectedAddress: string | null = null;
+        let walletTotals: WalletTotals | null = null;
+        let toast: ToastState | null = null;
+        let toastTimeout: ReturnType<typeof setTimeout> | null = null;
+        let lastRefreshAt = Date.now();
 
-    const showToast = (nextToast: ToastState) => {
-        toast = nextToast;
-        if (toastTimeout) clearTimeout(toastTimeout);
-        toastTimeout = setTimeout(() => {
-            toast = null;
-            update();
-        }, 7000);
-        update();
-    };
-
-    const update = () => {
-        render(
-            <HeroMetrics
-                total={total}
-                totalSupply={totalSupply}
-                tokenPriceUsd={tokenPriceUsd}
-                totalFeesAccumulatedSol={totalFeesAccumulatedSol}
-                totalAccumulatedGravity={totalAccumulatedGravity}
-                epochIndex={epochIndex}
-            />,
-            metricsRoot
-        );
-
-        render(
-            <AddressContainers
-                tokenSymbol={runtimeConfig.tokenSymbol}
-                tokenMint={runtimeConfig.tokenMint}
-                treasuryAddress={runtimeConfig.treasuryAddress}
-                treasuryBalanceSol={treasuryBalanceSol}
-            />,
-            addressRoot
-        );
-
-        render(
-            <PositionPanel
-                runtimeConfig={runtimeConfig}
-                connectedAddress={connectedAddress}
-                walletTotals={walletTotals}
-                total={total}
-                connect={connectWallet}
-                claim={claimRewards}
-                walletError={walletError}
-            />,
-            positionRoot
-        );
-
-        render(
-            <ActivityPanel
-                runtimeConfig={runtimeConfig}
-                activeTab={activeTab}
-                setActiveTab={(tab) => {
-                    activeTab = tab;
-                    update();
-                }}
-                entries={entries}
-                treasuryEvents={treasuryEvents}
-                loading={loading}
-                error={error}
-                connectedAddress={connectedAddress}
-            />,
-            leaderboardRoot
-        );
-
-        render(<Toast toast={toast} explorerTxBaseUrl={runtimeConfig.explorerTxBaseUrl} />, toastRoot);
-
-        if (boardTitle) {
-            boardTitle.textContent = activeTab === 'leaderboard' ? 'Gravity Leaderboard' : 'Recent Treasury Additions';
-        }
-        if (summary) {
-            summary.textContent = activeTab === 'leaderboard'
-                ? (total > 0
-                    ? `${total.toLocaleString()} holders · ${formatNumber(totalFeesAccumulatedSol, 'sol')} revenue · updated ${formatRelativeTime(lastRefreshAt)}`
-                    : 'Waiting for indexer data...')
-                : (treasuryEvents.length > 0
-                    ? `${treasuryEvents.length.toLocaleString()} recent additions · treasury balance ${formatNumber(treasuryBalanceSol, 'sol')} · updated ${formatRelativeTime(lastRefreshAt)}`
-                    : 'Waiting for treasury additions...');
-        }
-
-        if (refreshButton) refreshButton.classList.toggle('is-loading', loading);
-        animateNumbers(metricsRoot);
-        animateNumbers(positionRoot);
-        animateNumbers(addressRoot);
-    };
-
-    async function loadWalletTotals() {
-        if (!connectedAddress) {
-            walletTotals = null;
-            return;
-        }
-
-        const response = await fetch(`/api/wallet?address=${encodeURIComponent(connectedAddress)}`);
-        const data: WalletResponse = await response.json();
-        walletTotals = data.success ? data.wallet : null;
-    }
-
-    async function connectWallet() {
-        walletError = null;
-        const provider = (window as any).solana;
-        if (!provider?.isPhantom || typeof provider.connect !== 'function') {
-            walletError = 'Phantom wallet was not found in this browser.';
-            update();
-            return;
-        }
-
-        try {
-            const result = await provider.connect({ onlyIfTrusted: false });
-            connectedAddress = String(result.publicKey ?? '');
-            showToast({ kind: 'success', message: `Connected ${shortAddress(connectedAddress)}` });
-            await fetchAll();
-            return;
-        } catch (connectError: any) {
-            walletError = typeof connectError?.message === 'string' ? connectError.message : 'Wallet connection failed.';
-        }
-
-        update();
-    }
-
-    async function claimRewards() {
-        walletError = null;
-        let signature: string | undefined;
-
-        try {
-            if (!connectedAddress) {
-                walletError = 'Connect wallet first.';
-                update();
-                return;
-            }
-            if (!runtimeConfig.claimEnabled) {
-                walletError = 'Backend signer keypair is not configured on the web process.';
-                update();
-                return;
-            }
-
-            const phantom = (window as any).solana;
-            if (!phantom?.isPhantom || typeof phantom.signTransaction !== 'function') {
-                walletError = 'Phantom wallet was not found in this browser.';
-                update();
-                return;
-            }
-
-            const response = await fetch('/api/claim', {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ address: connectedAddress }),
-            });
-            const data = await response.json();
-            if (!response.ok) {
-                walletError = data.error ?? 'Claim is not available yet.';
-                update();
-                return;
-            }
-
-            const { Connection, Transaction } = await import('@solana/web3.js');
-            const tx = Transaction.from(Uint8Array.from(atob(data.transaction), (char) => char.charCodeAt(0)));
-            const signed = await phantom.signTransaction(tx);
-            const conn = new Connection(runtimeConfig.rpcUrl, 'confirmed');
-            signature = await conn.sendRawTransaction(signed.serialize(), { skipPreflight: false });
-            const confirmation = await conn.confirmTransaction({
-                signature,
-                blockhash: data.blockhash,
-                lastValidBlockHeight: data.lastValidBlockHeight,
-            }, 'confirmed');
-            if (confirmation.value.err) {
-                throw new Error(typeof confirmation.value.err === 'string'
-                    ? confirmation.value.err
-                    : JSON.stringify(confirmation.value.err));
-            }
-
-            await fetch('/api/claim', {
-                method: 'PUT',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ address: connectedAddress, signature }),
+        const update = (reason = 'unknown') => measureFrontendSync(`update ui (${reason})`, (ms) => {
+            ms('render hero metrics', () => {
+                render(
+                    <HeroMetrics
+                        total={total}
+                        totalSupply={totalSupply}
+                        tokenPriceUsd={tokenPriceUsd}
+                        totalFeesAccumulatedSol={totalFeesAccumulatedSol}
+                        totalAccumulatedGravity={totalAccumulatedGravity}
+                        epochIndex={epochIndex}
+                    />,
+                    metricsRoot
+                );
+                return { total, epochIndex };
             });
 
-            await fetchAll();
-            showToast({ kind: 'success', message: 'Rewards claimed successfully.', txSignature: signature });
-        } catch (claimError: any) {
-            walletError = claimError?.message || 'Claim request failed.';
-            showToast({ kind: 'error', message: walletError ?? 'Claim request failed.', txSignature: signature });
+            ms('render address containers', () => {
+                render(
+                    <AddressContainers
+                        tokenSymbol={runtimeConfig.tokenSymbol}
+                        tokenMint={runtimeConfig.tokenMint}
+                        treasuryAddress={runtimeConfig.treasuryAddress}
+                        treasuryBalanceSol={treasuryBalanceSol}
+                    />,
+                    addressRoot
+                );
+                return { treasuryBalanceSol };
+            });
+
+            ms('render wallet panel', () => {
+                render(
+                    <PositionPanel
+                        runtimeConfig={runtimeConfig}
+                        connectedAddress={connectedAddress}
+                        walletTotals={walletTotals}
+                        total={total}
+                        connect={connectWallet}
+                        claim={claimRewards}
+                        walletError={walletError}
+                    />,
+                    positionRoot
+                );
+                return {
+                    connected: Boolean(connectedAddress),
+                    ranked: Boolean(walletTotals?.rank),
+                    walletError: Boolean(walletError),
+                };
+            });
+
+            ms('render activity panel', () => {
+                render(
+                    <ActivityPanel
+                        runtimeConfig={runtimeConfig}
+                        activeTab={activeTab}
+                        setActiveTab={(tab) => {
+                            activeTab = tab;
+                            update('tab-switch');
+                        }}
+                        entries={entries}
+                        treasuryEvents={treasuryEvents}
+                        loading={loading}
+                        error={error}
+                        connectedAddress={connectedAddress}
+                    />,
+                    leaderboardRoot
+                );
+                return {
+                    activeTab,
+                    entries: entries.length,
+                    treasuryEvents: treasuryEvents.length,
+                    loading,
+                };
+            });
+
+            ms('render toast', () => {
+                render(<Toast toast={toast} explorerTxBaseUrl={runtimeConfig.explorerTxBaseUrl} />, toastRoot);
+                return { visible: Boolean(toast) };
+            });
+
+            ms('update board chrome', () => {
+                if (boardTitle) {
+                    boardTitle.textContent = activeTab === 'leaderboard' ? 'Gravity Leaderboard' : 'Recent Treasury Additions';
+                }
+                if (summary) {
+                    summary.textContent = activeTab === 'leaderboard'
+                        ? (total > 0
+                            ? `${total.toLocaleString()} holders · ${formatNumber(totalFeesAccumulatedSol, 'sol')} revenue · updated ${formatRelativeTime(lastRefreshAt)}`
+                            : 'Waiting for indexer data...')
+                        : (treasuryEvents.length > 0
+                            ? `${treasuryEvents.length.toLocaleString()} recent additions · treasury balance ${formatNumber(treasuryBalanceSol, 'sol')} · updated ${formatRelativeTime(lastRefreshAt)}`
+                            : 'Waiting for treasury additions...');
+                }
+
+                if (refreshButton) refreshButton.classList.toggle('is-loading', loading);
+                return { loading, activeTab };
+            });
+
+            ms('animate numeric fields', () => {
+                animateNumbers(metricsRoot);
+                animateNumbers(positionRoot);
+                animateNumbers(addressRoot);
+                return { sections: 3 };
+            });
+
+            return {
+                reason,
+                total,
+                treasuryEvents: treasuryEvents.length,
+                connected: Boolean(connectedAddress),
+            };
+        });
+
+        const showToast = (nextToast: ToastState) => {
+            toast = nextToast;
+            if (toastTimeout) clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(() => {
+                toast = null;
+                update('toast-timeout');
+            }, 7000);
+            update('show-toast');
+        };
+
+        async function loadWalletTotals() {
+            return await measureFrontend('load wallet totals', async () => {
+                if (!connectedAddress) {
+                    walletTotals = null;
+                    return { connected: false };
+                }
+
+                const response = await fetch(`/api/wallet?address=${encodeURIComponent(connectedAddress)}`);
+                const data: WalletResponse = await response.json();
+                walletTotals = data.success ? data.wallet : null;
+                return {
+                    connected: true,
+                    success: data.success,
+                    ranked: Boolean(walletTotals?.rank),
+                };
+            });
         }
 
-        update();
-    }
+        async function connectWallet() {
+            return await measureFrontend('connect wallet', async (m: MeasureFn) => {
+                walletError = null;
+                const provider = (window as any).solana;
+                if (!provider?.isPhantom || typeof provider.connect !== 'function') {
+                    walletError = 'Phantom wallet was not found in this browser.';
+                    update('connect-missing-provider');
+                    return { success: false, reason: 'missing-provider' };
+                }
 
-    async function fetchAll() {
-        try {
-            loading = true;
-            update();
+                try {
+                    const result = await m('phantom connect request', () => provider.connect({ onlyIfTrusted: false }));
+                    connectedAddress = String((result as { publicKey?: { toString(): string } } | null)?.publicKey ?? '');
+                    showToast({ kind: 'success', message: `Connected ${shortAddress(connectedAddress)}` });
+                    await m('refresh after wallet connect', () => fetchAll('wallet-connect'));
+                    return { success: true, connectedAddress };
+                } catch (connectError: any) {
+                    walletError = typeof connectError?.message === 'string' ? connectError.message : 'Wallet connection failed.';
+                }
 
-            const suffix = connectedAddress ? `?wallet=${encodeURIComponent(connectedAddress)}` : '';
-            const [leaderboardResponse, treasuryResponse] = await Promise.all([
-                fetch(`/api/leaderboard${suffix}`),
-                fetch(`/api/treasury${suffix}`),
-            ]);
-
-            const leaderboardData: LeaderboardResponse = await leaderboardResponse.json();
-            const treasuryData: TreasuryResponse = await treasuryResponse.json();
-
-            if (leaderboardData.success) {
-                entries = leaderboardData.entries
-                    .filter((entry) => entry.tokenBalance > 0)
-                    .sort((a, b) => {
-                        if (b.gravityShare !== a.gravityShare) return b.gravityShare - a.gravityShare;
-                        if (b.accumulatedGravity !== a.accumulatedGravity) return b.accumulatedGravity - a.accumulatedGravity;
-                        return b.tokenBalance - a.tokenBalance;
-                    })
-                    .map((entry, index) => ({ ...entry, rank: index + 1 }));
-                total = entries.length;
-                totalSupply = leaderboardData.totalSupply;
-                tokenPriceUsd = leaderboardData.tokenPriceUsd;
-                epochIndex = leaderboardData.epochIndex;
-                totalFeesAccumulatedSol = leaderboardData.totalFeesAccumulatedSol;
-                treasuryBalanceSol = leaderboardData.treasuryBalanceSol;
-                totalAccumulatedGravity = leaderboardData.totalAccumulatedGravity;
-                lastRefreshAt = Date.now();
-                error = null;
-            } else {
-                error = 'Failed to load indexed leaderboard.';
-            }
-
-            if (treasuryData.success) {
-                treasuryEvents = treasuryData.events;
-            } else if (!error) {
-                error = 'Failed to load treasury additions.';
-            }
-
-            await loadWalletTotals();
-        } catch {
-            error = 'Error fetching indexed activity data.';
-        } finally {
-            loading = false;
-            update();
+                update('connect-error');
+                return { success: false, reason: 'connect-error' };
+            });
         }
-    }
 
-    refreshButton?.addEventListener('click', fetchAll);
+        async function claimRewards() {
+            return await measureFrontend('claim rewards', async (m: MeasureFn) => {
+                walletError = null;
+                let signature: string | undefined;
 
-    void fetchAll();
-    const refreshInterval = setInterval(fetchAll, 30000);
-    const relativeTimeInterval = setInterval(update, 5000);
+                try {
+                    if (!connectedAddress) {
+                        walletError = 'Connect wallet first.';
+                        update('claim-no-wallet');
+                        return { success: false, reason: 'no-wallet' };
+                    }
+                    if (!runtimeConfig.claimEnabled) {
+                        walletError = 'Backend signer keypair is not configured on the web process.';
+                        update('claim-disabled');
+                        return { success: false, reason: 'claim-disabled' };
+                    }
 
-    return () => {
-        clearInterval(refreshInterval);
-        clearInterval(relativeTimeInterval);
-        refreshButton?.removeEventListener('click', fetchAll);
-        if (toastTimeout) clearTimeout(toastTimeout);
-        render(null, leaderboardRoot);
-        render(null, positionRoot);
-        render(null, metricsRoot);
-        render(null, addressRoot);
-        render(null, toastRoot);
-    };
+                    const phantom = (window as any).solana;
+                    if (!phantom?.isPhantom || typeof phantom.signTransaction !== 'function') {
+                        walletError = 'Phantom wallet was not found in this browser.';
+                        update('claim-missing-provider');
+                        return { success: false, reason: 'missing-provider' };
+                    }
+
+                    const response = await m('request claim transaction', () => fetch('/api/claim', {
+                        method: 'POST',
+                        headers: { 'content-type': 'application/json' },
+                        body: JSON.stringify({ address: connectedAddress }),
+                    }));
+                    if (!response) {
+                        throw new Error('Unable to prepare claim transaction.');
+                    }
+                    const data = await m('parse claim transaction payload', () => response.json() as Promise<any>);
+                    if (!data) {
+                        throw new Error('Unable to parse claim transaction.');
+                    }
+                    if (!response.ok) {
+                        walletError = data.error ?? 'Claim is not available yet.';
+                        update('claim-request-error');
+                        return { success: false, reason: 'claim-request-error' };
+                    }
+
+                    const web3 = await m('load web3 claim dependencies', () => import('@solana/web3.js'));
+                    if (!web3) {
+                        throw new Error('Unable to load web3 claim dependencies.');
+                    }
+                    const { Connection, Transaction } = web3 as typeof import('@solana/web3.js');
+                    const tx = measureFrontendSync('decode claim transaction', () =>
+                        Transaction.from(Uint8Array.from(atob(data.transaction), (char) => char.charCodeAt(0)))
+                    );
+                    if (!tx) {
+                        throw new Error('Unable to decode claim transaction.');
+                    }
+                    const signed = await m('sign claim transaction', () => phantom.signTransaction(tx));
+                    if (!signed) {
+                        throw new Error('Unable to sign claim transaction.');
+                    }
+                    const conn = new Connection(runtimeConfig.rpcUrl, 'confirmed');
+                    signature = (await m('submit signed transaction', () =>
+                        conn.sendRawTransaction((signed as any).serialize(), { skipPreflight: false })
+                    )) ?? undefined;
+                    if (!signature) {
+                        throw new Error('Claim transaction submission failed.');
+                    }
+                    const confirmedSignature = signature;
+                    const confirmation = await m('confirm claim transaction', () => conn.confirmTransaction({
+                        signature: confirmedSignature,
+                        blockhash: data.blockhash,
+                        lastValidBlockHeight: data.lastValidBlockHeight,
+                    }, 'confirmed')) as Awaited<ReturnType<typeof conn.confirmTransaction>> | null;
+                    if (!confirmation) {
+                        throw new Error('Claim transaction confirmation failed.');
+                    }
+                    if (confirmation.value.err) {
+                        throw new Error(typeof confirmation.value.err === 'string'
+                            ? confirmation.value.err
+                            : JSON.stringify(confirmation.value.err));
+                    }
+
+                    await m('report claim confirmation', () => fetch('/api/claim', {
+                        method: 'PUT',
+                        headers: { 'content-type': 'application/json' },
+                        body: JSON.stringify({ address: connectedAddress, signature }),
+                    }));
+
+                    await m('refresh after claim', () => fetchAll('claim-success'));
+                    showToast({ kind: 'success', message: 'Rewards claimed successfully.', txSignature: signature });
+                    return { success: true, signature };
+                } catch (claimError: any) {
+                    walletError = claimError?.message || 'Claim request failed.';
+                    showToast({ kind: 'error', message: walletError ?? 'Claim request failed.', txSignature: signature });
+                }
+
+                update('claim-error');
+                return { success: false, reason: 'claim-error' };
+            });
+        }
+
+        async function fetchAll(reason = 'manual-refresh') {
+            return await measureFrontend(`fetch all (${reason})`, async (m: MeasureFn, ms: MeasureSyncFn) => {
+                try {
+                    loading = true;
+                    ms('mark loading and render', () => update(`fetch-start:${reason}`));
+
+                    const suffix = connectedAddress ? `?wallet=${encodeURIComponent(connectedAddress)}` : '';
+                    const [leaderboardResponse, treasuryResponse] = await Promise.all([
+                        m('fetch leaderboard api', () => fetch(`/api/leaderboard${suffix}`)),
+                        m('fetch treasury api', () => fetch(`/api/treasury${suffix}`)),
+                    ]);
+                    if (!leaderboardResponse || !treasuryResponse) {
+                        throw new Error('Activity API request failed.');
+                    }
+
+                    const [leaderboardData, treasuryData] = await Promise.all([
+                        m('parse leaderboard payload', () => leaderboardResponse.json() as Promise<LeaderboardResponse>),
+                        m('parse treasury payload', () => treasuryResponse.json() as Promise<TreasuryResponse>),
+                    ]);
+                    if (!leaderboardData || !treasuryData) {
+                        throw new Error('Activity API payload parsing failed.');
+                    }
+
+                    if (leaderboardData.success) {
+                        entries = ms('normalize leaderboard entries', () => leaderboardData.entries
+                            .filter((entry) => entry.tokenBalance > 0)
+                            .sort((a, b) => {
+                                if (b.gravityShare !== a.gravityShare) return b.gravityShare - a.gravityShare;
+                                if (b.accumulatedGravity !== a.accumulatedGravity) return b.accumulatedGravity - a.accumulatedGravity;
+                                return b.tokenBalance - a.tokenBalance;
+                            })
+                            .map((entry, index) => ({ ...entry, rank: index + 1 }))
+                        ) ?? [];
+                        total = entries.length;
+                        totalSupply = leaderboardData.totalSupply;
+                        tokenPriceUsd = leaderboardData.tokenPriceUsd;
+                        epochIndex = leaderboardData.epochIndex;
+                        totalFeesAccumulatedSol = leaderboardData.totalFeesAccumulatedSol;
+                        treasuryBalanceSol = leaderboardData.treasuryBalanceSol;
+                        totalAccumulatedGravity = leaderboardData.totalAccumulatedGravity;
+                        lastRefreshAt = Date.now();
+                        error = null;
+                    } else {
+                        error = 'Failed to load indexed leaderboard.';
+                    }
+
+                    if (treasuryData.success) {
+                        treasuryEvents = treasuryData.events;
+                    } else if (!error) {
+                        error = 'Failed to load treasury additions.';
+                    }
+
+                    await m('refresh wallet totals', () => loadWalletTotals());
+                } catch {
+                    error = 'Error fetching indexed activity data.';
+                } finally {
+                    loading = false;
+                    ms('final render after fetch', () => update(`fetch-finish:${reason}`));
+                }
+
+                return {
+                    reason,
+                    entries: entries.length,
+                    treasuryEvents: treasuryEvents.length,
+                    connected: Boolean(connectedAddress),
+                };
+            });
+        }
+
+        const handleRefreshClick = () => {
+            void fetchAll('refresh-button');
+        };
+        refreshButton?.addEventListener('click', handleRefreshClick);
+
+        void fetchAll('initial-load');
+        const refreshInterval = setInterval(() => {
+            void fetchAll('interval-refresh');
+        }, 30000);
+        const relativeTimeInterval = setInterval(() => {
+            update('relative-time-tick');
+        }, 5000);
+
+        return () => {
+            measureFrontendSync('unmount page client', (ms) => {
+                clearInterval(refreshInterval);
+                clearInterval(relativeTimeInterval);
+                refreshButton?.removeEventListener('click', handleRefreshClick);
+                if (toastTimeout) clearTimeout(toastTimeout);
+                ms('clear rendered roots', () => {
+                    render(null, leaderboardRoot);
+                    render(null, positionRoot);
+                    render(null, metricsRoot);
+                    render(null, addressRoot);
+                    render(null, toastRoot);
+                    return { cleared: 5 };
+                });
+                return { activeTab, connected: Boolean(connectedAddress) };
+            });
+        };
+    });
 }
 
 declare global {
