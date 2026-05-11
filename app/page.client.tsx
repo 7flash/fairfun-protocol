@@ -16,8 +16,11 @@ interface LeaderboardEntry {
 interface TreasuryEvent {
     signature: string;
     amountSol: number;
+    amountUsd: number;
     payoutAmountSol: number;
-    observedTotalDepositsSol: number;
+    payoutAmountUsd: number;
+    depositorAddress: string;
+    depositorAddressShort: string;
     timestamp: number;
 }
 
@@ -110,6 +113,13 @@ function formatNumber(value: number, kind: NumberFormatKind) {
             return value.toFixed(2);
         case 'sol':
             if (value >= 1_000) return `${(value / 1_000).toFixed(2)}K SOL`;
+            if (!Number.isFinite(value) || value === 0) return '0 SOL';
+            if (Math.abs(value) < 0.000001) {
+                return `${Math.round(value * 1_000_000_000).toLocaleString()} lamports`;
+            }
+            if (Math.abs(value) < 0.01) {
+                return `${value.toLocaleString(undefined, { maximumFractionDigits: 8 })} SOL`;
+            }
             return `${value.toLocaleString(undefined, { maximumFractionDigits: 4 })} SOL`;
         case 'tokens':
             if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
@@ -463,8 +473,8 @@ function TreasuryTable({
                 <tr>
                     <th>When</th>
                     <th className="th-num">Treasury Added</th>
+                    <th>Deposited By</th>
                     <th className="th-num">You Got</th>
-                    <th className="th-num">Total Deposits</th>
                     <th>Transaction</th>
                 </tr>
             </thead>
@@ -482,11 +492,26 @@ function TreasuryTable({
                                 <div>{formatRelativeTime(event.timestamp)}</div>
                                 <div className="wallet-sub">{new Date(event.timestamp).toLocaleString()}</div>
                             </td>
-                            <td className="td-num td-emerald">{formatNumber(event.amountSol, 'sol')}</td>
-                            <td className="td-num td-cyan">
-                                {connectedAddress ? formatNumber(event.payoutAmountSol, 'sol') : 'Connect wallet'}
+                            <td className="td-num td-emerald">
+                                <div>{formatNumber(event.amountSol, 'sol')}</div>
+                                <div className="num-sub">{formatNumber(event.amountUsd, 'usd')}</div>
                             </td>
-                            <td className="td-num">{formatNumber(event.observedTotalDepositsSol, 'sol')}</td>
+                            <td>
+                                {event.depositorAddress ? (
+                                    <>
+                                        <span className="wallet-mono">{event.depositorAddressShort}</span>
+                                        <div className="wallet-sub">{event.depositorAddress}</div>
+                                    </>
+                                ) : 'Unknown'}
+                            </td>
+                            <td className="td-num td-cyan">
+                                {connectedAddress ? (
+                                    <>
+                                        <div>{formatNumber(event.payoutAmountSol, 'sol')}</div>
+                                        <div className="num-sub">{formatNumber(event.payoutAmountUsd, 'usd')}</div>
+                                    </>
+                                ) : 'Connect wallet'}
+                            </td>
                             <td>
                                 <a
                                     className="tx-link"

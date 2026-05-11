@@ -16,6 +16,7 @@ import {
 } from './database';
 import { PublicKey } from '@solana/web3.js';
 import { config } from './config';
+import { derivePrimaryDepositorAddress } from './treasury';
 
 let indexing = false;
 let interval: ReturnType<typeof setInterval> | null = null;
@@ -116,9 +117,11 @@ async function getTreasuryInflowStats(now: number) {
             if (deltaLamports > 0) {
                 const amountSol = deltaLamports / 1_000_000_000;
                 feeDeltaSol += amountSol;
+                const depositorAddress = derivePrimaryDepositorAddress(tx, treasury);
                 events.push({
                     signature: signatureInfo.signature,
                     amountSol,
+                    depositorAddress,
                     slot: signatureInfo.slot,
                     timestamp: signatureInfo.blockTime ? signatureInfo.blockTime * 1000 : now,
                 });

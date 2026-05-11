@@ -43,6 +43,7 @@ export const db = new Database(dbPath, {
     treasuryEvents: z.object({
         signature: z.string(),
         amountSol: z.number(),
+        depositorAddress: z.string().default(''),
         observedTotalDepositsSol: z.number().default(0),
         slot: z.number().default(0),
         timestamp: z.number().default(0),
@@ -94,6 +95,7 @@ export interface TreasuryEventRecord {
     id?: number;
     signature: string;
     amountSol: number;
+    depositorAddress: string;
     observedTotalDepositsSol: number;
     slot: number;
     timestamp: number;
@@ -111,6 +113,7 @@ export interface TreasuryPayoutRecord {
 export interface TreasuryEventInput {
     signature: string;
     amountSol: number;
+    depositorAddress?: string;
     observedTotalDepositsSol?: number;
     slot?: number;
     timestamp?: number;
@@ -273,6 +276,7 @@ export function distributeTreasuryFees(params: {
             {
                 signature: event.signature,
                 amountSol: event.amountSol,
+                depositorAddress: event.depositorAddress ?? '',
                 observedTotalDepositsSol: event.observedTotalDepositsSol ?? 0,
                 slot: event.slot ?? 0,
                 timestamp: event.timestamp ?? now,

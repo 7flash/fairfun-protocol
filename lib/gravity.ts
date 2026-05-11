@@ -3,10 +3,13 @@ import { config } from './config';
 
 let tokenPriceUSD = 0;
 let lastPriceUpdate = 0;
+let solPriceUSD = 0;
+let lastSolPriceUpdate = 0;
 const PRICE_CACHE_TTL = 60000;
+const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
-async function fetchDexScreenerPrice(): Promise<number> {
-    const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${TOKEN_MINT}`, {
+async function fetchDexScreenerPrice(tokenMint: string): Promise<number> {
+    const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`, {
         headers: { accept: 'application/json' }
     });
 
@@ -33,7 +36,7 @@ export async function getCurrentTokenPrice(): Promise<number> {
     }
 
     try {
-        const price = await fetchDexScreenerPrice();
+        const price = await fetchDexScreenerPrice(TOKEN_MINT);
         if (price > 0) {
             tokenPriceUSD = price;
             lastPriceUpdate = now;
@@ -43,6 +46,25 @@ export async function getCurrentTokenPrice(): Promise<number> {
     }
 
     return tokenPriceUSD;
+}
+
+export async function getCurrentSolPrice(): Promise<number> {
+    const now = Date.now();
+    if (now - lastSolPriceUpdate < PRICE_CACHE_TTL && solPriceUSD > 0) {
+        return solPriceUSD;
+    }
+
+    try {
+        const price = await fetchDexScreenerPrice(SOL_MINT);
+        if (price > 0) {
+            solPriceUSD = price;
+            lastSolPriceUpdate = now;
+        }
+    } catch (error) {
+        console.error('[Price] Unable to fetch SOL price:', error);
+    }
+
+    return solPriceUSD;
 }
 
 export function formatGravity(gravity: number): string {
@@ -60,5 +82,12 @@ export function formatUSD(value: number): string {
 }
 
 export function formatSOL(value: number): string {
+    if (!Number.isFinite(value) || value === 0) return '0 SOL';
+    if (Math.abs(value) < 0.000001) {
+        return `${Math.round(value * 1_000_000_000).toLocaleString()} lamports`;
+    }
+    if (Math.abs(value) < 0.01) {
+        return `${value.toLocaleString(undefined, { maximumFractionDigits: 8 })} SOL`;
+    }
     return `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} SOL`;
 }
