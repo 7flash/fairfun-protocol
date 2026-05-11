@@ -99,61 +99,8 @@ a {
     line-height: 1.62;
 }
 
-.page-subcopy {
-    max-width: 860px;
-    margin: 14px 0 0;
-    color: var(--muted);
-    font-size: 0.94rem;
-    line-height: 1.7;
-}
-
 .summary-shell {
     margin-bottom: 40px;
-}
-.metrics-row {
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 14px;
-    margin-bottom: 16px;
-}
-
-.metric-card {
-    background: var(--glass);
-    backdrop-filter: blur(18px);
-    border: 1px solid var(--line);
-    border-radius: 20px;
-    padding: 22px;
-    transition: border-color 0.15s ease;
-    min-width: 0;
-}
-
-.metric-card:hover {
-    border-color: var(--line-strong);
-}
-
-.metric-label {
-    font-size: 0.68rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    color: var(--blue); /* more blue */
-    text-transform: uppercase;
-}
-
-.metric-value {
-    margin-top: 12px;
-    font-size: 1.95rem;
-    font-weight: 800;
-    line-height: 1.1;
-    letter-spacing: -0.025em;
-    color: white;
-    font-variant-numeric: tabular-nums;
-}
-
-.metric-sub {
-    margin-top: 6px;
-    color: var(--muted);
-    font-size: 0.76rem;
-    font-weight: 600;
 }
 
 .info-row {
@@ -223,21 +170,6 @@ a {
     color: var(--cyan);
 }
 
-.treasury-stats {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-    margin-top: 18px;
-}
-
-.treasury-stat {
-    background: rgba(0, 0, 0, 0.26);
-    border: 1px solid rgba(148, 163, 184, 0.08);
-    border-radius: 16px;
-    padding: 14px;
-    min-width: 0;
-}
-
 .small-label {
     display: block;
     font-size: 0.68rem;
@@ -247,23 +179,38 @@ a {
     text-transform: uppercase;
 }
 
-.treasury-stat-value {
-    display: block;
-    margin-top: 8px;
-    font-size: 1.38rem;
-    font-weight: 800;
-    line-height: 1.12;
-    letter-spacing: -0.02em;
-    color: white;
-    font-variant-numeric: tabular-nums;
-}
-
 .treasury-note {
     display: block;
-    margin-top: 6px;
+    margin-top: 16px;
     color: var(--muted);
     font-size: 0.74rem;
     line-height: 1.45;
+}
+
+.info-rows {
+    display: grid;
+    gap: 12px;
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.info-stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 16px;
+    min-width: 0;
+}
+
+.inline-value {
+    font-size: 1.16rem;
+    font-weight: 800;
+    line-height: 1.12;
+    letter-spacing: -0.02em;
+    color: var(--cyan);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
 }
 
 .hero-grid {
@@ -465,15 +412,18 @@ a {
 .position-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 10px;
-    margin-bottom: 18px;
+    gap: 18px 24px;
+    margin-bottom: 22px;
 }
 
 .grid-cell {
-    background: rgba(0, 0, 0, 0.3);
-    border-radius: 14px;
-    padding: 14px;
-    border: 1px solid rgba(148, 163, 184, 0.08);
+    min-width: 0;
+    padding-bottom: 14px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.grid-cell-claimable {
+    grid-column: 1 / -1;
 }
 
 .cell-label {
@@ -486,11 +436,12 @@ a {
 
 .cell-value {
     margin-top: 6px;
-    font-size: 1.4rem;
+    font-size: 1.22rem;
     font-weight: 800;
     line-height: 1.15;
     letter-spacing: -0.02em;
     font-variant-numeric: tabular-nums;
+    color: var(--cyan);
 }
 
 .cell-value.cell-cyan {
@@ -552,18 +503,20 @@ a {
     min-width: 0;
 }
 
-.board-header {
+.workspace-toolbar {
     display: flex;
     justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 14px;
 }
 
-.board-title {
-    margin: 0;
-    font-size: 1.85rem;
-    font-weight: 800;
-    letter-spacing: -0.025em;
+.workspace-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    min-width: 0;
 }
 
 .refresh-button {
@@ -598,11 +551,12 @@ a {
     color: var(--muted);
     font-size: 0.82rem;
     font-weight: 600;
-    margin-bottom: 16px;
+    min-width: 0;
 }
 
 .board-status-text {
     min-width: 0;
+    text-align: right;
 }
 
 .live-dot {
@@ -641,8 +595,7 @@ a {
 .board-tabs {
     display: flex;
     gap: 10px;
-    padding: 0 0 14px;
-    margin-bottom: 0;
+    min-width: 0;
 }
 
 .board-tab {
@@ -942,18 +895,12 @@ a {
 }
 
 @media (max-width: 1360px) {
-    .metrics-row {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
     .info-row {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 }
 
 @media (max-width: 1280px) {
-    .metrics-row {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
     .info-row {
         grid-template-columns: 1fr;
     }
@@ -970,22 +917,23 @@ a {
 }
 
 @media (max-width: 860px) {
-    .board-header {
+    .workspace-toolbar {
         flex-direction: column;
-        align-items: flex-start;
-        gap: 12px;
+        align-items: stretch;
     }
-    .board-status {
-        align-items: flex-start;
-        flex-direction: column;
+    .workspace-actions {
+        justify-content: space-between;
+        flex-wrap: wrap;
     }
     .leaderboard-panel {
         overflow-x: auto;
         max-height: none;
     }
     .board-tabs {
-        min-width: 0;
         flex-wrap: wrap;
+    }
+    .board-status-text {
+        text-align: left;
     }
     .leaderboard-table {
         min-width: 720px;
@@ -999,24 +947,17 @@ a {
     .page-main {
         padding: 24px 16px 48px;
     }
-    .metrics-row {
-        grid-template-columns: 1fr;
-    }
     .position-grid {
         grid-template-columns: 1fr;
+    }
+    .grid-cell-claimable {
+        grid-column: auto;
     }
     .position-panel {
         padding: 22px;
     }
-    .metric-card,
     .info-card {
         padding: 18px;
-    }
-    .metric-value {
-        font-size: 1.55rem;
-    }
-    .treasury-stat-value {
-        font-size: 1.2rem;
     }
     .page-title {
         font-size: 2.3rem;
@@ -1026,7 +967,11 @@ a {
         right: 14px;
         bottom: 14px;
     }
-    .treasury-stats {
-        grid-template-columns: 1fr;
+    .workspace-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .refresh-button {
+        justify-content: center;
     }
 }

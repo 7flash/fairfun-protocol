@@ -190,70 +190,36 @@ function animateNumbers(scope: ParentNode) {
     });
 }
 
-function HeroMetrics({
+function InfoCards({
+    runtimeConfig,
     total,
     totalSupply,
     tokenPriceUsd,
-    totalFeesAccumulatedSol,
-    totalAccumulatedGravity,
-    epochIndex,
-}: {
-    total: number;
-    totalSupply: number;
-    tokenPriceUsd: number;
-    totalFeesAccumulatedSol: number;
-    totalAccumulatedGravity: number;
-    epochIndex: number;
-}) {
-    const marketCap = totalSupply * tokenPriceUsd;
-
-    return (
-        <div className="metrics-row">
-            <div className="metric-card header-tooltip" data-tooltip="Current number of indexed wallets holding the token.">
-                <div className="metric-label">Holders</div>
-                <div className="metric-value"><AnimatedValue value={total} kind="int" /></div>
-            </div>
-            <div className="metric-card header-tooltip" data-tooltip="Current token market cap based on indexed supply and price.">
-                <div className="metric-label">Market Cap</div>
-                <div className="metric-value"><AnimatedValue value={marketCap} kind="usd" /></div>
-            </div>
-            <div className="metric-card header-tooltip" data-tooltip="Total SOL revenue tracked as deposited into the protocol treasury.">
-                <div className="metric-label">Total Revenue</div>
-                <div className="metric-value"><AnimatedValue value={totalFeesAccumulatedSol} kind="sol" /></div>
-                <div className="metric-sub">deposited into treasury</div>
-            </div>
-            <div className="metric-card header-tooltip" data-tooltip="Total global gravity accumulated across all wallets.">
-                <div className="metric-label">Total Gravity</div>
-                <div className="metric-value"><AnimatedValue value={totalAccumulatedGravity} kind="gravity" /></div>
-            </div>
-            <div className="metric-card header-tooltip" data-tooltip="Current indexed epoch for continuous gravity accrual.">
-                <div className="metric-label">Epoch</div>
-                <div className="metric-value"><AnimatedValue value={epochIndex} kind="int" /></div>
-            </div>
-        </div>
-    );
-}
-
-function InfoCards({
-    runtimeConfig,
     totalFeesAccumulatedSol,
     totalClaimedSol,
     treasuryBalanceSol,
     totalAccumulatedGravity,
     lastGravityDelta,
+    epochIndex,
 }: {
     runtimeConfig: RuntimeConfig;
+    total: number;
+    totalSupply: number;
+    tokenPriceUsd: number;
     totalFeesAccumulatedSol: number;
     totalClaimedSol: number;
     treasuryBalanceSol: number;
     totalAccumulatedGravity: number;
     lastGravityDelta: number;
+    epochIndex: number;
 }) {
     const accountExplorerBaseUrl = runtimeConfig.explorerTxBaseUrl.replace('/tx/', '/account/');
     const copyToClipboard = (text: string) => {
         void navigator.clipboard.writeText(text);
     };
+    const marketCap = totalSupply * tokenPriceUsd;
     const balanceMatchesTrackedFlow = treasuryBalanceSol <= totalFeesAccumulatedSol + 0.0000001;
+    const revenueLabel = balanceMatchesTrackedFlow ? 'All-Time Revenue' : 'Tracked Revenue';
     const treasuryBalanceLabel = balanceMatchesTrackedFlow ? 'Current Balance' : 'On-chain Balance';
     const treasuryBalanceTooltip = balanceMatchesTrackedFlow
         ? 'Current treasury balance remaining after holder claims.'
@@ -277,6 +243,16 @@ function InfoCards({
                 <a className="info-link" href={`${accountExplorerBaseUrl}${runtimeConfig.tokenMint}`} rel="noreferrer" target="_blank">
                     View on Solscan
                 </a>
+                <div className="info-rows">
+                    <div className="info-stat-row">
+                        <span className="small-label">Holders</span>
+                        <span className="inline-value"><AnimatedValue value={total} kind="int" /></span>
+                    </div>
+                    <div className="info-stat-row">
+                        <span className="small-label">Market Cap</span>
+                        <span className="inline-value"><AnimatedValue value={marketCap} kind="usd" /></span>
+                    </div>
+                </div>
             </section>
 
             <section className="info-card address-tooltip" data-tooltip="Total SOL routed through the protocol versus SOL currently awaiting claim in the treasury.">
@@ -295,21 +271,21 @@ function InfoCards({
                 <a className="info-link" href={`${accountExplorerBaseUrl}${runtimeConfig.treasuryAddress}`} rel="noreferrer" target="_blank">
                     View on Solscan
                 </a>
-                <div className="treasury-stats">
-                    <div className="treasury-stat">
-                        <span className="small-label">Total Revenue</span>
-                        <span className="treasury-stat-value">{formatNumber(totalFeesAccumulatedSol, 'sol')}</span>
+                <div className="info-rows">
+                    <div className="info-stat-row">
+                        <span className="small-label">{revenueLabel}</span>
+                        <span className="inline-value">{formatNumber(totalFeesAccumulatedSol, 'sol')}</span>
                     </div>
-                    <div className="treasury-stat">
+                    <div className="info-stat-row">
                         <span className="small-label">Claimed</span>
-                        <span className="treasury-stat-value">{formatNumber(totalClaimedSol, 'sol')}</span>
+                        <span className="inline-value">{formatNumber(totalClaimedSol, 'sol')}</span>
                     </div>
-                    <div className="treasury-stat">
+                    <div className="info-stat-row">
                         <span className="small-label">{treasuryBalanceLabel}</span>
-                        <span className="treasury-stat-value">{formatNumber(treasuryBalanceSol, 'sol')}</span>
-                        <span className="treasury-note">{treasuryBalanceTooltip}</span>
+                        <span className="inline-value">{formatNumber(treasuryBalanceSol, 'sol')}</span>
                     </div>
                 </div>
+                <div className="treasury-note">{treasuryBalanceTooltip}</div>
             </section>
 
             <section className="info-card address-tooltip" data-tooltip="The real-time state of the continuous accrual algorithm.">
@@ -322,7 +298,16 @@ function InfoCards({
                 <div className="info-value-row">
                     <div className="info-value">{formatNumber(totalAccumulatedGravity, 'gravity')}</div>
                 </div>
-                <div className="small-label">+{formatNumber(lastGravityDelta, 'gravity')} last epoch</div>
+                <div className="info-rows">
+                    <div className="info-stat-row">
+                        <span className="small-label">Epoch</span>
+                        <span className="inline-value">{epochIndex.toLocaleString()}</span>
+                    </div>
+                    <div className="info-stat-row">
+                        <span className="small-label">Last Epoch Growth</span>
+                        <span className="inline-value">+{formatNumber(lastGravityDelta, 'gravity')}</span>
+                    </div>
+                </div>
             </section>
         </div>
     );
@@ -412,7 +397,7 @@ function PositionPanel({
                     <div className="cell-label">SOL Claimed</div>
                     <div className="cell-value"><AnimatedValue value={walletTotals?.totalSolRewardsClaimed ?? 0} kind="sol" /></div>
                 </div>
-                <div className="grid-cell">
+                <div className="grid-cell grid-cell-claimable">
                     <div className="cell-label">Claimable</div>
                     <div className="cell-value"><AnimatedValue value={walletTotals?.claimableSolRewards ?? 0} kind="sol" /></div>
                 </div>
@@ -599,6 +584,8 @@ function ActivityPanel({
     loading,
     error,
     connectedAddress,
+    summaryText,
+    onRefresh,
 }: {
     runtimeConfig: RuntimeConfig;
     activeTab: ActivityTab;
@@ -608,24 +595,38 @@ function ActivityPanel({
     loading: boolean;
     error: string | null;
     connectedAddress: string | null;
+    summaryText: string;
+    onRefresh: () => void;
 }) {
     return (
         <div className="activity-shell">
-            <div className="board-tabs">
-                <button
-                    className={`board-tab ${activeTab === 'leaderboard' ? 'is-active' : ''}`}
-                    onClick={() => setActiveTab('leaderboard')}
-                    type="button"
-                >
-                    Leaderboard
-                </button>
-                <button
-                    className={`board-tab ${activeTab === 'treasury' ? 'is-active' : ''}`}
-                    onClick={() => setActiveTab('treasury')}
-                    type="button"
-                >
-                    Treasury Additions
-                </button>
+            <div className="workspace-toolbar">
+                <div className="board-tabs">
+                    <button
+                        className={`board-tab ${activeTab === 'leaderboard' ? 'is-active' : ''}`}
+                        onClick={() => setActiveTab('leaderboard')}
+                        type="button"
+                    >
+                        Leaderboard
+                    </button>
+                    <button
+                        className={`board-tab ${activeTab === 'treasury' ? 'is-active' : ''}`}
+                        onClick={() => setActiveTab('treasury')}
+                        type="button"
+                    >
+                        Treasury Additions
+                    </button>
+                </div>
+                <div className="workspace-actions">
+                    <button className={`refresh-button ${loading ? 'is-loading' : ''}`} onClick={onRefresh} type="button">
+                        <span className="refresh-icon">↻</span>
+                        <span>Refresh</span>
+                    </button>
+                    <div className="board-status">
+                        <span className="live-dot">LIVE</span>
+                        <span className="board-status-text">{summaryText}</span>
+                    </div>
+                </div>
             </div>
 
             <div className="leaderboard-panel">
@@ -670,14 +671,10 @@ export default function mount() {
         const runtimeConfig = getRuntimeConfig();
         const leaderboardRoot = document.getElementById('leaderboard-root');
         const positionRoot = document.getElementById('wallet-position-root');
-        const metricsRoot = document.getElementById('hero-metrics-root');
         const infoRoot = document.getElementById('hero-info-root');
         const toastRoot = document.getElementById('toast-root');
-        const refreshButton = document.getElementById('refresh-button') as HTMLButtonElement | null;
-        const summary = document.getElementById('leaderboard-summary');
-        const boardTitle = document.querySelector('.board-title');
 
-        if (!leaderboardRoot || !positionRoot || !metricsRoot || !infoRoot || !toastRoot) return;
+        if (!leaderboardRoot || !positionRoot || !infoRoot || !toastRoot) return;
 
         let entries: LeaderboardEntry[] = [];
         let treasuryEvents: TreasuryEvent[] = [];
@@ -686,7 +683,6 @@ export default function mount() {
         let tokenPriceUsd = 0;
         let epochIndex = 0;
         let totalFeesAccumulatedSol = 0;
-        let lastFeeDeltaSol = 0;
         let totalClaimedSol = 0;
         let treasuryBalanceSol = 0;
         let totalAccumulatedGravity = 0;
@@ -701,34 +697,34 @@ export default function mount() {
         let toastTimeout: ReturnType<typeof setTimeout> | null = null;
         let lastRefreshAt = Date.now();
 
-        const renderMetrics = () => measureFrontendSync('render metrics row', () => {
-            render(
-                <HeroMetrics
-                    total={total}
-                    totalSupply={totalSupply}
-                    tokenPriceUsd={tokenPriceUsd}
-                    totalFeesAccumulatedSol={totalFeesAccumulatedSol}
-                    totalAccumulatedGravity={totalAccumulatedGravity}
-                    epochIndex={epochIndex}
-                />,
-                metricsRoot
-            );
-            animateNumbers(metricsRoot);
-            return { total, epochIndex, totalFeesAccumulatedSol };
-        });
+        const getSummaryText = () => {
+            if (activeTab === 'leaderboard') {
+                return total > 0
+                    ? `Holders ranked by accumulated gravity share and earned SOL rewards · updated ${formatRelativeTime(lastRefreshAt)}`
+                    : 'Waiting for indexer data...';
+            }
+            return treasuryEvents.length > 0
+                ? `Revenue deposits recorded for this reward pool · updated ${formatRelativeTime(lastRefreshAt)}`
+                : 'Waiting for treasury additions...';
+        };
 
         const renderInfoCards = () => measureFrontendSync('render info row', () => {
             render(
                 <InfoCards
                     runtimeConfig={runtimeConfig}
+                    total={total}
+                    totalSupply={totalSupply}
+                    tokenPriceUsd={tokenPriceUsd}
                     totalFeesAccumulatedSol={totalFeesAccumulatedSol}
                     totalClaimedSol={totalClaimedSol}
                     treasuryBalanceSol={treasuryBalanceSol}
                     totalAccumulatedGravity={totalAccumulatedGravity}
                     lastGravityDelta={lastGravityDelta}
+                    epochIndex={epochIndex}
                 />,
                 infoRoot
             );
+            animateNumbers(infoRoot);
             return { treasuryBalanceSol, totalAccumulatedGravity };
         });
 
@@ -767,6 +763,8 @@ export default function mount() {
                     loading={loading}
                     error={error}
                     connectedAddress={connectedAddress}
+                    summaryText={getSummaryText()}
+                    onRefresh={handleRefreshClick}
                 />,
                 leaderboardRoot
             );
@@ -783,42 +781,12 @@ export default function mount() {
             return { visible: Boolean(toast) };
         });
 
-        const updateBoardChrome = () => measureFrontendSync('update board chrome', () => {
-            if (boardTitle) {
-                boardTitle.textContent = activeTab === 'leaderboard' ? 'Holder Gravity Leaderboard' : 'Treasury Additions';
-            }
-            if (summary) {
-                summary.textContent = activeTab === 'leaderboard'
-                    ? (total > 0
-                        ? `Holders ranked by accumulated gravity share and earned SOL rewards · updated ${formatRelativeTime(lastRefreshAt)}`
-                        : 'Waiting for indexer data...')
-                    : (treasuryEvents.length > 0
-                        ? `Revenue deposits recorded for this reward pool · updated ${formatRelativeTime(lastRefreshAt)}`
-                        : 'Waiting for treasury additions...');
-            }
-
-            if (refreshButton) refreshButton.classList.toggle('is-loading', loading);
-            return { loading, activeTab };
-        });
-
         const updateRelativeTimeOnly = () => measureFrontendSync('update relative time only', () => {
-            if (summary) {
-                summary.textContent = activeTab === 'leaderboard'
-                    ? (total > 0
-                        ? `${total.toLocaleString()} holders · ${formatNumber(totalFeesAccumulatedSol, 'sol')} revenue · updated ${formatRelativeTime(lastRefreshAt)}`
-                        : 'Waiting for indexer data...')
-                    : (treasuryEvents.length > 0
-                        ? `${treasuryEvents.length.toLocaleString()} recent additions · treasury balance ${formatNumber(treasuryBalanceSol, 'sol')} · updated ${formatRelativeTime(lastRefreshAt)}`
-                        : 'Waiting for treasury additions...');
-            }
+            renderActivityPanel();
             return { activeTab, total, treasuryEvents: treasuryEvents.length };
         });
 
         const update = (reason = 'unknown') => measureFrontendSync(`update ui (${reason})`, (ms) => {
-            ms('render metrics row', () => {
-                return renderMetrics();
-            });
-
             ms('render info row', () => {
                 return renderInfoCards();
             });
@@ -833,10 +801,6 @@ export default function mount() {
 
             ms('render toast', () => {
                 return renderToast();
-            });
-
-            ms('update board chrome', () => {
-                return updateBoardChrome();
             });
 
             return {
@@ -1036,7 +1000,6 @@ export default function mount() {
                         tokenPriceUsd = leaderboardData.tokenPriceUsd;
                         epochIndex = leaderboardData.epochIndex;
                         totalFeesAccumulatedSol = leaderboardData.totalFeesAccumulatedSol;
-                        lastFeeDeltaSol = leaderboardData.lastFeeDeltaSol;
                         totalClaimedSol = leaderboardData.totalClaimedSol;
                         treasuryBalanceSol = leaderboardData.treasuryBalanceSol;
                         totalAccumulatedGravity = leaderboardData.totalAccumulatedGravity;
@@ -1073,7 +1036,6 @@ export default function mount() {
         const handleRefreshClick = () => {
             void fetchAll('refresh-button');
         };
-        refreshButton?.addEventListener('click', handleRefreshClick);
 
         void fetchAll('initial-load');
         const refreshInterval = setInterval(() => {
@@ -1090,15 +1052,13 @@ export default function mount() {
             measureFrontendSync('unmount page client', (ms) => {
                 clearInterval(refreshInterval);
                 clearInterval(relativeTimeInterval);
-                refreshButton?.removeEventListener('click', handleRefreshClick);
                 if (toastTimeout) clearTimeout(toastTimeout);
                 ms('clear rendered roots', () => {
                     render(null, leaderboardRoot);
                     render(null, positionRoot);
-                    render(null, metricsRoot);
                     render(null, infoRoot);
                     render(null, toastRoot);
-                    return { cleared: 5 };
+                    return { cleared: 4 };
                 });
                 return { activeTab, connected: Boolean(connectedAddress) };
             });

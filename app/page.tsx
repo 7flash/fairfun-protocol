@@ -22,13 +22,9 @@ export default function HomePage() {
                     <p className="page-copy">
                         FairFun tracks holder gravity in USD-minutes and distributes project revenue by accumulated gravity share.
                     </p>
-                    <p className="page-subcopy">
-                        This dashboard shows how revenue enters the treasury, how much has already been claimed, and how holder gravity is accumulating right now.
-                    </p>
                 </section>
 
                 <section className="summary-shell">
-                    <div id="hero-metrics-root" />
                     <div id="hero-info-root" />
                 </section>
 
@@ -38,19 +34,6 @@ export default function HomePage() {
                     </div>
 
                     <section className="leaderboard-col">
-                        <div className="board-header">
-                            <h2 className="board-title">Gravity Leaderboard</h2>
-                            <button className="refresh-button" id="refresh-button" type="button">
-                                <span className="refresh-icon">↻</span>
-                                <span>Refresh</span>
-                            </button>
-                        </div>
-
-                        <div className="board-status">
-                            <span className="live-dot">LIVE</span>
-                            <span className="board-status-text" id="leaderboard-summary">Refreshing leaderboard...</span>
-                        </div>
-
                         <div id="leaderboard-root" />
                     </section>
                 </div>
