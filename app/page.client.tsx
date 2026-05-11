@@ -220,11 +220,11 @@ function SummaryBlocks({
 
     return (
         <div className="summary-grid">
-            <section className="summary-card address-tooltip" data-tooltip={`The ${runtimeConfig.tokenSymbol} block tracks the live token footprint on Solana: mint identity, holder count, and current market value.`}>
+            <section className="summary-card address-tooltip" data-tooltip={`Current circulating supply metrics for the integrated ${runtimeConfig.tokenSymbol} token on Solana.`}>
                 <div className="summary-card-head">
                     <div>
                         <div className="metric-label">Token</div>
-                        <div className="summary-card-title">{runtimeConfig.tokenSymbol} token state</div>
+                        <div className="summary-card-title">{runtimeConfig.tokenSymbol} token</div>
                     </div>
                     <button className="copy-btn" onClick={() => copyToClipboard(runtimeConfig.tokenMint)} title="Copy token mint" type="button">
                         Copy
@@ -236,7 +236,7 @@ function SummaryBlocks({
                 <div className="summary-meta">Token mint on Solana</div>
                 <div className="summary-stats">
                     <div className="summary-stat">
-                        <div className="summary-stat-label">Holders</div>
+                        <div className="summary-stat-label">Total holders</div>
                         <div className="summary-stat-value"><AnimatedValue value={total} kind="int" /></div>
                     </div>
                     <div className="summary-stat">
@@ -246,11 +246,11 @@ function SummaryBlocks({
                 </div>
             </section>
 
-            <section className="summary-card address-tooltip" data-tooltip="The treasury block separates total revenue ever deposited from the remaining SOL still sitting in the treasury after users claim rewards.">
+            <section className="summary-card address-tooltip" data-tooltip="Total SOL routed through the protocol versus SOL currently awaiting claim in the treasury.">
                 <div className="summary-card-head">
                     <div>
                         <div className="metric-label">Treasury</div>
-                        <div className="summary-card-title">Deposits and remaining balance</div>
+                        <div className="summary-card-title">Treasury state</div>
                     </div>
                     <button className="copy-btn" onClick={() => copyToClipboard(runtimeConfig.treasuryAddress)} title="Copy treasury PDA" type="button">
                         Copy
@@ -259,7 +259,7 @@ function SummaryBlocks({
                 <a className="summary-address" href={`${accountExplorerBaseUrl}${runtimeConfig.treasuryAddress}`} rel="noreferrer" target="_blank">
                     {shortAddress(runtimeConfig.treasuryAddress)}
                 </a>
-                <div className="summary-meta">Treasury PDA holding claimable SOL</div>
+                <div className="summary-meta">Treasury PDA for protocol distributions</div>
                 <div className="summary-stats">
                     <div className="summary-stat">
                         <div className="summary-stat-label">Total revenue</div>
@@ -267,30 +267,30 @@ function SummaryBlocks({
                         <div className="summary-stat-sub">{formatNumber(lastFeeDeltaSol, 'sol')} added last epoch</div>
                     </div>
                     <div className="summary-stat">
-                        <div className="summary-stat-label">Remaining balance</div>
+                        <div className="summary-stat-label">Unclaimed balance</div>
                         <div className="summary-stat-value"><AnimatedValue value={treasuryBalanceSol} kind="sol" /></div>
-                        <div className="summary-stat-sub">Current treasury balance</div>
+                        <div className="summary-stat-sub">Current treasury TVL</div>
                     </div>
                 </div>
             </section>
 
-            <section className="summary-card address-tooltip" data-tooltip="Gravity is the cumulative USD-minutes held across all wallets. Epoch shows the current minute bucket, and the delta shows how much gravity was added in the latest indexed epoch.">
+            <section className="summary-card address-tooltip" data-tooltip="The real-time state of the continuous accrual algorithm: total global gravity, current epoch, and the gravity added in the last tick.">
                 <div className="summary-card-head">
                     <div>
-                        <div className="metric-label">Gravity</div>
-                        <div className="summary-card-title">Loyalty accounting</div>
+                        <div className="metric-label">Engine</div>
+                        <div className="summary-card-title">Gravity engine</div>
                     </div>
                 </div>
                 <div className="summary-meta">Continuous USD-minute accrual</div>
                 <div className="summary-stats">
                     <div className="summary-stat">
-                        <div className="summary-stat-label">Total gravity</div>
+                        <div className="summary-stat-label">Global gravity</div>
                         <div className="summary-stat-value"><AnimatedValue value={totalAccumulatedGravity} kind="gravity" /></div>
                     </div>
                     <div className="summary-stat">
-                        <div className="summary-stat-label">Epoch</div>
+                        <div className="summary-stat-label">Current epoch</div>
                         <div className="summary-stat-value"><AnimatedValue value={epochIndex} kind="int" /></div>
-                        <div className="summary-stat-sub">+{formatNumber(lastGravityDelta, 'gravity')} added last epoch</div>
+                        <div className="summary-stat-sub">Epoch delta: +{formatNumber(lastGravityDelta, 'gravity')}</div>
                     </div>
                 </div>
             </section>

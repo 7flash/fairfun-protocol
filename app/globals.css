@@ -261,7 +261,7 @@ a {
 
 .hero-grid {
     display: grid;
-    grid-template-columns: minmax(360px, 420px) minmax(0, 1fr);
+    grid-template-columns: minmax(320px, 1fr) minmax(0, 2fr);
     gap: 32px;
     align-items: start;
 }
@@ -592,6 +592,10 @@ a {
     font-size: 0.82rem;
     font-weight: 600;
     margin-bottom: 16px;
+}
+
+.board-status-text {
+    min-width: 0;
 }
 
 .live-dot {
@@ -947,6 +951,7 @@ a {
 @media (max-width: 1080px) {
     .hero-grid {
         grid-template-columns: 1fr;
+        gap: 24px;
     }
     .position-panel {
         position: static;

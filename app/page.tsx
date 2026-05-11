@@ -21,7 +21,7 @@ export default function HomePage() {
                     <h1 className="page-title">{config.app.heroTitle}</h1>
                     <p className="page-copy">{config.app.heroDescription}</p>
                     <p className="page-subcopy">
-                        FairFun tracks who actually held, measures loyalty as USD-minutes, and distributes treasury revenue by accumulated gravity instead of snapshot timing.
+                        FairFun turns holding time into a live financial weight. Token state, treasury state, and global gravity are grouped below so the protocol reads from first principles before you drill into wallet or ledger views.
                     </p>
                 </section>
 
@@ -29,10 +29,10 @@ export default function HomePage() {
                     <div className="summary-header">
                         <div>
                             <div className="summary-kicker">Live Protocol Snapshot</div>
-                            <h2 className="summary-title">Token, treasury, and gravity at a glance.</h2>
+                            <h2 className="summary-title">Three pillars: token, treasury, engine.</h2>
                         </div>
                         <p className="summary-copy">
-                            Token metrics explain who is holding, treasury metrics explain what revenue has arrived, and gravity metrics explain how that revenue is being earned.
+                            The token block shows who holds and what the token is worth, the treasury block shows all-time deposits versus unclaimed balance, and the engine block shows the real-time gravity state driving payouts.
                         </p>
                     </div>
                     <div id="hero-metrics-root" />
@@ -54,7 +54,7 @@ export default function HomePage() {
 
                         <div className="board-status">
                             <span className="live-dot">LIVE</span>
-                            <span id="leaderboard-summary">Refreshing leaderboard...</span>
+                            <span className="board-status-text" id="leaderboard-summary">Refreshing leaderboard...</span>
                         </div>
 
                         <div id="leaderboard-root" />
