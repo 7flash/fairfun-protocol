@@ -216,6 +216,8 @@ export async function indexLeaderboardSnapshot() {
 
                 const feeDistribution = distributeTreasuryFees({ events: treasuryInflowStats.events, now });
                 const totalFeesAccumulatedSol = treasuryInflowStats.totalFeesAccumulatedSol;
+                const previousTotalAccumulatedGravity = getMetaNumber('totalAccumulatedGravity');
+                const lastGravityDelta = Math.max(0, feeDistribution.totalGravity - previousTotalAccumulatedGravity);
                 const configuredLaunchTimestamp = config.indexer.launchTimestamp;
                 const launchTimestamp = configuredLaunchTimestamp > 0
                     ? configuredLaunchTimestamp
@@ -234,6 +236,7 @@ export async function indexLeaderboardSnapshot() {
                 setMeta('lastFeeDeltaSol', treasuryInflowStats.feeDeltaSol);
                 setMeta('lastTreasurySignatureSeen', treasuryInflowStats.latestSignature);
                 setMeta('lastTreasuryScanAt', now);
+                setMeta('lastGravityDelta', lastGravityDelta);
                 setMeta('totalAccumulatedGravity', feeDistribution.totalGravity);
 
                 return {

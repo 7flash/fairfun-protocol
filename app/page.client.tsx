@@ -48,8 +48,10 @@ interface LeaderboardResponse {
     tokenPriceUsd: number;
     epochIndex: number;
     totalFeesAccumulatedSol: number;
+    lastFeeDeltaSol: number;
     treasuryBalanceSol: number;
     totalAccumulatedGravity: number;
+    lastGravityDelta: number;
 }
 
 interface TreasuryResponse {
@@ -187,91 +189,111 @@ function animateNumbers(scope: ParentNode) {
     });
 }
 
-function HeroMetrics({
+function SummaryBlocks({
+    runtimeConfig,
     total,
     totalSupply,
     tokenPriceUsd,
     totalFeesAccumulatedSol,
+    lastFeeDeltaSol,
+    treasuryBalanceSol,
     totalAccumulatedGravity,
+    lastGravityDelta,
     epochIndex,
 }: {
+    runtimeConfig: RuntimeConfig;
     total: number;
     totalSupply: number;
     tokenPriceUsd: number;
     totalFeesAccumulatedSol: number;
+    lastFeeDeltaSol: number;
+    treasuryBalanceSol: number;
     totalAccumulatedGravity: number;
+    lastGravityDelta: number;
     epochIndex: number;
 }) {
     const marketCap = totalSupply * tokenPriceUsd;
-
-    return (
-        <>
-            <div className="metric-card">
-                <div className="metric-label">Holders</div>
-                <div className="metric-value"><AnimatedValue value={total} kind="int" /></div>
-            </div>
-            <div className="metric-card">
-                <div className="metric-label">Market Cap</div>
-                <div className="metric-value"><AnimatedValue value={marketCap} kind="usd" /></div>
-            </div>
-            <div className="metric-card">
-                <div className="metric-label">Revenue</div>
-                <div className="metric-value"><AnimatedValue value={totalFeesAccumulatedSol} kind="sol" /></div>
-            </div>
-            <div className="metric-card">
-                <div className="metric-label">Total Gravity</div>
-                <div className="metric-value"><AnimatedValue value={totalAccumulatedGravity} kind="gravity" /></div>
-            </div>
-            <div className="metric-card">
-                <div className="metric-label">Epoch</div>
-                <div className="metric-value"><AnimatedValue value={epochIndex} kind="int" /></div>
-            </div>
-        </>
-    );
-}
-
-function AddressContainers({
-    tokenSymbol,
-    tokenMint,
-    treasuryAddress,
-    treasuryBalanceSol,
-}: {
-    tokenSymbol: string;
-    tokenMint: string;
-    treasuryAddress: string;
-    treasuryBalanceSol: number;
-}) {
+    const accountExplorerBaseUrl = runtimeConfig.explorerTxBaseUrl.replace('/tx/', '/account/');
     const copyToClipboard = (text: string) => {
         void navigator.clipboard.writeText(text);
     };
 
     return (
-        <div className="address-grid">
-            <div className="address-card address-tooltip" data-tooltip={`Token mint for ${tokenSymbol} on Solana.`}>
-                <div className="address-label">Token Mint</div>
-                <div className="address-row">
-                    <div className="address-value">{shortAddress(tokenMint)}</div>
-                    <button className="copy-btn" onClick={() => copyToClipboard(tokenMint)} title="Copy token mint" type="button">
+        <div className="summary-grid">
+            <section className="summary-card address-tooltip" data-tooltip={`The ${runtimeConfig.tokenSymbol} block tracks the live token footprint on Solana: mint identity, holder count, and current market value.`}>
+                <div className="summary-card-head">
+                    <div>
+                        <div className="metric-label">Token</div>
+                        <div className="summary-card-title">{runtimeConfig.tokenSymbol} footprint</div>
+                    </div>
+                    <button className="copy-btn" onClick={() => copyToClipboard(runtimeConfig.tokenMint)} title="Copy token mint" type="button">
                         Copy
                     </button>
                 </div>
-            </div>
+                <a className="summary-address" href={`${accountExplorerBaseUrl}${runtimeConfig.tokenMint}`} rel="noreferrer" target="_blank">
+                    {shortAddress(runtimeConfig.tokenMint)}
+                </a>
+                <div className="summary-meta">Token mint on Solana</div>
+                <div className="summary-stats">
+                    <div className="summary-stat">
+                        <div className="summary-stat-label">Holders</div>
+                        <div className="summary-stat-value"><AnimatedValue value={total} kind="int" /></div>
+                    </div>
+                    <div className="summary-stat">
+                        <div className="summary-stat-label">Market cap</div>
+                        <div className="summary-stat-value"><AnimatedValue value={marketCap} kind="usd" /></div>
+                    </div>
+                </div>
+            </section>
 
-            <div className="address-card address-tooltip" data-tooltip="Treasury PDA holding the SOL used for gravity-weighted rewards.">
-                <div className="address-label">Treasury PDA</div>
-                <div className="address-row">
-                    <div className="address-value">{shortAddress(treasuryAddress)}</div>
-                    <button className="copy-btn" onClick={() => copyToClipboard(treasuryAddress)} title="Copy treasury PDA" type="button">
+            <section className="summary-card address-tooltip" data-tooltip="The treasury block separates total revenue ever deposited from the remaining SOL still sitting in the treasury after claims.">
+                <div className="summary-card-head">
+                    <div>
+                        <div className="metric-label">Treasury</div>
+                        <div className="summary-card-title">Revenue and runway</div>
+                    </div>
+                    <button className="copy-btn" onClick={() => copyToClipboard(runtimeConfig.treasuryAddress)} title="Copy treasury PDA" type="button">
                         Copy
                     </button>
                 </div>
-                <div className="treasury-remaining">
-                    <span className="label">Remaining balance</span>
-                    <span className="metric-value" style={{ fontSize: '1.25rem', marginTop: 0 }}>
-                        <AnimatedValue value={treasuryBalanceSol} kind="sol" />
-                    </span>
+                <a className="summary-address" href={`${accountExplorerBaseUrl}${runtimeConfig.treasuryAddress}`} rel="noreferrer" target="_blank">
+                    {shortAddress(runtimeConfig.treasuryAddress)}
+                </a>
+                <div className="summary-meta">Treasury PDA holding claimable SOL</div>
+                <div className="summary-stats">
+                    <div className="summary-stat">
+                        <div className="summary-stat-label">Total revenue</div>
+                        <div className="summary-stat-value"><AnimatedValue value={totalFeesAccumulatedSol} kind="sol" /></div>
+                        <div className="summary-stat-sub">{formatNumber(lastFeeDeltaSol, 'sol')} last epoch</div>
+                    </div>
+                    <div className="summary-stat">
+                        <div className="summary-stat-label">Remaining balance</div>
+                        <div className="summary-stat-value"><AnimatedValue value={treasuryBalanceSol} kind="sol" /></div>
+                        <div className="summary-stat-sub">After user claims</div>
+                    </div>
                 </div>
-            </div>
+            </section>
+
+            <section className="summary-card address-tooltip" data-tooltip="Gravity is the cumulative USD-minutes held across all wallets. Epoch shows the current minute bucket, and the delta shows how much gravity was added in the latest indexed epoch.">
+                <div className="summary-card-head">
+                    <div>
+                        <div className="metric-label">Gravity</div>
+                        <div className="summary-card-title">Loyalty accounting</div>
+                    </div>
+                </div>
+                <div className="summary-meta">Continuous USD-minute accrual</div>
+                <div className="summary-stats">
+                    <div className="summary-stat">
+                        <div className="summary-stat-label">Total gravity</div>
+                        <div className="summary-stat-value"><AnimatedValue value={totalAccumulatedGravity} kind="gravity" /></div>
+                    </div>
+                    <div className="summary-stat">
+                        <div className="summary-stat-label">Epoch</div>
+                        <div className="summary-stat-value"><AnimatedValue value={epochIndex} kind="int" /></div>
+                        <div className="summary-stat-sub">+{formatNumber(lastGravityDelta, 'gravity')} last epoch</div>
+                    </div>
+                </div>
+            </section>
         </div>
     );
 }
@@ -612,14 +634,13 @@ export default function mount() {
         const runtimeConfig = getRuntimeConfig();
         const leaderboardRoot = document.getElementById('leaderboard-root');
         const positionRoot = document.getElementById('wallet-position-root');
-        const metricsRoot = document.getElementById('hero-metrics-root');
-        const addressRoot = document.getElementById('address-containers-root');
+        const summaryRoot = document.getElementById('hero-metrics-root');
         const toastRoot = document.getElementById('toast-root');
         const refreshButton = document.getElementById('refresh-button') as HTMLButtonElement | null;
         const summary = document.getElementById('leaderboard-summary');
         const boardTitle = document.querySelector('.board-title');
 
-        if (!leaderboardRoot || !positionRoot || !metricsRoot || !toastRoot || !addressRoot) return;
+        if (!leaderboardRoot || !positionRoot || !summaryRoot || !toastRoot) return;
 
         let entries: LeaderboardEntry[] = [];
         let treasuryEvents: TreasuryEvent[] = [];
@@ -628,8 +649,10 @@ export default function mount() {
         let tokenPriceUsd = 0;
         let epochIndex = 0;
         let totalFeesAccumulatedSol = 0;
+        let lastFeeDeltaSol = 0;
         let treasuryBalanceSol = 0;
         let totalAccumulatedGravity = 0;
+        let lastGravityDelta = 0;
         let activeTab: ActivityTab = 'leaderboard';
         let loading = true;
         let error: string | null = null;
@@ -640,34 +663,24 @@ export default function mount() {
         let toastTimeout: ReturnType<typeof setTimeout> | null = null;
         let lastRefreshAt = Date.now();
 
-        const renderMetrics = () => measureFrontendSync('render hero metrics', () => {
+        const renderSummaryBlocks = () => measureFrontendSync('render summary blocks', () => {
             render(
-                <HeroMetrics
+                <SummaryBlocks
+                    runtimeConfig={runtimeConfig}
                     total={total}
                     totalSupply={totalSupply}
                     tokenPriceUsd={tokenPriceUsd}
                     totalFeesAccumulatedSol={totalFeesAccumulatedSol}
+                    lastFeeDeltaSol={lastFeeDeltaSol}
+                    treasuryBalanceSol={treasuryBalanceSol}
                     totalAccumulatedGravity={totalAccumulatedGravity}
+                    lastGravityDelta={lastGravityDelta}
                     epochIndex={epochIndex}
                 />,
-                metricsRoot
+                summaryRoot
             );
-            animateNumbers(metricsRoot);
-            return { total, epochIndex };
-        });
-
-        const renderAddresses = () => measureFrontendSync('render address containers', () => {
-            render(
-                <AddressContainers
-                    tokenSymbol={runtimeConfig.tokenSymbol}
-                    tokenMint={runtimeConfig.tokenMint}
-                    treasuryAddress={runtimeConfig.treasuryAddress}
-                    treasuryBalanceSol={treasuryBalanceSol}
-                />,
-                addressRoot
-            );
-            animateNumbers(addressRoot);
-            return { treasuryBalanceSol };
+            animateNumbers(summaryRoot);
+            return { total, epochIndex, treasuryBalanceSol };
         });
 
         const renderWalletPanel = () => measureFrontendSync('render wallet panel', () => {
@@ -753,12 +766,8 @@ export default function mount() {
         });
 
         const update = (reason = 'unknown') => measureFrontendSync(`update ui (${reason})`, (ms) => {
-            ms('render hero metrics', () => {
-                return renderMetrics();
-            });
-
-            ms('render address containers', () => {
-                return renderAddresses();
+            ms('render summary blocks', () => {
+                return renderSummaryBlocks();
             });
 
             ms('render wallet panel', () => {
@@ -974,8 +983,10 @@ export default function mount() {
                         tokenPriceUsd = leaderboardData.tokenPriceUsd;
                         epochIndex = leaderboardData.epochIndex;
                         totalFeesAccumulatedSol = leaderboardData.totalFeesAccumulatedSol;
+                        lastFeeDeltaSol = leaderboardData.lastFeeDeltaSol;
                         treasuryBalanceSol = leaderboardData.treasuryBalanceSol;
                         totalAccumulatedGravity = leaderboardData.totalAccumulatedGravity;
+                        lastGravityDelta = leaderboardData.lastGravityDelta;
                         lastRefreshAt = Date.now();
                         error = null;
                     } else {
@@ -1030,10 +1041,9 @@ export default function mount() {
                 ms('clear rendered roots', () => {
                     render(null, leaderboardRoot);
                     render(null, positionRoot);
-                    render(null, metricsRoot);
-                    render(null, addressRoot);
+                    render(null, summaryRoot);
                     render(null, toastRoot);
-                    return { cleared: 5 };
+                    return { cleared: 4 };
                 });
                 return { activeTab, connected: Boolean(connectedAddress) };
             });

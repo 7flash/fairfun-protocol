@@ -13,8 +13,10 @@ export async function GET(req: Request) {
         const epochIndex = getMetaNumber('epochIndex');
         const launchTimestamp = getMetaNumber('launchTimestamp');
         const totalFeesAccumulatedSol = getMetaNumber('totalFeesAccumulatedSol');
+        const lastFeeDeltaSol = getMetaNumber('lastFeeDeltaSol');
         const treasuryBalanceSol = getMetaNumber('treasuryBalanceSol');
         const totalAccumulatedGravity = getMetaNumber('totalAccumulatedGravity');
+        const lastGravityDelta = getMetaNumber('lastGravityDelta');
         const limit = Number(url.searchParams.get('limit') ?? 0);
 
         const entries = getLeaderboard(limit > 0 ? limit : undefined)
@@ -57,8 +59,10 @@ export async function GET(req: Request) {
             epochIndex,
             launchTimestamp,
             totalFeesAccumulatedSol,
+            lastFeeDeltaSol,
             treasuryBalanceSol,
             totalAccumulatedGravity,
+            lastGravityDelta,
             tokenMint: TOKEN_MINT,
             source: 'sqlite-index',
             lastIndexedAt,

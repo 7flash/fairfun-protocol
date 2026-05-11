@@ -20,13 +20,26 @@ export default function HomePage() {
                     <div className="intro-pill">{config.app.heroBadge}</div>
                     <h1 className="page-title">{config.app.heroTitle}</h1>
                     <p className="page-copy">{config.app.heroDescription}</p>
+                    <p className="page-subcopy">
+                        FairFun tracks who actually held, measures loyalty as USD-minutes, and distributes treasury revenue by accumulated gravity instead of snapshot timing.
+                    </p>
                 </section>
 
-                <section className="metrics-grid" id="hero-metrics-root" />
+                <section className="summary-shell">
+                    <div className="summary-header">
+                        <div>
+                            <div className="summary-kicker">Live Protocol Snapshot</div>
+                            <h2 className="summary-title">Token, treasury, and gravity at a glance.</h2>
+                        </div>
+                        <p className="summary-copy">
+                            Token metrics explain who is holding, treasury metrics explain what revenue has arrived, and gravity metrics explain how that revenue is being earned.
+                        </p>
+                    </div>
+                    <div id="hero-metrics-root" />
+                </section>
 
                 <div className="hero-grid">
                     <div className="left-column">
-                        <div id="address-containers-root" />
                         <aside id="wallet-position-root" />
                     </div>
 

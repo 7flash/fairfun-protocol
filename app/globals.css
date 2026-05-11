@@ -99,23 +99,67 @@ a {
     line-height: 1.62;
 }
 
-.metrics-grid {
-    display: grid;
-    grid-template-columns: repeat(6, 1fr);
-    gap: 14px;
+.page-subcopy {
+    max-width: 860px;
+    margin: 14px 0 0;
+    color: var(--muted);
+    font-size: 0.94rem;
+    line-height: 1.7;
+}
+
+.summary-shell {
     margin-bottom: 40px;
 }
 
-.metric-card {
+.summary-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 24px;
+    align-items: end;
+    margin-bottom: 18px;
+}
+
+.summary-kicker {
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    color: var(--cyan);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+}
+
+.summary-title {
+    margin: 0;
+    font-size: 1.6rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+}
+
+.summary-copy {
+    max-width: 520px;
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.9rem;
+    line-height: 1.65;
+}
+
+#hero-metrics-root,
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.summary-card {
     background: var(--glass);
     backdrop-filter: blur(18px);
     border: 1px solid var(--line);
-    border-radius: 20px;
+    border-radius: 24px;
     padding: 22px;
     transition: border-color 0.15s ease;
 }
 
-.metric-card:hover {
+.summary-card:hover {
     border-color: var(--line-strong);
 }
 
@@ -137,6 +181,81 @@ a {
     font-variant-numeric: tabular-nums;
 }
 
+.summary-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: start;
+    gap: 16px;
+}
+
+.summary-card-title {
+    margin-top: 6px;
+    font-size: 1.2rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: white;
+}
+
+.summary-address {
+    display: inline-flex;
+    margin-top: 16px;
+    font-family: ui-monospace, monospace;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--cyan-2);
+}
+
+.summary-address:hover {
+    color: var(--cyan);
+}
+
+.summary-meta {
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+.summary-stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 18px;
+}
+
+.summary-stat {
+    background: rgba(0, 0, 0, 0.26);
+    border: 1px solid rgba(148, 163, 184, 0.08);
+    border-radius: 16px;
+    padding: 14px;
+    min-width: 0;
+}
+
+.summary-stat-label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    text-transform: uppercase;
+}
+
+.summary-stat-value {
+    margin-top: 8px;
+    font-size: 1.38rem;
+    font-weight: 800;
+    line-height: 1.12;
+    letter-spacing: -0.02em;
+    color: white;
+    font-variant-numeric: tabular-nums;
+}
+
+.summary-stat-sub {
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 0.76rem;
+    font-weight: 600;
+}
+
 .hero-grid {
     display: grid;
     grid-template-columns: minmax(360px, 420px) minmax(0, 1fr);
@@ -144,7 +263,6 @@ a {
     align-items: start;
 }
 
-/* NEW: Left column wrapper for address containers + wallet (above wallet) */
 .left-column {
     display: flex;
     flex-direction: column;
@@ -167,53 +285,6 @@ a {
     box-shadow: 0 0 60px rgba(82, 243, 209, 0.08), 0 24px 60px rgba(0, 0, 0, 0.32);
 }
 
-/* NEW: Address containers (token mint + revenue treasury) */
-.address-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-}
-
-.address-card {
-    background: var(--glass);
-    backdrop-filter: blur(18px);
-    border: 1px solid var(--line);
-    border-radius: 20px;
-    padding: 20px;
-    transition: border-color 0.15s ease;
-}
-
-.address-card:hover {
-    border-color: var(--blue);
-}
-
-.address-label {
-    font-size: 0.68rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    color: var(--blue);
-    text-transform: uppercase;
-    margin-bottom: 8px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.address-value {
-    font-family: ui-monospace, monospace;
-    font-size: 1.05rem;
-    font-weight: 700;
-    color: var(--text);
-    word-break: break-all;
-    line-height: 1.3;
-}
-
-.address-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
 .copy-btn {
     width: 38px;
     height: 38px;
@@ -232,24 +303,6 @@ a {
     background: var(--blue);
     color: #04111c;
     border-color: var(--blue);
-}
-
-.treasury-remaining {
-    margin-top: 14px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 0.85rem;
-    padding-top: 12px;
-    border-top: 1px solid rgba(148,163,184,0.12);
-}
-
-.treasury-remaining .label {
-    color: var(--muted);
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    font-size: 0.68rem;
 }
 
 /* Tooltip system (for addresses + leaderboard headers) */
@@ -875,10 +928,8 @@ a {
 }
 
 @media (max-width: 1280px) {
-    .metrics-grid {
-        grid-template-columns: repeat(3, 1fr);
-    }
-    .address-grid {
+    #hero-metrics-root,
+    .summary-grid {
         grid-template-columns: 1fr;
     }
 }
@@ -893,6 +944,10 @@ a {
 }
 
 @media (max-width: 860px) {
+    .summary-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
     .board-header {
         flex-direction: column;
         align-items: flex-start;
@@ -920,16 +975,13 @@ a {
     .page-main {
         padding: 24px 16px 48px;
     }
-    .metrics-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
     .position-grid {
         grid-template-columns: 1fr;
     }
     .position-panel {
         padding: 22px;
     }
-    .metric-card {
+    .summary-card {
         padding: 18px;
     }
     .metric-value {
@@ -943,7 +995,7 @@ a {
         right: 14px;
         bottom: 14px;
     }
-    .address-grid {
+    .summary-stats {
         grid-template-columns: 1fr;
     }
 }
