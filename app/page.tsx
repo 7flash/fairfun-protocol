@@ -18,10 +18,12 @@ export default function HomePage() {
             <main className="page-main">
                 <section className="page-intro">
                     <div className="intro-pill">{config.app.heroBadge}</div>
-                    <h1 className="page-title">{config.app.heroTitle}</h1>
-                    <p className="page-copy">{config.app.heroDescription}</p>
+                    <h1 className="page-title">{config.token.symbol} Gravity Rewards Dashboard</h1>
+                    <p className="page-copy">
+                        FairFun tracks holder gravity in USD-minutes and distributes project revenue by accumulated gravity share.
+                    </p>
                     <p className="page-subcopy">
-                        FairFun turns holding time into a live financial weight. Token state, treasury state, and global gravity are grouped below so the protocol reads from first principles before you drill into wallet or ledger views.
+                        This dashboard shows how revenue enters the treasury, how much has already been claimed, and how holder gravity is accumulating right now.
                     </p>
                 </section>
 

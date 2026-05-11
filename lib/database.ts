@@ -210,6 +210,10 @@ export function getTotalAccumulatedGravity() {
     return getAllHolders().reduce((sum, holder) => sum + holder.accumulatedGravity, 0);
 }
 
+export function getTotalClaimedSol() {
+    return getAllHolders().reduce((sum, holder) => sum + holder.totalSolRewardsClaimed, 0);
+}
+
 export function zeroMissingHolderBalances(activeAddresses: Set<string>, now = Date.now()) {
     const holders = getAllHolders();
     for (const holder of holders) {

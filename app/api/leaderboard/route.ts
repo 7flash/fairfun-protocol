@@ -1,5 +1,5 @@
 import { measure } from 'measure-fn';
-import { getHolderRank, getLeaderboard, getMetaNumber } from '../../../lib/database';
+import { getHolderRank, getLeaderboard, getMetaNumber, getTotalClaimedSol } from '../../../lib/database';
 import { formatAddress, formatTokenAmount, TOKEN_MINT } from '../../../lib/solana';
 import { formatGravity, formatSOL, formatUSD } from '../../../lib/gravity';
 
@@ -14,6 +14,7 @@ export async function GET(req: Request) {
         const launchTimestamp = getMetaNumber('launchTimestamp');
         const totalFeesAccumulatedSol = getMetaNumber('totalFeesAccumulatedSol');
         const lastFeeDeltaSol = getMetaNumber('lastFeeDeltaSol');
+        const totalClaimedSol = getTotalClaimedSol();
         const treasuryBalanceSol = getMetaNumber('treasuryBalanceSol');
         const totalAccumulatedGravity = getMetaNumber('totalAccumulatedGravity');
         const lastGravityDelta = getMetaNumber('lastGravityDelta');
@@ -60,6 +61,7 @@ export async function GET(req: Request) {
             launchTimestamp,
             totalFeesAccumulatedSol,
             lastFeeDeltaSol,
+            totalClaimedSol,
             treasuryBalanceSol,
             totalAccumulatedGravity,
             lastGravityDelta,

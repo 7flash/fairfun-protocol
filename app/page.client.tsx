@@ -49,6 +49,7 @@ interface LeaderboardResponse {
     epochIndex: number;
     totalFeesAccumulatedSol: number;
     lastFeeDeltaSol: number;
+    totalClaimedSol: number;
     treasuryBalanceSol: number;
     totalAccumulatedGravity: number;
     lastGravityDelta: number;
@@ -236,12 +237,14 @@ function HeroMetrics({
 function InfoCards({
     runtimeConfig,
     totalFeesAccumulatedSol,
+    totalClaimedSol,
     treasuryBalanceSol,
     totalAccumulatedGravity,
     lastGravityDelta,
 }: {
     runtimeConfig: RuntimeConfig;
     totalFeesAccumulatedSol: number;
+    totalClaimedSol: number;
     treasuryBalanceSol: number;
     totalAccumulatedGravity: number;
     lastGravityDelta: number;
@@ -250,6 +253,11 @@ function InfoCards({
     const copyToClipboard = (text: string) => {
         void navigator.clipboard.writeText(text);
     };
+    const balanceMatchesTrackedFlow = treasuryBalanceSol <= totalFeesAccumulatedSol + 0.0000001;
+    const treasuryBalanceLabel = balanceMatchesTrackedFlow ? 'Current Balance' : 'On-chain Balance';
+    const treasuryBalanceTooltip = balanceMatchesTrackedFlow
+        ? 'Current treasury balance remaining after holder claims.'
+        : 'On-chain balance can include direct transfers or deposits not represented in tracked protocol revenue.';
 
     return (
         <div className="info-row">
@@ -293,8 +301,13 @@ function InfoCards({
                         <span className="treasury-stat-value">{formatNumber(totalFeesAccumulatedSol, 'sol')}</span>
                     </div>
                     <div className="treasury-stat">
-                        <span className="small-label">Remaining Balance</span>
+                        <span className="small-label">Claimed</span>
+                        <span className="treasury-stat-value">{formatNumber(totalClaimedSol, 'sol')}</span>
+                    </div>
+                    <div className="treasury-stat">
+                        <span className="small-label">{treasuryBalanceLabel}</span>
                         <span className="treasury-stat-value">{formatNumber(treasuryBalanceSol, 'sol')}</span>
+                        <span className="treasury-note">{treasuryBalanceTooltip}</span>
                     </div>
                 </div>
             </section>
@@ -340,7 +353,7 @@ function PositionPanel({
                 </div>
                 <div className="connect-state">
                     <h2 className="connect-title">Connect your wallet</h2>
-                    <p className="connect-copy">See your gravity share, accumulated rewards, claimable balance, and treasury payouts.</p>
+                    <p className="connect-copy">Connect your wallet to see your gravity share, accumulated rewards, claimable balance, and payout history.</p>
                     <button onClick={connect} className="primary-button connect-cta" type="button">
                         <span>⬢</span>
                         <span>CONNECT PHANTOM WALLET</span>
@@ -398,6 +411,10 @@ function PositionPanel({
                 <div className="grid-cell">
                     <div className="cell-label">SOL Claimed</div>
                     <div className="cell-value"><AnimatedValue value={walletTotals?.totalSolRewardsClaimed ?? 0} kind="sol" /></div>
+                </div>
+                <div className="grid-cell">
+                    <div className="cell-label">Claimable</div>
+                    <div className="cell-value"><AnimatedValue value={walletTotals?.claimableSolRewards ?? 0} kind="sol" /></div>
                 </div>
             </div>
 
@@ -670,6 +687,7 @@ export default function mount() {
         let epochIndex = 0;
         let totalFeesAccumulatedSol = 0;
         let lastFeeDeltaSol = 0;
+        let totalClaimedSol = 0;
         let treasuryBalanceSol = 0;
         let totalAccumulatedGravity = 0;
         let lastGravityDelta = 0;
@@ -704,6 +722,7 @@ export default function mount() {
                 <InfoCards
                     runtimeConfig={runtimeConfig}
                     totalFeesAccumulatedSol={totalFeesAccumulatedSol}
+                    totalClaimedSol={totalClaimedSol}
                     treasuryBalanceSol={treasuryBalanceSol}
                     totalAccumulatedGravity={totalAccumulatedGravity}
                     lastGravityDelta={lastGravityDelta}
@@ -766,15 +785,15 @@ export default function mount() {
 
         const updateBoardChrome = () => measureFrontendSync('update board chrome', () => {
             if (boardTitle) {
-                boardTitle.textContent = activeTab === 'leaderboard' ? 'Gravity Leaderboard' : 'Recent Treasury Additions';
+                boardTitle.textContent = activeTab === 'leaderboard' ? 'Holder Gravity Leaderboard' : 'Treasury Additions';
             }
             if (summary) {
                 summary.textContent = activeTab === 'leaderboard'
                     ? (total > 0
-                        ? `${total.toLocaleString()} holders · ${formatNumber(totalFeesAccumulatedSol, 'sol')} revenue · updated ${formatRelativeTime(lastRefreshAt)}`
+                        ? `Holders ranked by accumulated gravity share and earned SOL rewards · updated ${formatRelativeTime(lastRefreshAt)}`
                         : 'Waiting for indexer data...')
                     : (treasuryEvents.length > 0
-                        ? `${treasuryEvents.length.toLocaleString()} recent additions · treasury balance ${formatNumber(treasuryBalanceSol, 'sol')} · updated ${formatRelativeTime(lastRefreshAt)}`
+                        ? `Revenue deposits recorded for this reward pool · updated ${formatRelativeTime(lastRefreshAt)}`
                         : 'Waiting for treasury additions...');
             }
 
@@ -1018,6 +1037,7 @@ export default function mount() {
                         epochIndex = leaderboardData.epochIndex;
                         totalFeesAccumulatedSol = leaderboardData.totalFeesAccumulatedSol;
                         lastFeeDeltaSol = leaderboardData.lastFeeDeltaSol;
+                        totalClaimedSol = leaderboardData.totalClaimedSol;
                         treasuryBalanceSol = leaderboardData.treasuryBalanceSol;
                         totalAccumulatedGravity = leaderboardData.totalAccumulatedGravity;
                         lastGravityDelta = leaderboardData.lastGravityDelta;
