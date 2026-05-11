@@ -328,7 +328,7 @@ export function getRecentTreasuryEvents(limit = 25, walletAddress?: string) {
         if (walletLower) {
             const payout = db.treasuryPayouts.select().where({
                 signature: event.signature,
-                address: { $eq: walletAddress as string }
+                address: walletAddress as string
             }).get() as TreasuryPayoutRecord | undefined;
             payoutAmountSol = payout?.amountSol ?? 0;
         }
