@@ -224,7 +224,7 @@ function SummaryBlocks({
                 <div className="summary-card-head">
                     <div>
                         <div className="metric-label">Token</div>
-                        <div className="summary-card-title">{runtimeConfig.tokenSymbol} footprint</div>
+                        <div className="summary-card-title">{runtimeConfig.tokenSymbol} token state</div>
                     </div>
                     <button className="copy-btn" onClick={() => copyToClipboard(runtimeConfig.tokenMint)} title="Copy token mint" type="button">
                         Copy
@@ -246,11 +246,11 @@ function SummaryBlocks({
                 </div>
             </section>
 
-            <section className="summary-card address-tooltip" data-tooltip="The treasury block separates total revenue ever deposited from the remaining SOL still sitting in the treasury after claims.">
+            <section className="summary-card address-tooltip" data-tooltip="The treasury block separates total revenue ever deposited from the remaining SOL still sitting in the treasury after users claim rewards.">
                 <div className="summary-card-head">
                     <div>
                         <div className="metric-label">Treasury</div>
-                        <div className="summary-card-title">Revenue and runway</div>
+                        <div className="summary-card-title">Deposits and remaining balance</div>
                     </div>
                     <button className="copy-btn" onClick={() => copyToClipboard(runtimeConfig.treasuryAddress)} title="Copy treasury PDA" type="button">
                         Copy
@@ -264,12 +264,12 @@ function SummaryBlocks({
                     <div className="summary-stat">
                         <div className="summary-stat-label">Total revenue</div>
                         <div className="summary-stat-value"><AnimatedValue value={totalFeesAccumulatedSol} kind="sol" /></div>
-                        <div className="summary-stat-sub">{formatNumber(lastFeeDeltaSol, 'sol')} last epoch</div>
+                        <div className="summary-stat-sub">{formatNumber(lastFeeDeltaSol, 'sol')} added last epoch</div>
                     </div>
                     <div className="summary-stat">
                         <div className="summary-stat-label">Remaining balance</div>
                         <div className="summary-stat-value"><AnimatedValue value={treasuryBalanceSol} kind="sol" /></div>
-                        <div className="summary-stat-sub">After user claims</div>
+                        <div className="summary-stat-sub">Current treasury balance</div>
                     </div>
                 </div>
             </section>
@@ -290,7 +290,7 @@ function SummaryBlocks({
                     <div className="summary-stat">
                         <div className="summary-stat-label">Epoch</div>
                         <div className="summary-stat-value"><AnimatedValue value={epochIndex} kind="int" /></div>
-                        <div className="summary-stat-sub">+{formatNumber(lastGravityDelta, 'gravity')} last epoch</div>
+                        <div className="summary-stat-sub">+{formatNumber(lastGravityDelta, 'gravity')} added last epoch</div>
                     </div>
                 </div>
             </section>
@@ -576,7 +576,7 @@ function ActivityPanel({
     connectedAddress: string | null;
 }) {
     return (
-        <div className="leaderboard-panel">
+        <div className="activity-shell">
             <div className="board-tabs">
                 <button
                     className={`board-tab ${activeTab === 'leaderboard' ? 'is-active' : ''}`}
@@ -594,23 +594,25 @@ function ActivityPanel({
                 </button>
             </div>
 
-            {activeTab === 'leaderboard' ? (
-                <LeaderboardTable
-                    entries={entries}
-                    loading={loading}
-                    error={error}
-                    connectedAddress={connectedAddress}
-                    tokenSymbol={runtimeConfig.tokenSymbol}
-                />
-            ) : (
-                <TreasuryTable
-                    runtimeConfig={runtimeConfig}
-                    events={treasuryEvents}
-                    loading={loading}
-                    error={error}
-                    connectedAddress={connectedAddress}
-                />
-            )}
+            <div className="leaderboard-panel">
+                {activeTab === 'leaderboard' ? (
+                    <LeaderboardTable
+                        entries={entries}
+                        loading={loading}
+                        error={error}
+                        connectedAddress={connectedAddress}
+                        tokenSymbol={runtimeConfig.tokenSymbol}
+                    />
+                ) : (
+                    <TreasuryTable
+                        runtimeConfig={runtimeConfig}
+                        events={treasuryEvents}
+                        loading={loading}
+                        error={error}
+                        connectedAddress={connectedAddress}
+                    />
+                )}
+            </div>
         </div>
     );
 }

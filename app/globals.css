@@ -146,8 +146,9 @@ a {
 #hero-metrics-root,
 .summary-grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 14px;
+    grid-template-columns: repeat(3, minmax(280px, 1fr));
+    gap: 16px;
+    align-items: stretch;
 }
 
 .summary-card {
@@ -157,6 +158,7 @@ a {
     border-radius: 24px;
     padding: 22px;
     transition: border-color 0.15s ease;
+    min-width: 0;
 }
 
 .summary-card:hover {
@@ -203,6 +205,7 @@ a {
     font-size: 1rem;
     font-weight: 700;
     color: var(--cyan-2);
+    overflow-wrap: anywhere;
 }
 
 .summary-address:hover {
@@ -538,6 +541,10 @@ a {
     min-width: 0;
 }
 
+.activity-shell {
+    min-width: 0;
+}
+
 .board-header {
     display: flex;
     justify-content: space-between;
@@ -621,14 +628,10 @@ a {
 }
 
 .board-tabs {
-    position: sticky;
-    top: 0;
-    z-index: 3;
     display: flex;
     gap: 10px;
-    padding: 16px 16px 0;
-    background: rgba(11, 18, 32, 0.98);
-    backdrop-filter: blur(18px);
+    padding: 0 0 14px;
+    margin-bottom: 0;
 }
 
 .board-tab {
@@ -667,7 +670,7 @@ a {
 
 .leaderboard-table th {
     position: sticky;
-    top: 58px;
+    top: 0;
     z-index: 2;
     padding: 16px 24px;
     text-align: left;
@@ -927,6 +930,13 @@ a {
     to { transform: rotate(360deg); }
 }
 
+@media (max-width: 1360px) {
+    #hero-metrics-root,
+    .summary-grid {
+        grid-template-columns: repeat(2, minmax(280px, 1fr));
+    }
+}
+
 @media (max-width: 1280px) {
     #hero-metrics-root,
     .summary-grid {
@@ -948,6 +958,9 @@ a {
         flex-direction: column;
         align-items: flex-start;
     }
+    .summary-copy {
+        max-width: none;
+    }
     .board-header {
         flex-direction: column;
         align-items: flex-start;
@@ -959,9 +972,11 @@ a {
     }
     .leaderboard-panel {
         overflow-x: auto;
+        max-height: none;
     }
     .board-tabs {
-        min-width: 720px;
+        min-width: 0;
+        flex-wrap: wrap;
     }
     .leaderboard-table {
         min-width: 720px;
@@ -975,6 +990,9 @@ a {
     .page-main {
         padding: 24px 16px 48px;
     }
+    .summary-title {
+        font-size: 1.3rem;
+    }
     .position-grid {
         grid-template-columns: 1fr;
     }
@@ -986,6 +1004,9 @@ a {
     }
     .metric-value {
         font-size: 1.55rem;
+    }
+    .summary-stat-value {
+        font-size: 1.2rem;
     }
     .page-title {
         font-size: 2.3rem;
