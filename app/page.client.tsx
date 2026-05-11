@@ -640,108 +640,141 @@ export default function mount() {
         let toastTimeout: ReturnType<typeof setTimeout> | null = null;
         let lastRefreshAt = Date.now();
 
+        const renderMetrics = () => measureFrontendSync('render hero metrics', () => {
+            render(
+                <HeroMetrics
+                    total={total}
+                    totalSupply={totalSupply}
+                    tokenPriceUsd={tokenPriceUsd}
+                    totalFeesAccumulatedSol={totalFeesAccumulatedSol}
+                    totalAccumulatedGravity={totalAccumulatedGravity}
+                    epochIndex={epochIndex}
+                />,
+                metricsRoot
+            );
+            animateNumbers(metricsRoot);
+            return { total, epochIndex };
+        });
+
+        const renderAddresses = () => measureFrontendSync('render address containers', () => {
+            render(
+                <AddressContainers
+                    tokenSymbol={runtimeConfig.tokenSymbol}
+                    tokenMint={runtimeConfig.tokenMint}
+                    treasuryAddress={runtimeConfig.treasuryAddress}
+                    treasuryBalanceSol={treasuryBalanceSol}
+                />,
+                addressRoot
+            );
+            animateNumbers(addressRoot);
+            return { treasuryBalanceSol };
+        });
+
+        const renderWalletPanel = () => measureFrontendSync('render wallet panel', () => {
+            render(
+                <PositionPanel
+                    runtimeConfig={runtimeConfig}
+                    connectedAddress={connectedAddress}
+                    walletTotals={walletTotals}
+                    total={total}
+                    connect={connectWallet}
+                    claim={claimRewards}
+                    walletError={walletError}
+                />,
+                positionRoot
+            );
+            animateNumbers(positionRoot);
+            return {
+                connected: Boolean(connectedAddress),
+                ranked: Boolean(walletTotals?.rank),
+                walletError: Boolean(walletError),
+            };
+        });
+
+        const renderActivityPanel = () => measureFrontendSync('render activity panel', () => {
+            render(
+                <ActivityPanel
+                    runtimeConfig={runtimeConfig}
+                    activeTab={activeTab}
+                    setActiveTab={(tab) => {
+                        activeTab = tab;
+                        update('tab-switch');
+                    }}
+                    entries={entries}
+                    treasuryEvents={treasuryEvents}
+                    loading={loading}
+                    error={error}
+                    connectedAddress={connectedAddress}
+                />,
+                leaderboardRoot
+            );
+            return {
+                activeTab,
+                entries: entries.length,
+                treasuryEvents: treasuryEvents.length,
+                loading,
+            };
+        });
+
+        const renderToast = () => measureFrontendSync('render toast', () => {
+            render(<Toast toast={toast} explorerTxBaseUrl={runtimeConfig.explorerTxBaseUrl} />, toastRoot);
+            return { visible: Boolean(toast) };
+        });
+
+        const updateBoardChrome = () => measureFrontendSync('update board chrome', () => {
+            if (boardTitle) {
+                boardTitle.textContent = activeTab === 'leaderboard' ? 'Gravity Leaderboard' : 'Recent Treasury Additions';
+            }
+            if (summary) {
+                summary.textContent = activeTab === 'leaderboard'
+                    ? (total > 0
+                        ? `${total.toLocaleString()} holders · ${formatNumber(totalFeesAccumulatedSol, 'sol')} revenue · updated ${formatRelativeTime(lastRefreshAt)}`
+                        : 'Waiting for indexer data...')
+                    : (treasuryEvents.length > 0
+                        ? `${treasuryEvents.length.toLocaleString()} recent additions · treasury balance ${formatNumber(treasuryBalanceSol, 'sol')} · updated ${formatRelativeTime(lastRefreshAt)}`
+                        : 'Waiting for treasury additions...');
+            }
+
+            if (refreshButton) refreshButton.classList.toggle('is-loading', loading);
+            return { loading, activeTab };
+        });
+
+        const updateRelativeTimeOnly = () => measureFrontendSync('update relative time only', () => {
+            if (summary) {
+                summary.textContent = activeTab === 'leaderboard'
+                    ? (total > 0
+                        ? `${total.toLocaleString()} holders · ${formatNumber(totalFeesAccumulatedSol, 'sol')} revenue · updated ${formatRelativeTime(lastRefreshAt)}`
+                        : 'Waiting for indexer data...')
+                    : (treasuryEvents.length > 0
+                        ? `${treasuryEvents.length.toLocaleString()} recent additions · treasury balance ${formatNumber(treasuryBalanceSol, 'sol')} · updated ${formatRelativeTime(lastRefreshAt)}`
+                        : 'Waiting for treasury additions...');
+            }
+            return { activeTab, total, treasuryEvents: treasuryEvents.length };
+        });
+
         const update = (reason = 'unknown') => measureFrontendSync(`update ui (${reason})`, (ms) => {
             ms('render hero metrics', () => {
-                render(
-                    <HeroMetrics
-                        total={total}
-                        totalSupply={totalSupply}
-                        tokenPriceUsd={tokenPriceUsd}
-                        totalFeesAccumulatedSol={totalFeesAccumulatedSol}
-                        totalAccumulatedGravity={totalAccumulatedGravity}
-                        epochIndex={epochIndex}
-                    />,
-                    metricsRoot
-                );
-                return { total, epochIndex };
+                return renderMetrics();
             });
 
             ms('render address containers', () => {
-                render(
-                    <AddressContainers
-                        tokenSymbol={runtimeConfig.tokenSymbol}
-                        tokenMint={runtimeConfig.tokenMint}
-                        treasuryAddress={runtimeConfig.treasuryAddress}
-                        treasuryBalanceSol={treasuryBalanceSol}
-                    />,
-                    addressRoot
-                );
-                return { treasuryBalanceSol };
+                return renderAddresses();
             });
 
             ms('render wallet panel', () => {
-                render(
-                    <PositionPanel
-                        runtimeConfig={runtimeConfig}
-                        connectedAddress={connectedAddress}
-                        walletTotals={walletTotals}
-                        total={total}
-                        connect={connectWallet}
-                        claim={claimRewards}
-                        walletError={walletError}
-                    />,
-                    positionRoot
-                );
-                return {
-                    connected: Boolean(connectedAddress),
-                    ranked: Boolean(walletTotals?.rank),
-                    walletError: Boolean(walletError),
-                };
+                return renderWalletPanel();
             });
 
             ms('render activity panel', () => {
-                render(
-                    <ActivityPanel
-                        runtimeConfig={runtimeConfig}
-                        activeTab={activeTab}
-                        setActiveTab={(tab) => {
-                            activeTab = tab;
-                            update('tab-switch');
-                        }}
-                        entries={entries}
-                        treasuryEvents={treasuryEvents}
-                        loading={loading}
-                        error={error}
-                        connectedAddress={connectedAddress}
-                    />,
-                    leaderboardRoot
-                );
-                return {
-                    activeTab,
-                    entries: entries.length,
-                    treasuryEvents: treasuryEvents.length,
-                    loading,
-                };
+                return renderActivityPanel();
             });
 
             ms('render toast', () => {
-                render(<Toast toast={toast} explorerTxBaseUrl={runtimeConfig.explorerTxBaseUrl} />, toastRoot);
-                return { visible: Boolean(toast) };
+                return renderToast();
             });
 
             ms('update board chrome', () => {
-                if (boardTitle) {
-                    boardTitle.textContent = activeTab === 'leaderboard' ? 'Gravity Leaderboard' : 'Recent Treasury Additions';
-                }
-                if (summary) {
-                    summary.textContent = activeTab === 'leaderboard'
-                        ? (total > 0
-                            ? `${total.toLocaleString()} holders · ${formatNumber(totalFeesAccumulatedSol, 'sol')} revenue · updated ${formatRelativeTime(lastRefreshAt)}`
-                            : 'Waiting for indexer data...')
-                        : (treasuryEvents.length > 0
-                            ? `${treasuryEvents.length.toLocaleString()} recent additions · treasury balance ${formatNumber(treasuryBalanceSol, 'sol')} · updated ${formatRelativeTime(lastRefreshAt)}`
-                            : 'Waiting for treasury additions...');
-                }
-
-                if (refreshButton) refreshButton.classList.toggle('is-loading', loading);
-                return { loading, activeTab };
-            });
-
-            ms('animate numeric fields', () => {
-                animateNumbers(metricsRoot);
-                animateNumbers(positionRoot);
-                animateNumbers(addressRoot);
-                return { sections: 3 };
+                return updateBoardChrome();
             });
 
             return {
@@ -982,7 +1015,10 @@ export default function mount() {
             void fetchAll('interval-refresh');
         }, 30000);
         const relativeTimeInterval = setInterval(() => {
-            update('relative-time-tick');
+            measureFrontendSync('relative-time tick', () => {
+                updateRelativeTimeOnly();
+                return { activeTab };
+            });
         }, 5000);
 
         return () => {
