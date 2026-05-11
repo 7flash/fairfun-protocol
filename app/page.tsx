@@ -26,16 +26,8 @@ export default function HomePage() {
                 </section>
 
                 <section className="summary-shell">
-                    <div className="summary-header">
-                        <div>
-                            <div className="summary-kicker">Live Protocol Snapshot</div>
-                            <h2 className="summary-title">Three pillars: token, treasury, engine.</h2>
-                        </div>
-                        <p className="summary-copy">
-                            The token block shows who holds and what the token is worth, the treasury block shows all-time deposits versus unclaimed balance, and the engine block shows the real-time gravity state driving payouts.
-                        </p>
-                    </div>
                     <div id="hero-metrics-root" />
+                    <div id="hero-info-root" />
                 </section>
 
                 <div className="hero-grid">
