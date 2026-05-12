@@ -37,6 +37,12 @@ export default function HomePage() {
                         <div id="leaderboard-root" />
                     </section>
                 </div>
+
+                <footer className="page-footer">
+                    <a className="footer-link" href="https://github.com/berliangor/tradjs" rel="noreferrer" target="_blank">Built with tradjs</a>
+                    <a className="footer-link" href="https://github.com/7flash/fairfun-protocol" rel="noreferrer" target="_blank">View on GitHub</a>
+                    <a className="footer-link" href="https://github.com/berliangor" rel="noreferrer" target="_blank">@berliangor</a>
+                </footer>
             </main>
 
             <div id="toast-root" />

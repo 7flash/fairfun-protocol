@@ -109,6 +109,18 @@ function copyWithFeedback(button: HTMLButtonElement | null, text: string, label 
     });
 }
 
+function RankTag({ rank }: { rank: number }) {
+    const padded = String(rank).padStart(2, '0');
+    const hot = rank <= 3;
+    return (
+        <span className="rank-tag">
+            <span className="rank-bracket">[</span>
+            <span className={`rank-digits ${hot ? 'rank-digits-hot' : ''}`}>{padded}</span>
+            <span className="rank-bracket">]</span>
+        </span>
+    );
+}
+
 function getRuntimeConfig(): RuntimeConfig {
     const configRoot = document.getElementById('app-config-root');
     return {
@@ -241,9 +253,10 @@ function InfoCards({
                         <a className="card-address-link" href={`${accountExplorerBaseUrl}${runtimeConfig.tokenMint}`} rel="noreferrer" target="_blank">
                             {shortAddress(runtimeConfig.tokenMint)}
                         </a>
-                        <button className="copy-icon-btn" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, runtimeConfig.tokenMint, '[]', 'OK')} title="Copy token mint" type="button">
-                            []
+                        <button className="copy-btn copy-btn-inline" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, runtimeConfig.tokenMint)} title="Copy token mint" type="button">
+                            Copy
                         </button>
+                        <a className="mini-link-btn" href={`${accountExplorerBaseUrl}${runtimeConfig.tokenMint}`} rel="noreferrer" target="_blank">Solscan</a>
                     </div>
                 </div>
                 <div className="card-metrics-grid">
@@ -265,9 +278,10 @@ function InfoCards({
                         <a className="card-address-link" href={`${accountExplorerBaseUrl}${runtimeConfig.treasuryAddress}`} rel="noreferrer" target="_blank">
                             {shortAddress(runtimeConfig.treasuryAddress)}
                         </a>
-                        <button className="copy-icon-btn" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, runtimeConfig.treasuryAddress, '[]', 'OK')} title="Copy treasury PDA" type="button">
-                            []
+                        <button className="copy-btn copy-btn-inline" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, runtimeConfig.treasuryAddress)} title="Copy treasury PDA" type="button">
+                            Copy
                         </button>
+                        <a className="mini-link-btn" href={`${accountExplorerBaseUrl}${runtimeConfig.treasuryAddress}`} rel="noreferrer" target="_blank">Solscan</a>
                     </div>
                 </div>
                 <div className="card-metrics-grid">
@@ -276,10 +290,11 @@ function InfoCards({
                         <span className="inline-value">{formatNumber(totalFeesAccumulatedSol, 'sol')}</span>
                     </div>
                     <div className="metric-block">
-                        <span className="small-label">Current Balance <span className="metric-help header-tooltip" data-tooltip="Treasury balance may include direct transfers that were not indexed as protocol deposits.">?</span></span>
+                        <span className="small-label">Current Balance</span>
                         <span className="inline-value">{formatNumber(treasuryBalanceSol, 'sol')}</span>
                     </div>
                 </div>
+                <div className="treasury-note">Treasury balance may include direct transfers that were not indexed as protocol deposits.</div>
             </section>
 
             <section className="info-card">
@@ -289,10 +304,15 @@ function InfoCards({
                         <a className="card-address-link" href={`${accountExplorerBaseUrl}${runtimeConfig.programId}`} rel="noreferrer" target="_blank">
                             {shortAddress(runtimeConfig.programId)}
                         </a>
-                        <button className="copy-icon-btn" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, runtimeConfig.programId, '[]', 'OK')} title="Copy program id" type="button">
-                            []
+                        <button className="copy-btn copy-btn-inline" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, runtimeConfig.programId)} title="Copy program id" type="button">
+                            Copy
                         </button>
+                        <a className="mini-link-btn" href={`${accountExplorerBaseUrl}${runtimeConfig.programId}`} rel="noreferrer" target="_blank">Solscan</a>
                     </div>
+                </div>
+                <div className="program-status">
+                    <span className="program-status-dot" />
+                    <span>On-chain program live</span>
                 </div>
                 <div className="card-metrics-grid">
                     <div className="metric-block">
@@ -370,8 +390,8 @@ function PositionPanel({
 
             <div className="position-identity">
                 <div className="identity-addr">{walletTotals?.addressShort ?? shortAddress(connectedAddress)}</div>
-                <button className="copy-btn copy-btn-small" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, connectedAddress)} title="Copy wallet address" type="button">
-                    Copy
+                <button className="copy-icon-btn" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, connectedAddress, '[]', 'OK')} title="Copy wallet address" type="button">
+                    []
                 </button>
             </div>
 
@@ -395,7 +415,7 @@ function PositionPanel({
                     <div className="position-grid">
                         <div className="grid-cell">
                             <div className="cell-label">Gravity</div>
-                            <div className="cell-value cell-cyan"><AnimatedValue value={walletTotals?.accumulatedGravity ?? 0} kind="gravity" /></div>
+                            <div className="cell-value"><AnimatedValue value={walletTotals?.accumulatedGravity ?? 0} kind="gravity" /></div>
                         </div>
                         <div className="grid-cell">
                             <div className="cell-label">Ownership</div>
@@ -415,7 +435,7 @@ function PositionPanel({
                         ) : null}
                         <div className="grid-cell">
                             <div className="cell-label">Claimable</div>
-                            <div className="cell-value"><AnimatedValue value={claimableRewards} kind="sol" /></div>
+                            <div className="cell-value cell-value-accent"><AnimatedValue value={claimableRewards} kind="sol" /></div>
                         </div>
                         {claimedRewards > 0 ? (
                             <div className="grid-cell">
@@ -433,7 +453,7 @@ function PositionPanel({
                 </button>
             ) : (
                 <div className="claim-status-row">
-                    <span className="claim-status-pill">Claims Paused</span>
+                    <span className="claim-status-pill"><span className="claim-status-icon">!</span>Claims Paused</span>
                     <span className="claim-status-text">{claimStateMessage}</span>
                 </div>
             )}
@@ -503,10 +523,9 @@ function LeaderboardTable({
                     <>
                         {displayEntries.map((entry) => {
                             const isYou = connectedAddressLower === entry.address.toLowerCase();
-                            const medalClass = entry.rank <= 3 ? `rank-${entry.rank}` : '';
                             return (
                                 <tr className={`leaderboard-row ${isYou ? 'is-you' : ''}`} key={entry.address}>
-                                    <td><span className={`rank-cell ${medalClass}`.trim()}>{entry.rank}</span></td>
+                                    <td><RankTag rank={entry.rank} /></td>
                                     <td>
                                         <span className="wallet-mono">{entry.addressShort}</span>
                                         {isYou ? <span className="you-tag">YOU</span> : null}
@@ -516,9 +535,9 @@ function LeaderboardTable({
                                         <div>{formatNumber(entry.tokenBalance, 'tokens')}</div>
                                         <div className="num-sub">{formatNumber(entry.tokenValueUsd, 'usd')}</div>
                                     </td>
-                                    <td className="td-num td-cyan">{formatNumber(entry.accumulatedGravity, 'gravity')}</td>
+                                    <td className="td-num">{formatNumber(entry.accumulatedGravity, 'gravity')}</td>
                                     <td className="td-num">{entry.gravityShareFormatted}</td>
-                                    <td className="td-num td-emerald">{formatNumber(entry.totalSolRewardsEarned, 'sol')}</td>
+                                    <td className="td-num">{formatNumber(entry.totalSolRewardsEarned, 'sol')}</td>
                                 </tr>
                             );
                         })}
@@ -567,7 +586,7 @@ function TreasuryTable({
                                 <div>{formatRelativeTime(event.timestamp)}</div>
                                 <div className="wallet-sub">{new Date(event.timestamp).toLocaleString()}</div>
                             </td>
-                            <td className="td-num td-emerald">
+                            <td className="td-num">
                                 <div>{formatNumber(event.amountSol, 'sol')}</div>
                                 <div className="num-sub">{formatNumber(event.amountUsd, 'usd')}</div>
                             </td>
@@ -579,7 +598,7 @@ function TreasuryTable({
                                     </>
                                 ) : 'Unknown'}
                             </td>
-                            <td className="td-num td-cyan">
+                            <td className="td-num">
                                 {connectedAddress ? (
                                     <>
                                         <div>{formatNumber(event.payoutAmountSol, 'sol')}</div>
@@ -729,12 +748,12 @@ export default function mount() {
         let lastRefreshAt = Date.now();
 
         const getLedgerDescription = () => {
-            return 'Protocol-wide holder rankings and treasury activity for the active reward pool.';
+            return 'Protocol-wide holder rankings and treasury activity.';
         };
 
         const getLedgerMeta = () => {
             if (totalAccumulatedGravity <= 0 && treasuryBalanceSol <= 0) return 'Waiting for indexer data...';
-            return `Global gravity ${formatNumber(totalAccumulatedGravity, 'gravity')} · Treasury balance ${formatNumber(treasuryBalanceSol, 'sol')} · updated ${formatRelativeTime(lastRefreshAt)}`;
+            return `Engine indexed · updated ${formatRelativeTime(lastRefreshAt)}`;
         };
 
         const renderInfoCards = () => measureFrontendSync('render info row', () => {
