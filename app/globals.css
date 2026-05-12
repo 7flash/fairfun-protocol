@@ -20,6 +20,7 @@
     --silver: #cbd5e1;
     --bronze: #fb923c;
     --danger: #fb7185;
+    --coal: #ef7d45;
     --glass: rgba(11, 18, 32, 0.78);
     --glass-strong: rgba(11, 18, 32, 0.92);
     /* MORE BLUE – logo blue emphasis */
@@ -113,7 +114,7 @@ a {
 .info-card-head {
     display: flex;
     justify-content: space-between;
-    align-items: start;
+    align-items: center;
     gap: 12px;
 }
 
@@ -125,74 +126,44 @@ a {
     text-transform: uppercase;
 }
 
-.info-title {
-    margin-top: 4px;
-    font-size: 0.96rem;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    color: white;
-}
-
-.info-value-row {
-    margin-top: 12px;
-}
-
-.info-address-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin-top: 12px;
-}
-
-.info-value {
-    font-family: ui-monospace, monospace;
-    font-size: 0.92rem;
-    font-weight: 700;
-    color: var(--text);
-    overflow-wrap: anywhere;
-}
-
-.info-actions {
+.card-address-row {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
+    gap: 6px;
+    min-width: 0;
 }
 
-.mini-link-btn {
+.card-address-link {
+    font-family: ui-monospace, monospace;
+    font-size: 0.84rem;
+    font-weight: 700;
+    color: var(--soft);
+    text-decoration: none;
+}
+
+.card-address-link:hover {
+    color: var(--cyan);
+    text-decoration: underline;
+}
+
+.copy-icon-btn {
+    min-width: 22px;
+    height: 22px;
+    padding: 0;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    height: 34px;
-    padding: 0 12px;
-    border-radius: 10px;
-    border: 1px solid var(--line);
-    background: rgba(255,255,255,0.04);
-    color: var(--cyan-2);
-    font-size: 0.76rem;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font-family: ui-monospace, monospace;
+    font-size: 0.74rem;
     font-weight: 700;
-    transition: border-color 0.15s ease, color 0.15s ease;
+    cursor: pointer;
 }
 
-.mini-link-btn:hover {
-    border-color: var(--line-strong);
+.copy-icon-btn:hover {
     color: var(--cyan);
-}
-
-.info-primary-metric {
-    display: grid;
-    gap: 6px;
-    margin-top: 14px;
-}
-
-.primary-inline-value {
-    font-size: 1.32rem;
-    font-weight: 800;
-    line-height: 1.08;
-    letter-spacing: -0.03em;
-    color: white;
-    font-variant-numeric: tabular-nums;
 }
 
 .small-label {
@@ -204,28 +175,16 @@ a {
     text-transform: uppercase;
 }
 
-.treasury-note {
-    display: block;
-    margin-top: 12px;
-    color: var(--muted);
-    font-size: 0.68rem;
-    line-height: 1.4;
-    opacity: 0.5;
-}
-
-.info-rows {
+.card-metrics-grid {
     display: grid;
-    gap: 9px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 16px;
     margin-top: 12px;
     padding-top: 12px;
     border-top: 1px solid rgba(148, 163, 184, 0.12);
 }
 
-.info-stat-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 16px;
+.metric-block {
     min-width: 0;
 }
 
@@ -240,6 +199,21 @@ a {
 }
 
 .inline-value-muted {
+    color: var(--muted);
+}
+
+.metric-subvalue {
+    display: block;
+    margin-top: 4px;
+    font-size: 0.74rem;
+    font-weight: 700;
+    letter-spacing: 0;
+    color: var(--cyan);
+}
+
+.metric-help {
+    display: inline-flex;
+    margin-left: 4px;
     color: var(--muted);
 }
 
@@ -588,18 +562,29 @@ a {
 }
 
 .ledger-meta {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 10px;
-    color: var(--muted);
-    font-size: 0.82rem;
-    font-weight: 600;
-    min-width: 0;
+    display: none;
 }
 
 .ledger-meta-text {
     min-width: 0;
+}
+
+.ledger-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 8px;
+}
+
+.ledger-live {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    color: var(--muted);
+    font-size: 0.82rem;
+    font-weight: 600;
 }
 
 .live-dot {
@@ -639,14 +624,14 @@ a {
     display: flex;
     gap: 8px;
     min-width: 0;
-    margin-bottom: 8px;
 }
 
 .board-tab {
-    padding: 9px 13px;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    background: rgba(255, 255, 255, 0.03);
+    padding: 10px 0 8px;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    background: transparent;
     color: var(--muted);
     font-family: inherit;
     font-size: 0.8rem;
@@ -657,14 +642,12 @@ a {
 }
 
 .board-tab:hover {
-    border-color: var(--line-strong);
     color: var(--soft);
 }
 
 .board-tab.is-active {
-    background: rgba(82, 243, 209, 0.1);
-    border-color: rgba(82, 243, 209, 0.3);
-    color: var(--cyan);
+    border-bottom-color: var(--coal);
+    color: white;
 }
 
 .leaderboard-table {
@@ -961,7 +944,7 @@ a {
         flex-direction: column;
         align-items: stretch;
     }
-    .ledger-meta {
+    .ledger-toolbar {
         flex-wrap: wrap;
     }
     .leaderboard-panel {
@@ -1028,11 +1011,10 @@ a {
     .board-tabs {
         grid-template-columns: 1fr;
     }
-    .info-address-row {
-        align-items: flex-start;
-        flex-direction: column;
+    .card-metrics-grid {
+        grid-template-columns: 1fr;
     }
-    .info-actions {
+    .ledger-live {
         width: 100%;
     }
     #toast-root {

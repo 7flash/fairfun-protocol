@@ -94,11 +94,11 @@ function shortAddress(address: string) {
     return `${address.slice(0, 4)}...${address.slice(-4)}`;
 }
 
-function copyWithFeedback(button: HTMLButtonElement | null, text: string, label = 'Copy') {
+function copyWithFeedback(button: HTMLButtonElement | null, text: string, label = 'Copy', successLabel = 'Copied') {
     if (!button) return;
     const originalText = button.textContent ?? label;
     void navigator.clipboard.writeText(text).then(() => {
-        button.textContent = 'Copied';
+        button.textContent = successLabel;
         button.disabled = true;
         setTimeout(() => {
             button.textContent = originalText || label;
@@ -213,7 +213,6 @@ function InfoCards({
     totalSupply,
     tokenPriceUsd,
     totalFeesAccumulatedSol,
-    totalClaimedSol,
     treasuryBalanceSol,
     totalAccumulatedGravity,
     lastGravityDelta,
@@ -224,7 +223,6 @@ function InfoCards({
     totalSupply: number;
     tokenPriceUsd: number;
     totalFeesAccumulatedSol: number;
-    totalClaimedSol: number;
     treasuryBalanceSol: number;
     totalAccumulatedGravity: number;
     lastGravityDelta: number;
@@ -232,111 +230,79 @@ function InfoCards({
 }) {
     const accountExplorerBaseUrl = runtimeConfig.explorerTxBaseUrl.replace('/tx/', '/account/');
     const marketCap = totalSupply * tokenPriceUsd;
-    const indexedNetAvailable = Math.max(0, totalFeesAccumulatedSol - totalClaimedSol);
-    const directTransfersSol = Math.max(0, treasuryBalanceSol - indexedNetAvailable);
     const lastGrowthEmpty = Math.abs(lastGravityDelta) < 0.0000001;
 
     return (
         <div className="info-row">
             <section className="info-card">
                 <div className="info-card-head">
-                    <div>
-                        <div className="info-label">Token Pool</div>
-                        <div className="info-title">{runtimeConfig.tokenSymbol} mint</div>
-                    </div>
-                </div>
-                <div className="info-address-row">
-                    <div className="info-value">{shortAddress(runtimeConfig.tokenMint)}</div>
-                    <div className="info-actions">
-                        <button className="copy-btn" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, runtimeConfig.tokenMint)} title="Copy token mint" type="button">
-                            Copy
-                        </button>
-                        <a className="mini-link-btn" href={`${accountExplorerBaseUrl}${runtimeConfig.tokenMint}`} rel="noreferrer" target="_blank">
-                            Solscan
+                    <div className="info-label">Token Pool</div>
+                    <div className="card-address-row">
+                        <a className="card-address-link" href={`${accountExplorerBaseUrl}${runtimeConfig.tokenMint}`} rel="noreferrer" target="_blank">
+                            {shortAddress(runtimeConfig.tokenMint)}
                         </a>
+                        <button className="copy-icon-btn" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, runtimeConfig.tokenMint, '[]', 'OK')} title="Copy token mint" type="button">
+                            []
+                        </button>
                     </div>
                 </div>
-                <div className="info-rows">
-                    <div className="info-stat-row">
+                <div className="card-metrics-grid">
+                    <div className="metric-block">
+                        <div className="small-label header-tooltip" data-tooltip="Estimated token market cap from indexed token price and supply.">Market Cap</div>
+                        <div className="inline-value"><AnimatedValue value={marketCap} kind="usd" /></div>
+                    </div>
+                    <div className="metric-block">
                         <span className="small-label header-tooltip" data-tooltip="Number of wallets currently indexed as holding this token.">Holders</span>
                         <span className="inline-value"><AnimatedValue value={total} kind="int" /></span>
                     </div>
-                    <div className="info-stat-row">
-                        <span className="small-label header-tooltip" data-tooltip="Estimated token market cap from indexed token price and supply.">Market Cap</span>
-                        <span className="inline-value"><AnimatedValue value={marketCap} kind="usd" /></span>
-                    </div>
                 </div>
             </section>
 
             <section className="info-card">
                 <div className="info-card-head">
-                    <div>
-                        <div className="info-label">Treasury</div>
-                        <div className="info-title">Protocol treasury</div>
-                    </div>
-                </div>
-                <div className="info-address-row">
-                    <div className="info-value">{shortAddress(runtimeConfig.treasuryAddress)}</div>
-                    <div className="info-actions">
-                        <button className="copy-btn" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, runtimeConfig.treasuryAddress)} title="Copy treasury PDA" type="button">
-                            Copy
-                        </button>
-                        <a className="mini-link-btn" href={`${accountExplorerBaseUrl}${runtimeConfig.treasuryAddress}`} rel="noreferrer" target="_blank">
-                            Solscan
+                    <div className="info-label">Treasury</div>
+                    <div className="card-address-row">
+                        <a className="card-address-link" href={`${accountExplorerBaseUrl}${runtimeConfig.treasuryAddress}`} rel="noreferrer" target="_blank">
+                            {shortAddress(runtimeConfig.treasuryAddress)}
                         </a>
+                        <button className="copy-icon-btn" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, runtimeConfig.treasuryAddress, '[]', 'OK')} title="Copy treasury PDA" type="button">
+                            []
+                        </button>
                     </div>
                 </div>
-                <div className="info-primary-metric">
-                    <span className="small-label header-tooltip" data-tooltip="Current SOL physically held by the treasury PDA. May include direct transfers not indexed as deposits.">Treasury Balance</span>
-                    <span className="primary-inline-value">{formatNumber(treasuryBalanceSol, 'sol')}</span>
-                </div>
-                <div className="info-rows">
-                    <div className="info-stat-row">
-                        <span className="small-label header-tooltip" data-tooltip="SOL deposits recorded through the FairFun protocol deposit flow.">Indexed Deposits</span>
+                <div className="card-metrics-grid">
+                    <div className="metric-block">
+                        <span className="small-label header-tooltip" data-tooltip="SOL deposits recorded through the FairFun protocol deposit flow.">Total Deposited</span>
                         <span className="inline-value">{formatNumber(totalFeesAccumulatedSol, 'sol')}</span>
                     </div>
-                    <div className="info-stat-row">
-                        <span className="small-label">Direct Transfers</span>
-                        <span className="inline-value">{formatNumber(directTransfersSol, 'sol')}</span>
-                    </div>
-                    <div className="info-stat-row">
-                        <span className="small-label header-tooltip" data-tooltip="Total SOL already claimed by holders through signed cumulative claims.">Claimed By Holders</span>
-                        <span className="inline-value">{formatNumber(totalClaimedSol, 'sol')}</span>
+                    <div className="metric-block">
+                        <span className="small-label">Current Balance <span className="metric-help header-tooltip" data-tooltip="Treasury balance may include direct transfers that were not indexed as protocol deposits.">?</span></span>
+                        <span className="inline-value">{formatNumber(treasuryBalanceSol, 'sol')}</span>
                     </div>
                 </div>
-                <div className="treasury-note">Treasury balance may include direct transfers that were not indexed as protocol deposits.</div>
             </section>
 
             <section className="info-card">
                 <div className="info-card-head">
-                    <div>
-                        <div className="info-label">Gravity Program</div>
-                        <div className="info-title">On-chain rewards program</div>
-                    </div>
-                </div>
-                <div className="info-address-row">
-                    <div className="info-value">{shortAddress(runtimeConfig.programId)}</div>
-                    <div className="info-actions">
-                        <button className="copy-btn" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, runtimeConfig.programId)} title="Copy program id" type="button">
-                            Copy
-                        </button>
-                        <a className="mini-link-btn" href={`${accountExplorerBaseUrl}${runtimeConfig.programId}`} rel="noreferrer" target="_blank">
-                            Solscan
+                    <div className="info-label">Gravity Program</div>
+                    <div className="card-address-row">
+                        <a className="card-address-link" href={`${accountExplorerBaseUrl}${runtimeConfig.programId}`} rel="noreferrer" target="_blank">
+                            {shortAddress(runtimeConfig.programId)}
                         </a>
+                        <button className="copy-icon-btn" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, runtimeConfig.programId, '[]', 'OK')} title="Copy program id" type="button">
+                            []
+                        </button>
                     </div>
                 </div>
-                <div className="info-rows">
-                    <div className="info-stat-row">
+                <div className="card-metrics-grid">
+                    <div className="metric-block">
                         <span className="small-label header-tooltip" data-tooltip="Total accumulated gravity across all indexed holders.">Global Gravity</span>
                         <span className="inline-value">{formatNumber(totalAccumulatedGravity, 'gravity')}</span>
                     </div>
-                    <div className="info-stat-row">
+                    <div className="metric-block">
                         <span className="small-label header-tooltip" data-tooltip="Current accounting update number.">Epoch</span>
                         <span className="inline-value">{epochIndex.toLocaleString()}</span>
-                    </div>
-                    <div className="info-stat-row">
-                        <span className="small-label header-tooltip" data-tooltip="How much global gravity increased during the latest accounting update.">Last Epoch Growth</span>
-                        <span className={`inline-value ${lastGrowthEmpty ? 'inline-value-muted' : ''}`}>
+                        <span className={`metric-subvalue ${lastGrowthEmpty ? 'inline-value-muted' : ''}`}>
                             {lastGrowthEmpty ? 'No growth' : `+${formatNumber(lastGravityDelta, 'gravity')}`}
                         </span>
                     </div>
@@ -649,7 +615,7 @@ function ActivityPanel({
     error,
     connectedAddress,
     descriptionText,
-    metaText,
+    liveText,
 }: {
     runtimeConfig: RuntimeConfig;
     activeTab: ActivityTab;
@@ -660,7 +626,7 @@ function ActivityPanel({
     error: string | null;
     connectedAddress: string | null;
     descriptionText: string;
-    metaText: string;
+    liveText: string;
 }) {
     return (
         <div className="activity-shell">
@@ -671,26 +637,27 @@ function ActivityPanel({
                 </div>
             </div>
 
-            <div className="ledger-meta">
-                <span className="live-dot">LIVE</span>
-                <span className="ledger-meta-text">{metaText}</span>
-            </div>
-
-            <div className="board-tabs">
-                <button
-                    className={`board-tab ${activeTab === 'leaderboard' ? 'is-active' : ''}`}
-                    onClick={() => setActiveTab('leaderboard')}
-                    type="button"
-                >
-                    Leaderboard
-                </button>
-                <button
-                    className={`board-tab ${activeTab === 'treasury' ? 'is-active' : ''}`}
-                    onClick={() => setActiveTab('treasury')}
-                    type="button"
-                >
-                    Treasury Additions
-                </button>
+            <div className="ledger-toolbar">
+                <div className="board-tabs">
+                    <button
+                        className={`board-tab ${activeTab === 'leaderboard' ? 'is-active' : ''}`}
+                        onClick={() => setActiveTab('leaderboard')}
+                        type="button"
+                    >
+                        Leaderboard
+                    </button>
+                    <button
+                        className={`board-tab ${activeTab === 'treasury' ? 'is-active' : ''}`}
+                        onClick={() => setActiveTab('treasury')}
+                        type="button"
+                    >
+                        Treasury Additions
+                    </button>
+                </div>
+                <div className="ledger-live">
+                    <span className="live-dot">LIVE</span>
+                    <span className="ledger-meta-text">{liveText}</span>
+                </div>
             </div>
 
             <div className="leaderboard-panel">
@@ -762,21 +729,12 @@ export default function mount() {
         let lastRefreshAt = Date.now();
 
         const getLedgerDescription = () => {
-            if (activeTab === 'leaderboard') {
-                return 'Holders ranked by accumulated gravity share, estimated ownership, and earned SOL rewards.';
-            }
-            return 'Revenue deposits recorded for this reward pool.';
+            return 'Protocol-wide holder rankings and treasury activity for the active reward pool.';
         };
 
         const getLedgerMeta = () => {
-            if (activeTab === 'leaderboard') {
-                return total > 0
-                    ? `${total.toLocaleString()} holders · updated ${formatRelativeTime(lastRefreshAt)}`
-                    : 'Waiting for indexer data...';
-            }
-            return treasuryEvents.length > 0
-                ? `${treasuryEvents.length.toLocaleString()} additions · updated ${formatRelativeTime(lastRefreshAt)}`
-                : 'Waiting for treasury additions...';
+            if (totalAccumulatedGravity <= 0 && treasuryBalanceSol <= 0) return 'Waiting for indexer data...';
+            return `Global gravity ${formatNumber(totalAccumulatedGravity, 'gravity')} · Treasury balance ${formatNumber(treasuryBalanceSol, 'sol')} · updated ${formatRelativeTime(lastRefreshAt)}`;
         };
 
         const renderInfoCards = () => measureFrontendSync('render info row', () => {
@@ -787,7 +745,6 @@ export default function mount() {
                     totalSupply={totalSupply}
                     tokenPriceUsd={tokenPriceUsd}
                     totalFeesAccumulatedSol={totalFeesAccumulatedSol}
-                    totalClaimedSol={totalClaimedSol}
                     treasuryBalanceSol={treasuryBalanceSol}
                     totalAccumulatedGravity={totalAccumulatedGravity}
                     lastGravityDelta={lastGravityDelta}
@@ -835,7 +792,7 @@ export default function mount() {
                     error={error}
                     connectedAddress={connectedAddress}
                     descriptionText={getLedgerDescription()}
-                    metaText={getLedgerMeta()}
+                    liveText={getLedgerMeta()}
                 />,
                 leaderboardRoot
             );
