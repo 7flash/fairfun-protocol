@@ -242,7 +242,6 @@ function InfoCards({
 }) {
     const accountExplorerBaseUrl = runtimeConfig.explorerTxBaseUrl.replace('/tx/', '/account/');
     const marketCap = totalSupply * tokenPriceUsd;
-    const lastGrowthEmpty = Math.abs(lastGravityDelta) < 0.0000001;
 
     return (
         <div className="info-row">
@@ -313,14 +312,16 @@ function InfoCards({
                 <div className="card-metrics-grid">
                     <div className="metric-block">
                         <span className="small-label header-tooltip" data-tooltip="Total accumulated gravity across all indexed holders.">Global Gravity</span>
-                        <span className="inline-value">{formatNumber(totalAccumulatedGravity, 'gravity')}</span>
+                        <div className="inline-value-row">
+                            <AnimatedValue value={totalAccumulatedGravity} kind="gravity" />
+                            <span className={`metric-inline-delta ${Math.abs(lastGravityDelta) < 0.0000001 ? 'inline-value-muted' : ''}`}>
+                                (<AnimatedValue value={lastGravityDelta} kind="gravity" />)
+                            </span>
+                        </div>
                     </div>
                     <div className="metric-block">
                         <span className="small-label header-tooltip" data-tooltip="Current accounting update number.">Epoch</span>
                         <span className="inline-value">{epochIndex.toLocaleString()}</span>
-                        <span className={`metric-subvalue ${lastGrowthEmpty ? 'inline-value-muted' : ''}`}>
-                            {lastGrowthEmpty ? 'No growth' : `+${formatNumber(lastGravityDelta, 'gravity')}`}
-                        </span>
                     </div>
                 </div>
             </section>
@@ -385,8 +386,8 @@ function PositionPanel({
 
             <div className="position-identity">
                 <div className="identity-addr">{walletTotals?.addressShort ?? shortAddress(connectedAddress)}</div>
-                <button className="copy-icon-btn" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, connectedAddress, '[]', 'OK')} title="Copy wallet address" type="button">
-                    []
+                <button className="copy-btn copy-btn-inline" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, connectedAddress)} title="Copy wallet address" type="button">
+                    Copy
                 </button>
             </div>
 

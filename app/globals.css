@@ -179,10 +179,11 @@ a {
 .card-metrics-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px 20px;
+    gap: 12px 22px;
     margin-top: 12px;
     padding-top: 12px;
     border-top: 1px solid rgba(148, 163, 184, 0.12);
+    align-items: start;
 }
 
 .metric-block {
@@ -193,13 +194,29 @@ a {
 }
 
 .inline-value {
-    font-size: 1.18rem;
+    font-size: 1.34rem;
     font-weight: 800;
     line-height: 1.06;
     letter-spacing: -0.02em;
     color: var(--text);
     font-variant-numeric: tabular-nums;
     text-align: left;
+}
+
+.inline-value-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+    flex-wrap: wrap;
+}
+
+.metric-inline-delta {
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: var(--soft);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
 }
 
 .inline-value-muted {
