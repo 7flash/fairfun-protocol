@@ -1,4 +1,3 @@
-import { existsSync, readFileSync } from 'fs';
 import path from 'path';
 import { measureSync } from 'measure-fn';
 
@@ -35,10 +34,6 @@ export interface RuntimeConfig {
 
 let cachedConfig: RuntimeConfig | null = null;
 
-function getConfigPath() {
-    return path.resolve(process.cwd(), '.config.toml');
-}
-
 function requireString(value: unknown, key: string) {
     if (typeof value !== 'string' || value.trim().length === 0) {
         throw new Error(`Missing required config value: ${key}`);
@@ -63,48 +58,39 @@ function getNumber(value: unknown, fallback: number) {
     return fallback;
 }
 
+function env(name: string) {
+    return process.env[name];
+}
+
 function parseConfig(): RuntimeConfig {
-    const configPath = getConfigPath();
-    if (!existsSync(configPath)) {
-        throw new Error(`Missing ${configPath}. Copy .config.example.toml to .config.toml and fill in your values.`);
-    }
-
-    const source = readFileSync(configPath, 'utf8');
-    const parsed = Bun.TOML.parse(source) as Record<string, Record<string, unknown> | undefined>;
-    const app = parsed.app ?? {};
-    const chain = parsed.chain ?? {};
-    const token = parsed.token ?? {};
-    const rewards = parsed.rewards ?? {};
-    const indexer = parsed.indexer ?? {};
-
     return {
         app: {
-            port: getNumber(app.port, 3000),
-            siteTitle: requireString(app.site_title, 'app.site_title'),
-            projectName: requireString(app.project_name, 'app.project_name'),
-            heroBadge: requireString(app.hero_badge, 'app.hero_badge'),
-            heroTitle: requireString(app.hero_title, 'app.hero_title'),
-            heroDescription: requireString(app.hero_description, 'app.hero_description'),
+            port: getNumber(env('APP_PORT'), 3000),
+            siteTitle: requireString(env('APP_SITE_TITLE'), 'APP_SITE_TITLE'),
+            projectName: requireString(env('APP_PROJECT_NAME'), 'APP_PROJECT_NAME'),
+            heroBadge: requireString(env('APP_HERO_BADGE'), 'APP_HERO_BADGE'),
+            heroTitle: requireString(env('APP_HERO_TITLE'), 'APP_HERO_TITLE'),
+            heroDescription: requireString(env('APP_HERO_DESCRIPTION'), 'APP_HERO_DESCRIPTION'),
         },
         chain: {
-            rpcUrl: requireString(chain.rpc_url, 'chain.rpc_url'),
+            rpcUrl: requireString(env('CHAIN_RPC_URL'), 'CHAIN_RPC_URL'),
         },
         token: {
-            mint: requireString(token.mint, 'token.mint'),
-            symbol: requireString(token.symbol, 'token.symbol'),
+            mint: requireString(env('TOKEN_MINT'), 'TOKEN_MINT'),
+            symbol: requireString(env('TOKEN_SYMBOL'), 'TOKEN_SYMBOL'),
         },
         rewards: {
-            programId: requireString(rewards.program_id, 'rewards.program_id'),
-            treasuryAddress: requireString(rewards.treasury_address, 'rewards.treasury_address'),
-            backendKeypairPath: getOptionalString(rewards.backend_keypair_path),
-            claimExpiresInSeconds: Math.max(30, getNumber(rewards.claim_expires_in_seconds, 600)),
-            explorerTxBaseUrl: getOptionalString(rewards.explorer_tx_base_url, 'https://solscan.io/tx/'),
+            programId: requireString(env('REWARDS_PROGRAM_ID'), 'REWARDS_PROGRAM_ID'),
+            treasuryAddress: requireString(env('REWARDS_TREASURY_ADDRESS'), 'REWARDS_TREASURY_ADDRESS'),
+            backendKeypairPath: getOptionalString(env('REWARDS_BACKEND_KEYPAIR_PATH')),
+            claimExpiresInSeconds: Math.max(30, getNumber(env('REWARDS_CLAIM_EXPIRES_IN_SECONDS'), 600)),
+            explorerTxBaseUrl: getOptionalString(env('REWARDS_EXPLORER_TX_BASE_URL'), 'https://solscan.io/tx/'),
         },
         indexer: {
-            dbPath: path.resolve(process.cwd(), requireString(indexer.db_path, 'indexer.db_path')),
-            intervalMs: Math.max(1000, getNumber(indexer.interval_ms, 60000)),
-            launchTimestamp: Math.max(0, getNumber(indexer.launch_timestamp, 0)),
-            tokenPriceUsd: Math.max(0, getNumber(indexer.token_price_usd, 0)),
+            dbPath: path.resolve(process.cwd(), requireString(env('INDEXER_DB_PATH'), 'INDEXER_DB_PATH')),
+            intervalMs: Math.max(1000, getNumber(env('INDEXER_INTERVAL_MS'), 60000)),
+            launchTimestamp: Math.max(0, getNumber(env('INDEXER_LAUNCH_TIMESTAMP'), 0)),
+            tokenPriceUsd: Math.max(0, getNumber(env('INDEXER_TOKEN_PRICE_USD'), 0)),
         },
     };
 }
