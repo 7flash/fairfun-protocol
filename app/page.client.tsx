@@ -256,7 +256,6 @@ function InfoCards({
                         <button className="copy-btn copy-btn-inline" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, runtimeConfig.tokenMint)} title="Copy token mint" type="button">
                             Copy
                         </button>
-                        <a className="mini-link-btn" href={`${accountExplorerBaseUrl}${runtimeConfig.tokenMint}`} rel="noreferrer" target="_blank">Solscan</a>
                     </div>
                 </div>
                 <div className="card-metrics-grid">
@@ -281,7 +280,6 @@ function InfoCards({
                         <button className="copy-btn copy-btn-inline" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, runtimeConfig.treasuryAddress)} title="Copy treasury PDA" type="button">
                             Copy
                         </button>
-                        <a className="mini-link-btn" href={`${accountExplorerBaseUrl}${runtimeConfig.treasuryAddress}`} rel="noreferrer" target="_blank">Solscan</a>
                     </div>
                 </div>
                 <div className="card-metrics-grid">
@@ -294,7 +292,6 @@ function InfoCards({
                         <span className="inline-value">{formatNumber(treasuryBalanceSol, 'sol')}</span>
                     </div>
                 </div>
-                <div className="treasury-note">Treasury balance may include direct transfers that were not indexed as protocol deposits.</div>
             </section>
 
             <section className="info-card">
@@ -307,7 +304,6 @@ function InfoCards({
                         <button className="copy-btn copy-btn-inline" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, runtimeConfig.programId)} title="Copy program id" type="button">
                             Copy
                         </button>
-                        <a className="mini-link-btn" href={`${accountExplorerBaseUrl}${runtimeConfig.programId}`} rel="noreferrer" target="_blank">Solscan</a>
                     </div>
                 </div>
                 <div className="program-status">
@@ -372,7 +368,6 @@ function PositionPanel({
     const canClaim = Boolean(walletTotals?.claimEnabled && claimableRewards > 0);
     const earnedRewards = walletTotals?.totalSolRewardsEarned ?? 0;
     const claimedRewards = walletTotals?.totalSolRewardsClaimed ?? 0;
-    const showEarned = Math.abs(earnedRewards - claimableRewards) > 0.0000001;
     const claimStateMessage = !runtimeConfig.claimEnabled
         ? 'Claim signing is temporarily paused.'
         : claimableRewards <= 0
@@ -427,12 +422,10 @@ function PositionPanel({
                 <div className="position-group">
                     <div className="group-label">Rewards</div>
                     <div className="position-grid">
-                        {showEarned ? (
-                            <div className="grid-cell">
-                                <div className="cell-label">SOL Earned</div>
-                                <div className="cell-value"><AnimatedValue value={earnedRewards} kind="sol" /></div>
-                            </div>
-                        ) : null}
+                        <div className="grid-cell">
+                            <div className="cell-label">SOL Earned</div>
+                            <div className="cell-value"><AnimatedValue value={earnedRewards} kind="sol" /></div>
+                        </div>
                         <div className="grid-cell">
                             <div className="cell-label">Claimable</div>
                             <div className="cell-value cell-value-accent"><AnimatedValue value={claimableRewards} kind="sol" /></div>

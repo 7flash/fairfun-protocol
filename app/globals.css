@@ -130,6 +130,7 @@ a {
     align-items: center;
     gap: 6px;
     min-width: 0;
+    justify-content: flex-end;
 }
 
 .card-address-link {
@@ -138,6 +139,7 @@ a {
     font-weight: 700;
     color: var(--soft);
     text-decoration: none;
+    white-space: nowrap;
 }
 
 .card-address-link:hover {
@@ -167,7 +169,7 @@ a {
 
 .small-label {
     display: block;
-    font-size: 0.68rem;
+    font-size: 0.64rem;
     font-weight: 700;
     letter-spacing: 0.1em;
     color: var(--muted);
@@ -177,7 +179,7 @@ a {
 .card-metrics-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px 16px;
+    gap: 10px 20px;
     margin-top: 12px;
     padding-top: 12px;
     border-top: 1px solid rgba(148, 163, 184, 0.12);
@@ -185,16 +187,19 @@ a {
 
 .metric-block {
     min-width: 0;
+    display: grid;
+    align-content: start;
+    gap: 6px;
 }
 
 .inline-value {
-    font-size: 1rem;
+    font-size: 1.18rem;
     font-weight: 800;
-    line-height: 1.12;
+    line-height: 1.06;
     letter-spacing: -0.02em;
     color: var(--text);
     font-variant-numeric: tabular-nums;
-    text-align: right;
+    text-align: left;
 }
 
 .inline-value-muted {
@@ -203,8 +208,8 @@ a {
 
 .metric-subvalue {
     display: block;
-    margin-top: 4px;
-    font-size: 0.74rem;
+    margin-top: 2px;
+    font-size: 0.82rem;
     font-weight: 700;
     letter-spacing: 0;
     color: var(--soft);
@@ -298,8 +303,7 @@ a {
     padding: 0 10px;
 }
 
-.copy-btn-inline,
-.mini-link-btn {
+.copy-btn-inline {
     height: 24px;
     padding: 0 8px;
     border: 1px solid var(--line);
@@ -310,7 +314,6 @@ a {
     font-weight: 700;
 }
 
-.mini-link-btn:hover,
 .copy-btn-inline:hover {
     border-color: rgba(255, 107, 61, 0.4);
     color: var(--text);
