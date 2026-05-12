@@ -219,18 +219,18 @@ function InfoCards({
     };
     const marketCap = totalSupply * tokenPriceUsd;
     const balanceMatchesTrackedFlow = treasuryBalanceSol <= totalFeesAccumulatedSol + 0.0000001;
-    const revenueLabel = balanceMatchesTrackedFlow ? 'All-Time Revenue' : 'Tracked Revenue';
-    const treasuryBalanceLabel = balanceMatchesTrackedFlow ? 'Current Balance' : 'On-chain Balance';
+    const revenueLabel = balanceMatchesTrackedFlow ? 'Protocol Revenue' : 'Indexed Deposits';
+    const treasuryBalanceLabel = 'Treasury Balance';
     const treasuryBalanceTooltip = balanceMatchesTrackedFlow
-        ? 'Current treasury balance remaining after holder claims.'
-        : 'On-chain balance can include direct transfers or deposits not represented in tracked protocol revenue.';
+        ? 'Treasury balance remaining after holder claims.'
+        : 'Treasury balance may include direct transfers not indexed as protocol deposits.';
 
     return (
         <div className="info-row">
             <section className="info-card address-tooltip" data-tooltip={`Current circulating supply metrics for the integrated ${runtimeConfig.tokenSymbol} token.`}>
                 <div className="info-card-head">
                     <div>
-                        <div className="info-label">Token Mint</div>
+                        <div className="info-label">Token Pool</div>
                         <div className="info-title">{runtimeConfig.tokenSymbol} mint</div>
                     </div>
                     <button className="copy-btn" onClick={() => copyToClipboard(runtimeConfig.tokenMint)} title="Copy token mint" type="button">
@@ -258,7 +258,7 @@ function InfoCards({
             <section className="info-card address-tooltip" data-tooltip="Total SOL routed through the protocol versus SOL currently awaiting claim in the treasury.">
                 <div className="info-card-head">
                     <div>
-                        <div className="info-label">Treasury PDA</div>
+                        <div className="info-label">Treasury</div>
                         <div className="info-title">Protocol treasury</div>
                     </div>
                     <button className="copy-btn" onClick={() => copyToClipboard(runtimeConfig.treasuryAddress)} title="Copy treasury PDA" type="button">
@@ -277,7 +277,7 @@ function InfoCards({
                         <span className="inline-value">{formatNumber(totalFeesAccumulatedSol, 'sol')}</span>
                     </div>
                     <div className="info-stat-row">
-                        <span className="small-label">Claimed</span>
+                        <span className="small-label">Claimed By Holders</span>
                         <span className="inline-value">{formatNumber(totalClaimedSol, 'sol')}</span>
                     </div>
                     <div className="info-stat-row">
@@ -341,7 +341,7 @@ function PositionPanel({
                     <p className="connect-copy">Connect your wallet to see your gravity share, accumulated rewards, claimable balance, and payout history.</p>
                     <button onClick={connect} className="primary-button connect-cta" type="button">
                         <span>⬢</span>
-                        <span>CONNECT PHANTOM WALLET</span>
+                        <span>Connect Phantom Wallet</span>
                     </button>
                 </div>
                 {walletError ? <div className="inline-error">{walletError}</div> : null}
@@ -584,7 +584,8 @@ function ActivityPanel({
     loading,
     error,
     connectedAddress,
-    summaryText,
+    descriptionText,
+    metaText,
     onRefresh,
 }: {
     runtimeConfig: RuntimeConfig;
@@ -595,38 +596,43 @@ function ActivityPanel({
     loading: boolean;
     error: string | null;
     connectedAddress: string | null;
-    summaryText: string;
+    descriptionText: string;
+    metaText: string;
     onRefresh: () => void;
 }) {
     return (
         <div className="activity-shell">
-            <div className="workspace-toolbar">
-                <div className="board-tabs">
-                    <button
-                        className={`board-tab ${activeTab === 'leaderboard' ? 'is-active' : ''}`}
-                        onClick={() => setActiveTab('leaderboard')}
-                        type="button"
-                    >
-                        Leaderboard
-                    </button>
-                    <button
-                        className={`board-tab ${activeTab === 'treasury' ? 'is-active' : ''}`}
-                        onClick={() => setActiveTab('treasury')}
-                        type="button"
-                    >
-                        Treasury Additions
-                    </button>
+            <div className="ledger-header">
+                <div className="ledger-copy">
+                    <h2 className="ledger-title">Reward Ledger</h2>
+                    <p className="ledger-description">{descriptionText}</p>
                 </div>
-                <div className="workspace-actions">
-                    <button className={`refresh-button ${loading ? 'is-loading' : ''}`} onClick={onRefresh} type="button">
-                        <span className="refresh-icon">↻</span>
-                        <span>Refresh</span>
-                    </button>
-                    <div className="board-status">
-                        <span className="live-dot">LIVE</span>
-                        <span className="board-status-text">{summaryText}</span>
-                    </div>
-                </div>
+                <button className={`refresh-button ${loading ? 'is-loading' : ''}`} onClick={onRefresh} type="button">
+                    <span className="refresh-icon">↻</span>
+                    <span>Refresh</span>
+                </button>
+            </div>
+
+            <div className="ledger-meta">
+                <span className="live-dot">LIVE</span>
+                <span className="ledger-meta-text">{metaText}</span>
+            </div>
+
+            <div className="board-tabs">
+                <button
+                    className={`board-tab ${activeTab === 'leaderboard' ? 'is-active' : ''}`}
+                    onClick={() => setActiveTab('leaderboard')}
+                    type="button"
+                >
+                    Leaderboard
+                </button>
+                <button
+                    className={`board-tab ${activeTab === 'treasury' ? 'is-active' : ''}`}
+                    onClick={() => setActiveTab('treasury')}
+                    type="button"
+                >
+                    Treasury Additions
+                </button>
             </div>
 
             <div className="leaderboard-panel">
@@ -697,14 +703,21 @@ export default function mount() {
         let toastTimeout: ReturnType<typeof setTimeout> | null = null;
         let lastRefreshAt = Date.now();
 
-        const getSummaryText = () => {
+        const getLedgerDescription = () => {
+            if (activeTab === 'leaderboard') {
+                return 'Holders ranked by accumulated gravity share and earned SOL rewards.';
+            }
+            return 'Revenue deposits recorded for this reward pool.';
+        };
+
+        const getLedgerMeta = () => {
             if (activeTab === 'leaderboard') {
                 return total > 0
-                    ? `Holders ranked by accumulated gravity share and earned SOL rewards · updated ${formatRelativeTime(lastRefreshAt)}`
+                    ? `${total.toLocaleString()} holders · updated ${formatRelativeTime(lastRefreshAt)}`
                     : 'Waiting for indexer data...';
             }
             return treasuryEvents.length > 0
-                ? `Revenue deposits recorded for this reward pool · updated ${formatRelativeTime(lastRefreshAt)}`
+                ? `${treasuryEvents.length.toLocaleString()} additions · updated ${formatRelativeTime(lastRefreshAt)}`
                 : 'Waiting for treasury additions...';
         };
 
@@ -763,7 +776,8 @@ export default function mount() {
                     loading={loading}
                     error={error}
                     connectedAddress={connectedAddress}
-                    summaryText={getSummaryText()}
+                    descriptionText={getLedgerDescription()}
+                    metaText={getLedgerMeta()}
                     onRefresh={handleRefreshClick}
                 />,
                 leaderboardRoot
