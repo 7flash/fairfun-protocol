@@ -177,6 +177,12 @@ function formatRelativeTime(timestamp: number) {
     return `${hours}h ago`;
 }
 
+function formatSignedGravityDelta(value: number) {
+    if (value > 0) return `(+${formatNumber(value, 'gravity')})`;
+    if (value < 0) return `(${formatNumber(value, 'gravity')})`;
+    return '(0)';
+}
+
 function AnimatedValue({ value, kind }: { value: number; kind: NumberFormatKind }) {
     return (
         <span className="animated-number" data-animate-number="true" data-target={String(value)} data-format={kind}>
@@ -262,7 +268,7 @@ function InfoCards({
                         <div className="small-label header-tooltip" data-tooltip="Estimated token market cap from indexed token price and supply.">Market Cap</div>
                         <div className="inline-value"><AnimatedValue value={marketCap} kind="usd" /></div>
                     </div>
-                    <div className="metric-block">
+                    <div className="metric-block metric-block-right">
                         <span className="small-label header-tooltip" data-tooltip="Number of wallets currently indexed as holding this token.">Holders</span>
                         <span className="inline-value"><AnimatedValue value={total} kind="int" /></span>
                     </div>
@@ -286,7 +292,7 @@ function InfoCards({
                         <span className="small-label header-tooltip" data-tooltip="SOL deposits recorded through the FairFun protocol deposit flow.">Total Deposited</span>
                         <span className="inline-value">{formatNumber(totalFeesAccumulatedSol, 'sol')}</span>
                     </div>
-                    <div className="metric-block">
+                    <div className="metric-block metric-block-right">
                         <span className="small-label">Current Balance</span>
                         <span className="inline-value">{formatNumber(treasuryBalanceSol, 'sol')}</span>
                     </div>
@@ -305,21 +311,17 @@ function InfoCards({
                         </button>
                     </div>
                 </div>
-                <div className="program-status">
-                    <span className="program-status-dot" />
-                    <span>On-chain program live</span>
-                </div>
                 <div className="card-metrics-grid">
                     <div className="metric-block">
                         <span className="small-label header-tooltip" data-tooltip="Total accumulated gravity across all indexed holders.">Global Gravity</span>
                         <div className="inline-value-row">
                             <AnimatedValue value={totalAccumulatedGravity} kind="gravity" />
-                            <span className={`metric-inline-delta ${Math.abs(lastGravityDelta) < 0.0000001 ? 'inline-value-muted' : ''}`}>
-                                (<AnimatedValue value={lastGravityDelta} kind="gravity" />)
+                            <span className={`metric-inline-delta ${lastGravityDelta > 0 ? 'metric-inline-delta-positive' : 'inline-value-muted'}`}>
+                                {formatSignedGravityDelta(lastGravityDelta)}
                             </span>
                         </div>
                     </div>
-                    <div className="metric-block">
+                    <div className="metric-block metric-block-right">
                         <span className="small-label header-tooltip" data-tooltip="Current accounting update number.">Epoch</span>
                         <span className="inline-value">{epochIndex.toLocaleString()}</span>
                     </div>
@@ -627,7 +629,6 @@ function ActivityPanel({
     loading,
     error,
     connectedAddress,
-    descriptionText,
     liveText,
 }: {
     runtimeConfig: RuntimeConfig;
@@ -638,7 +639,6 @@ function ActivityPanel({
     loading: boolean;
     error: string | null;
     connectedAddress: string | null;
-    descriptionText: string;
     liveText: string;
 }) {
     return (
@@ -646,7 +646,6 @@ function ActivityPanel({
             <div className="ledger-header">
                 <div className="ledger-copy">
                     <h2 className="ledger-title">Reward Ledger</h2>
-                    <p className="ledger-description">{descriptionText}</p>
                 </div>
             </div>
 
@@ -741,13 +740,9 @@ export default function mount() {
         let toastTimeout: ReturnType<typeof setTimeout> | null = null;
         let lastRefreshAt = Date.now();
 
-        const getLedgerDescription = () => {
-            return 'Protocol-wide holder rankings and treasury activity.';
-        };
-
         const getLedgerMeta = () => {
             if (totalAccumulatedGravity <= 0 && treasuryBalanceSol <= 0) return 'Waiting for indexer data...';
-            return `Engine indexed · updated ${formatRelativeTime(lastRefreshAt)}`;
+            return `updated ${formatRelativeTime(lastRefreshAt)}`;
         };
 
         const renderInfoCards = () => measureFrontendSync('render info row', () => {
@@ -804,7 +799,6 @@ export default function mount() {
                     loading={loading}
                     error={error}
                     connectedAddress={connectedAddress}
-                    descriptionText={getLedgerDescription()}
                     liveText={getLedgerMeta()}
                 />,
                 leaderboardRoot

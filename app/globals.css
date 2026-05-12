@@ -193,6 +193,11 @@ a {
     gap: 6px;
 }
 
+.metric-block-right {
+    text-align: right;
+    justify-items: end;
+}
+
 .inline-value {
     font-size: 1.34rem;
     font-weight: 800;
