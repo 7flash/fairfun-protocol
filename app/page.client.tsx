@@ -78,6 +78,7 @@ type ActivityTab = 'leaderboard' | 'treasury';
 interface RuntimeConfig {
     rpcUrl: string;
     treasuryAddress: string;
+    programId: string;
     tokenMint: string;
     tokenSymbol: string;
     projectName: string;
@@ -93,11 +94,27 @@ function shortAddress(address: string) {
     return `${address.slice(0, 4)}...${address.slice(-4)}`;
 }
 
+function copyWithFeedback(button: HTMLButtonElement | null, text: string, label = 'Copy') {
+    if (!button) return;
+    const originalText = button.textContent ?? label;
+    void navigator.clipboard.writeText(text).then(() => {
+        button.textContent = 'Copied';
+        button.disabled = true;
+        setTimeout(() => {
+            button.textContent = originalText || label;
+            button.disabled = false;
+        }, 1200);
+    }).catch(() => {
+        button.textContent = originalText || label;
+    });
+}
+
 function getRuntimeConfig(): RuntimeConfig {
     const configRoot = document.getElementById('app-config-root');
     return {
         rpcUrl: configRoot?.getAttribute('data-rpc-url') ?? '',
         treasuryAddress: configRoot?.getAttribute('data-treasury-address') ?? '',
+        programId: configRoot?.getAttribute('data-program-id') ?? '',
         tokenMint: configRoot?.getAttribute('data-token-mint') ?? '',
         tokenSymbol: configRoot?.getAttribute('data-token-symbol') ?? 'TOKEN',
         projectName: configRoot?.getAttribute('data-project-name') ?? 'FairFun',
@@ -214,98 +231,114 @@ function InfoCards({
     epochIndex: number;
 }) {
     const accountExplorerBaseUrl = runtimeConfig.explorerTxBaseUrl.replace('/tx/', '/account/');
-    const copyToClipboard = (text: string) => {
-        void navigator.clipboard.writeText(text);
-    };
     const marketCap = totalSupply * tokenPriceUsd;
-    const balanceMatchesTrackedFlow = treasuryBalanceSol <= totalFeesAccumulatedSol + 0.0000001;
-    const revenueLabel = balanceMatchesTrackedFlow ? 'Protocol Revenue' : 'Indexed Deposits';
-    const treasuryBalanceLabel = 'Treasury Balance';
-    const treasuryBalanceTooltip = balanceMatchesTrackedFlow
-        ? 'Treasury balance remaining after holder claims.'
-        : 'Treasury balance may include direct transfers not indexed as protocol deposits.';
+    const indexedNetAvailable = Math.max(0, totalFeesAccumulatedSol - totalClaimedSol);
+    const directTransfersSol = Math.max(0, treasuryBalanceSol - indexedNetAvailable);
+    const lastGrowthEmpty = Math.abs(lastGravityDelta) < 0.0000001;
 
     return (
         <div className="info-row">
-            <section className="info-card address-tooltip" data-tooltip={`Current circulating supply metrics for the integrated ${runtimeConfig.tokenSymbol} token.`}>
+            <section className="info-card">
                 <div className="info-card-head">
                     <div>
                         <div className="info-label">Token Pool</div>
                         <div className="info-title">{runtimeConfig.tokenSymbol} mint</div>
                     </div>
-                    <button className="copy-btn" onClick={() => copyToClipboard(runtimeConfig.tokenMint)} title="Copy token mint" type="button">
-                        Copy
-                    </button>
                 </div>
-                <div className="info-value-row">
+                <div className="info-address-row">
                     <div className="info-value">{shortAddress(runtimeConfig.tokenMint)}</div>
+                    <div className="info-actions">
+                        <button className="copy-btn" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, runtimeConfig.tokenMint)} title="Copy token mint" type="button">
+                            Copy
+                        </button>
+                        <a className="mini-link-btn" href={`${accountExplorerBaseUrl}${runtimeConfig.tokenMint}`} rel="noreferrer" target="_blank">
+                            Solscan
+                        </a>
+                    </div>
                 </div>
-                <a className="info-link" href={`${accountExplorerBaseUrl}${runtimeConfig.tokenMint}`} rel="noreferrer" target="_blank">
-                    View on Solscan
-                </a>
                 <div className="info-rows">
                     <div className="info-stat-row">
-                        <span className="small-label">Holders</span>
+                        <span className="small-label header-tooltip" data-tooltip="Number of wallets currently indexed as holding this token.">Holders</span>
                         <span className="inline-value"><AnimatedValue value={total} kind="int" /></span>
                     </div>
                     <div className="info-stat-row">
-                        <span className="small-label">Market Cap</span>
+                        <span className="small-label header-tooltip" data-tooltip="Estimated token market cap from indexed token price and supply.">Market Cap</span>
                         <span className="inline-value"><AnimatedValue value={marketCap} kind="usd" /></span>
                     </div>
                 </div>
             </section>
 
-            <section className="info-card address-tooltip" data-tooltip="Total SOL routed through the protocol versus SOL currently awaiting claim in the treasury.">
+            <section className="info-card">
                 <div className="info-card-head">
                     <div>
                         <div className="info-label">Treasury</div>
                         <div className="info-title">Protocol treasury</div>
                     </div>
-                    <button className="copy-btn" onClick={() => copyToClipboard(runtimeConfig.treasuryAddress)} title="Copy treasury PDA" type="button">
-                        Copy
-                    </button>
                 </div>
-                <div className="info-value-row">
+                <div className="info-address-row">
                     <div className="info-value">{shortAddress(runtimeConfig.treasuryAddress)}</div>
+                    <div className="info-actions">
+                        <button className="copy-btn" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, runtimeConfig.treasuryAddress)} title="Copy treasury PDA" type="button">
+                            Copy
+                        </button>
+                        <a className="mini-link-btn" href={`${accountExplorerBaseUrl}${runtimeConfig.treasuryAddress}`} rel="noreferrer" target="_blank">
+                            Solscan
+                        </a>
+                    </div>
                 </div>
-                <a className="info-link" href={`${accountExplorerBaseUrl}${runtimeConfig.treasuryAddress}`} rel="noreferrer" target="_blank">
-                    View on Solscan
-                </a>
+                <div className="info-primary-metric">
+                    <span className="small-label header-tooltip" data-tooltip="Current SOL physically held by the treasury PDA. May include direct transfers not indexed as deposits.">Treasury Balance</span>
+                    <span className="primary-inline-value">{formatNumber(treasuryBalanceSol, 'sol')}</span>
+                </div>
                 <div className="info-rows">
                     <div className="info-stat-row">
-                        <span className="small-label">{revenueLabel}</span>
+                        <span className="small-label header-tooltip" data-tooltip="SOL deposits recorded through the FairFun protocol deposit flow.">Indexed Deposits</span>
                         <span className="inline-value">{formatNumber(totalFeesAccumulatedSol, 'sol')}</span>
                     </div>
                     <div className="info-stat-row">
-                        <span className="small-label">Claimed By Holders</span>
-                        <span className="inline-value">{formatNumber(totalClaimedSol, 'sol')}</span>
+                        <span className="small-label">Direct Transfers</span>
+                        <span className="inline-value">{formatNumber(directTransfersSol, 'sol')}</span>
                     </div>
                     <div className="info-stat-row">
-                        <span className="small-label">{treasuryBalanceLabel}</span>
-                        <span className="inline-value">{formatNumber(treasuryBalanceSol, 'sol')}</span>
+                        <span className="small-label header-tooltip" data-tooltip="Total SOL already claimed by holders through signed cumulative claims.">Claimed By Holders</span>
+                        <span className="inline-value">{formatNumber(totalClaimedSol, 'sol')}</span>
                     </div>
                 </div>
-                <div className="treasury-note">{treasuryBalanceTooltip}</div>
+                <div className="treasury-note">Treasury balance may include direct transfers that were not indexed as protocol deposits.</div>
             </section>
 
-            <section className="info-card address-tooltip" data-tooltip="The real-time state of the continuous accrual algorithm.">
+            <section className="info-card">
                 <div className="info-card-head">
                     <div>
-                        <div className="info-label">Gravity Engine</div>
-                        <div className="info-title">Global gravity</div>
+                        <div className="info-label">Gravity Program</div>
+                        <div className="info-title">On-chain rewards program</div>
                     </div>
                 </div>
-                <div className="info-value-row">
-                    <div className="info-value">{formatNumber(totalAccumulatedGravity, 'gravity')}</div>
+                <div className="info-address-row">
+                    <div className="info-value">{shortAddress(runtimeConfig.programId)}</div>
+                    <div className="info-actions">
+                        <button className="copy-btn" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, runtimeConfig.programId)} title="Copy program id" type="button">
+                            Copy
+                        </button>
+                        <a className="mini-link-btn" href={`${accountExplorerBaseUrl}${runtimeConfig.programId}`} rel="noreferrer" target="_blank">
+                            Solscan
+                        </a>
+                    </div>
                 </div>
                 <div className="info-rows">
                     <div className="info-stat-row">
-                        <span className="small-label">Epoch</span>
+                        <span className="small-label header-tooltip" data-tooltip="Total accumulated gravity across all indexed holders.">Global Gravity</span>
+                        <span className="inline-value">{formatNumber(totalAccumulatedGravity, 'gravity')}</span>
+                    </div>
+                    <div className="info-stat-row">
+                        <span className="small-label header-tooltip" data-tooltip="Current accounting update number.">Epoch</span>
                         <span className="inline-value">{epochIndex.toLocaleString()}</span>
                     </div>
                     <div className="info-stat-row">
-                        <span className="small-label">Last Epoch Growth</span>
-                        <span className="inline-value">+{formatNumber(lastGravityDelta, 'gravity')}</span>
+                        <span className="small-label header-tooltip" data-tooltip="How much global gravity increased during the latest accounting update.">Last Epoch Growth</span>
+                        <span className={`inline-value ${lastGrowthEmpty ? 'inline-value-muted' : ''}`}>
+                            {lastGrowthEmpty ? 'No growth' : `+${formatNumber(lastGravityDelta, 'gravity')}`}
+                        </span>
                     </div>
                 </div>
             </section>
@@ -351,63 +384,94 @@ function PositionPanel({
 
     const claimableRewards = walletTotals?.claimableSolRewards ?? 0;
     const canClaim = Boolean(walletTotals?.claimEnabled && claimableRewards > 0);
-    const disabledReason = walletTotals?.claimDisabledReason
-        || (!runtimeConfig.claimEnabled ? 'Backend signer keypair is not configured on the web process.' : 'No claimable rewards yet.');
+    const earnedRewards = walletTotals?.totalSolRewardsEarned ?? 0;
+    const claimedRewards = walletTotals?.totalSolRewardsClaimed ?? 0;
+    const showEarned = Math.abs(earnedRewards - claimableRewards) > 0.0000001;
+    const claimStateMessage = !runtimeConfig.claimEnabled
+        ? 'Claim signing is temporarily paused.'
+        : claimableRewards <= 0
+            ? 'Rewards are accumulating. Claims open once you have claimable SOL.'
+            : 'Claims open soon.';
 
     return (
         <div className={`position-panel ${walletTotals?.rank ? 'is-ranked' : ''}`}>
             <div className="position-head">
                 <span className="position-label">Your Position</span>
                 {walletTotals?.rank ? (
-                    <div className="rank-display">
-                        <span className="rank-num">#{walletTotals.rank}</span>
-                        <span className="rank-of">/ {total.toLocaleString()}</span>
-                    </div>
+                    <div className="rank-inline">Rank #{walletTotals.rank} of {total.toLocaleString()}</div>
                 ) : null}
             </div>
 
             <div className="position-identity">
                 <div className="identity-addr">{walletTotals?.addressShort ?? shortAddress(connectedAddress)}</div>
-                {walletTotals?.rank ? <span className="rank-pill">RANK #{walletTotals.rank}</span> : null}
-            </div>
-            <div className="identity-full">{connectedAddress}</div>
-
-            <div className="position-grid">
-                <div className="grid-cell">
-                    <div className="cell-label">{runtimeConfig.tokenSymbol} Balance</div>
-                    <div className="cell-value"><AnimatedValue value={walletTotals?.tokenBalance ?? 0} kind="tokens" /></div>
-                </div>
-                <div className="grid-cell">
-                    <div className="cell-label">USD Value</div>
-                    <div className="cell-value"><AnimatedValue value={walletTotals?.tokenValueUsd ?? 0} kind="usd" /></div>
-                </div>
-                <div className="grid-cell">
-                    <div className="cell-label">Gravity</div>
-                    <div className="cell-value cell-cyan"><AnimatedValue value={walletTotals?.accumulatedGravity ?? 0} kind="gravity" /></div>
-                </div>
-                <div className="grid-cell">
-                    <div className="cell-label">Ownership</div>
-                    <div className="cell-value">{walletTotals?.gravityShareFormatted ?? '0.000%'}</div>
-                </div>
-                <div className="grid-cell">
-                    <div className="cell-label">SOL Earned</div>
-                    <div className="cell-value"><AnimatedValue value={walletTotals?.totalSolRewardsEarned ?? 0} kind="sol" /></div>
-                </div>
-                <div className="grid-cell">
-                    <div className="cell-label">SOL Claimed</div>
-                    <div className="cell-value"><AnimatedValue value={walletTotals?.totalSolRewardsClaimed ?? 0} kind="sol" /></div>
-                </div>
-                <div className="grid-cell grid-cell-claimable">
-                    <div className="cell-label">Claimable</div>
-                    <div className="cell-value"><AnimatedValue value={walletTotals?.claimableSolRewards ?? 0} kind="sol" /></div>
-                </div>
+                <button className="copy-btn copy-btn-small" onClick={(event: any) => copyWithFeedback(event.currentTarget as HTMLButtonElement, connectedAddress)} title="Copy wallet address" type="button">
+                    Copy
+                </button>
             </div>
 
-            <button className="claim-button" disabled={!canClaim} onClick={claim} title={disabledReason} type="button">
-                {canClaim ? `CLAIM ${formatNumber(claimableRewards, 'sol')}` : 'CLAIM UNAVAILABLE'}
-            </button>
+            <div className="position-groups">
+                <div className="position-group">
+                    <div className="group-label">Holdings</div>
+                    <div className="position-grid">
+                        <div className="grid-cell">
+                            <div className="cell-label">{runtimeConfig.tokenSymbol} Balance</div>
+                            <div className="cell-value"><AnimatedValue value={walletTotals?.tokenBalance ?? 0} kind="tokens" /></div>
+                        </div>
+                        <div className="grid-cell">
+                            <div className="cell-label">USD Value</div>
+                            <div className="cell-value"><AnimatedValue value={walletTotals?.tokenValueUsd ?? 0} kind="usd" /></div>
+                        </div>
+                    </div>
+                </div>
 
-            {!canClaim ? <div className="inline-note">{disabledReason}</div> : null}
+                <div className="position-group">
+                    <div className="group-label">Position</div>
+                    <div className="position-grid">
+                        <div className="grid-cell">
+                            <div className="cell-label">Gravity</div>
+                            <div className="cell-value cell-cyan"><AnimatedValue value={walletTotals?.accumulatedGravity ?? 0} kind="gravity" /></div>
+                        </div>
+                        <div className="grid-cell">
+                            <div className="cell-label">Ownership</div>
+                            <div className="cell-value">{walletTotals?.gravityShareFormatted ?? '0.000%'}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="position-group">
+                    <div className="group-label">Rewards</div>
+                    <div className="position-grid">
+                        {showEarned ? (
+                            <div className="grid-cell">
+                                <div className="cell-label">SOL Earned</div>
+                                <div className="cell-value"><AnimatedValue value={earnedRewards} kind="sol" /></div>
+                            </div>
+                        ) : null}
+                        <div className="grid-cell">
+                            <div className="cell-label">Claimable</div>
+                            <div className="cell-value"><AnimatedValue value={claimableRewards} kind="sol" /></div>
+                        </div>
+                        {claimedRewards > 0 ? (
+                            <div className="grid-cell">
+                                <div className="cell-label">Claimed</div>
+                                <div className="cell-value"><AnimatedValue value={claimedRewards} kind="sol" /></div>
+                            </div>
+                        ) : null}
+                    </div>
+                </div>
+            </div>
+
+            {canClaim ? (
+                <button className="claim-button" onClick={claim} type="button">
+                    Claim {formatNumber(claimableRewards, 'sol')}
+                </button>
+            ) : (
+                <div className="claim-status-row">
+                    <span className="claim-status-pill">Claims Paused</span>
+                    <span className="claim-status-text">{claimStateMessage}</span>
+                </div>
+            )}
+
             {walletError ? <div className="inline-error">{walletError}</div> : null}
         </div>
     );
@@ -459,7 +523,7 @@ function LeaderboardTable({
                     <th className="th-num header-tooltip" data-tooltip="Ownership is your share of total gravity, not your spot balance at a single snapshot.">
                         Ownership
                     </th>
-                    <th className="th-num">SOL Earned</th>
+                    <th className="th-num">Earned</th>
                 </tr>
             </thead>
             <tbody>
@@ -480,7 +544,7 @@ function LeaderboardTable({
                                     <td>
                                         <span className="wallet-mono">{entry.addressShort}</span>
                                         {isYou ? <span className="you-tag">YOU</span> : null}
-                                        <div className="wallet-sub">Supply {entry.percentSupplyFormatted}</div>
+                                        <div className="wallet-sub">Supply share {entry.percentSupplyFormatted}</div>
                                     </td>
                                     <td className="td-num">
                                         <div>{formatNumber(entry.tokenBalance, 'tokens')}</div>
@@ -586,7 +650,6 @@ function ActivityPanel({
     connectedAddress,
     descriptionText,
     metaText,
-    onRefresh,
 }: {
     runtimeConfig: RuntimeConfig;
     activeTab: ActivityTab;
@@ -598,7 +661,6 @@ function ActivityPanel({
     connectedAddress: string | null;
     descriptionText: string;
     metaText: string;
-    onRefresh: () => void;
 }) {
     return (
         <div className="activity-shell">
@@ -607,10 +669,6 @@ function ActivityPanel({
                     <h2 className="ledger-title">Reward Ledger</h2>
                     <p className="ledger-description">{descriptionText}</p>
                 </div>
-                <button className={`refresh-button ${loading ? 'is-loading' : ''}`} onClick={onRefresh} type="button">
-                    <span className="refresh-icon">↻</span>
-                    <span>Refresh</span>
-                </button>
             </div>
 
             <div className="ledger-meta">
@@ -705,7 +763,7 @@ export default function mount() {
 
         const getLedgerDescription = () => {
             if (activeTab === 'leaderboard') {
-                return 'Holders ranked by accumulated gravity share and earned SOL rewards.';
+                return 'Holders ranked by accumulated gravity share, estimated ownership, and earned SOL rewards.';
             }
             return 'Revenue deposits recorded for this reward pool.';
         };
@@ -778,7 +836,6 @@ export default function mount() {
                     connectedAddress={connectedAddress}
                     descriptionText={getLedgerDescription()}
                     metaText={getLedgerMeta()}
-                    onRefresh={handleRefreshClick}
                 />,
                 leaderboardRoot
             );
@@ -1046,10 +1103,6 @@ export default function mount() {
                 };
             });
         }
-
-        const handleRefreshClick = () => {
-            void fetchAll('refresh-button');
-        };
 
         void fetchAll('initial-load');
         const refreshInterval = setInterval(() => {

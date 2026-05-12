@@ -9,6 +9,7 @@ export default function HomePage() {
                 data-token-symbol={config.token.symbol}
                 data-project-name={config.app.projectName}
                 data-treasury-address={config.rewards.treasuryAddress}
+                data-program-id={config.rewards.programId}
                 data-rpc-url={config.chain.rpcUrl}
                 data-explorer-tx-base-url={config.rewards.explorerTxBaseUrl}
                 data-claim-enabled={config.rewards.backendKeypairPath ? 'true' : 'false'}
@@ -17,7 +18,6 @@ export default function HomePage() {
 
             <main className="page-main">
                 <section className="page-intro">
-                    <div className="intro-pill">{config.app.heroBadge}</div>
                     <h1 className="page-title">{config.token.symbol} Gravity Rewards Dashboard</h1>
                     <p className="page-copy">
                         FairFun tracks holder gravity in USD-minutes and distributes project revenue by accumulated gravity share.
