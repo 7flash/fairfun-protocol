@@ -19,9 +19,7 @@ export default function HomePage() {
             <main className="page-main">
                 <section className="page-intro">
                     <h1 className="page-title">{config.token.symbol} Gravity Rewards Dashboard</h1>
-                    <p className="page-copy">
-                        FairFun tracks holder gravity in USD-minutes and distributes project revenue by accumulated gravity share.
-                    </p>
+                    <p className="page-copy">{config.app.heroDescription}</p>
                 </section>
 
                 <section className="summary-shell">
@@ -37,12 +35,6 @@ export default function HomePage() {
                         <div id="leaderboard-root" />
                     </section>
                 </div>
-
-                <footer className="page-footer">
-                    <a className="footer-link" href="https://github.com/berliangor/tradjs" rel="noreferrer" target="_blank">Built with tradjs</a>
-                    <a className="footer-link" href="https://github.com/7flash/fairfun-protocol" rel="noreferrer" target="_blank">View on GitHub</a>
-                    <a className="footer-link" href="https://github.com/berliangor" rel="noreferrer" target="_blank">@berliangor</a>
-                </footer>
             </main>
 
             <div id="toast-root" />
