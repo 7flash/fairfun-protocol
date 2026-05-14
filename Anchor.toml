@@ -12,7 +12,7 @@ fairfun_rewards = "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A"
 fairfun_rewards = "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A"
 
 [programs.mainnet]
-fairfun_rewards = "6NPfR5MSEuhwhZsXm4FKF4V1ULSvTPDaubYGkKVpVsPS"
+fairfun_rewards = "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A"
 
 [provider]
 cluster = "mainnet"

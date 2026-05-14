@@ -11,7 +11,7 @@ use errors::FairfunRewardsError;
 use introspection::verify_ed25519_ix_integrity;
 pub use state::{GlobalConfig, RewardPool, UserClaim};
 
-declare_id!("6NPfR5MSEuhwhZsXm4FKF4V1ULSvTPDaubYGkKVpVsPS");
+declare_id!("HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A");
 
 fn calculate_claimable(
     previous_claimed_amount: u64,
