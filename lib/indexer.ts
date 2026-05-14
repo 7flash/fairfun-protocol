@@ -178,9 +178,6 @@ export async function indexLeaderboardSnapshot() {
                 ]);
 
                 let holders = await m('Fetch token holders', () => getTokenHolders());
-                if (holders.length === 0) {
-                    holders = await m('Fallback to largest holders', () => getLargestHolders(100));
-                }
 
                 const byOwner = new Map<string, { address: string; balance: number }>();
                 for (const holder of holders) {
@@ -192,6 +189,21 @@ export async function indexLeaderboardSnapshot() {
                         address: holder.address,
                         balance: (existing?.balance ?? 0) + balance
                     });
+                }
+
+                const hasUsableOnCurveHolders = Array.from(byOwner.values()).some((holder) => PublicKey.isOnCurve(holder.address));
+                if (!hasUsableOnCurveHolders) {
+                    const largestHolders = await m('Fallback to largest holders', () => getLargestHolders(100));
+                    for (const holder of largestHolders) {
+                        const balance = toNumber(holder.balance, holder.decimals);
+                        if (balance <= 0) continue;
+
+                        const existing = byOwner.get(holder.address);
+                        byOwner.set(holder.address, {
+                            address: holder.address,
+                            balance: (existing?.balance ?? 0) + balance
+                        });
+                    }
                 }
 
                 const activeAddresses = new Set<string>();

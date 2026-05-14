@@ -25,15 +25,24 @@ const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqC
 export async function getTokenHolders(): Promise<TokenBalance[]> {
     try {
         const holders: TokenBalance[] = [];
-        const programs = [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID];
-
-        for (const programId of programs) {
-            const tokenAccounts = await connection.getParsedProgramAccounts(programId, {
+        const programs = [
+            {
+                programId: TOKEN_PROGRAM_ID,
                 filters: [
                     { dataSize: 165 },
                     { memcmp: { offset: 0, bytes: TOKEN_MINT } }
                 ]
-            });
+            },
+            {
+                programId: TOKEN_2022_PROGRAM_ID,
+                filters: [
+                    { memcmp: { offset: 0, bytes: TOKEN_MINT } }
+                ]
+            }
+        ];
+
+        for (const { programId, filters } of programs) {
+            const tokenAccounts = await connection.getParsedProgramAccounts(programId, { filters });
 
             for (const account of tokenAccounts) {
                 try {
@@ -41,7 +50,6 @@ export async function getTokenHolders(): Promise<TokenBalance[]> {
                     if ('parsed' in data && data.parsed.type === 'account') {
                         const info = data.parsed.info;
                         const owner = String(info.owner);
-                        if (!PublicKey.isOnCurve(owner)) continue;
                         holders.push({
                             address: owner,
                             balance: Number(info.tokenAmount.amount),
@@ -78,7 +86,6 @@ export async function getLargestHolders(limit = 100): Promise<TokenBalance[]> {
                     if (parsed.type === 'account') {
                         const info = parsed.info;
                         const owner = String(info.owner);
-                        if (!PublicKey.isOnCurve(owner)) continue;
                         holders.push({
                             address: owner,
                             balance: Number(info.tokenAmount.amount),
