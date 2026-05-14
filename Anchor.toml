@@ -2,21 +2,20 @@
 package_manager = "npm"
 
 [features]
-seeds = false
+resolution = true
 skip-lint = false
-
-[programs.localnet]
-fairfun_rewards = "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A"
 
 [programs.devnet]
 fairfun_rewards = "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A"
 
-[programs.mainnet]
+[programs.localnet]
 fairfun_rewards = "HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A"
 
-[registry]
-url = "https://api.apr.dev"
+[programs.mainnet]
+fairfun_rewards = "6NPfR5MSEuhwhZsXm4FKF4V1ULSvTPDaubYGkKVpVsPS"
 
 [provider]
 cluster = "mainnet"
 wallet = "~/.config/solana/77cQ99WQ2FWQT19kgpN2a9CfgYSfDqpomNVGtyYUrpAY.json"
+
+[hooks]

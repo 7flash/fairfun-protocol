@@ -211,3 +211,76 @@ export async function buildClaimTransaction(user: PublicKey, cumulativeEarned: b
         signerPubkey: signer.publicKey.toBase58(),
     };
 }
+
+export function buildDelegatedClaimInstruction(
+    delegator: PublicKey,
+    claimant: PublicKey,
+    cumulativeEarned: bigint,
+    observedTotalDeposits: bigint,
+    expiresAt: bigint,
+) {
+    const pool = derivePoolPda();
+    const treasury = deriveTreasuryPda();
+    const userClaim = deriveUserClaimPda(claimant, pool);
+    const data = Buffer.alloc(8 + 32 + 8 + 8 + 8);
+    instructionDiscriminator('delegated_claim').copy(data, 0);
+    claimant.toBuffer().copy(data, 8);
+    data.writeBigUInt64LE(cumulativeEarned, 40);
+    data.writeBigUInt64LE(observedTotalDeposits, 48);
+    data.writeBigInt64LE(expiresAt, 56);
+
+    return new TransactionInstruction({
+        programId: getProgramId(),
+        keys: [
+            { pubkey: delegator, isSigner: true, isWritable: true },
+            { pubkey: userClaim, isSigner: false, isWritable: true },
+            { pubkey: deriveConfigPda(), isSigner: false, isWritable: false },
+            { pubkey: pool, isSigner: false, isWritable: true },
+            { pubkey: treasury, isSigner: false, isWritable: true },
+            { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
+            { pubkey: claimant, isSigner: false, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        ],
+        data,
+    });
+}
+
+export async function buildDelegatedClaimTransaction(
+    delegator: PublicKey,
+    claimant: PublicKey,
+    cumulativeEarned: bigint,
+    observedTotalDeposits: bigint,
+) {
+    const expiresAt = BigInt(Math.floor(Date.now() / 1000) + config.rewards.claimExpiresInSeconds);
+    const message = buildClaimMessage(claimant, derivePoolPda(), cumulativeEarned, observedTotalDeposits, expiresAt);
+    const signer = loadBackendKeypair();
+    const ed25519Instruction = Ed25519Program.createInstructionWithPrivateKey({
+        privateKey: signer.secretKey,
+        message,
+    });
+    const claimInstruction = buildDelegatedClaimInstruction(
+        delegator,
+        claimant,
+        cumulativeEarned,
+        observedTotalDeposits,
+        expiresAt,
+    );
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+
+    const transaction = new Transaction({
+        feePayer: delegator,
+        blockhash,
+        lastValidBlockHeight,
+    }).add(ed25519Instruction, claimInstruction);
+
+    return {
+        transaction,
+        blockhash,
+        lastValidBlockHeight,
+        expiresAt: Number(expiresAt),
+        signerPubkey: signer.publicKey.toBase58(),
+        claimantPubkey: claimant.toBase58(),
+        delegatorPubkey: delegator.toBase58(),
+    };
+}
+

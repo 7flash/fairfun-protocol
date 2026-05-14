@@ -11,7 +11,7 @@ use errors::FairfunRewardsError;
 use introspection::verify_ed25519_ix_integrity;
 pub use state::{GlobalConfig, RewardPool, UserClaim};
 
-declare_id!("HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A");
+declare_id!("6NPfR5MSEuhwhZsXm4FKF4V1ULSvTPDaubYGkKVpVsPS");
 
 fn calculate_claimable(
     previous_claimed_amount: u64,
@@ -214,6 +214,107 @@ pub mod fairfun_rewards {
         ctx.accounts.pool.active = active;
         Ok(())
     }
+
+    pub fn delegated_claim(
+        ctx: Context<DelegatedClaim>,
+        claimant: Pubkey,
+        cumulative_earned: u64,
+        observed_total_deposits: u64,
+        expires_at: i64,
+    ) -> Result<()> {
+        let clock = Clock::get()?;
+        require!(
+            clock.unix_timestamp <= expires_at,
+            FairfunRewardsError::SignatureExpired
+        );
+
+        require!(ctx.accounts.pool.active, FairfunRewardsError::PoolInactive);
+
+        // Anyone can claim for anyone else - no approval needed
+
+        let instruction_index = load_current_index_checked(&ctx.accounts.instructions)?;
+        require!(
+            instruction_index > 0,
+            FairfunRewardsError::MissingSignatureInstruction
+        );
+        let signature_instruction =
+            load_instruction_at_checked((instruction_index - 1) as usize, &ctx.accounts.instructions)?;
+
+        let expected_message = build_claim_message(
+            &claimant,
+            &ctx.accounts.pool.key(),
+            cumulative_earned,
+            observed_total_deposits,
+            expires_at,
+        );
+        verify_ed25519_ix_integrity(
+            &signature_instruction,
+            &ctx.accounts.config.backend_authority.to_bytes(),
+            &expected_message,
+        )?;
+
+        let onchain_total_received = ctx
+            .accounts
+            .treasury
+            .lamports()
+            .checked_add(ctx.accounts.pool.total_claimed)
+            .unwrap();
+
+        let user_claim = &mut ctx.accounts.user_claim;
+        let claimable = calculate_claimable(
+            user_claim.claimed_amount,
+            cumulative_earned,
+            observed_total_deposits,
+            onchain_total_received,
+            ctx.accounts.pool.total_claimed,
+        )?;
+        let new_total_claimed = ctx.accounts.pool.total_claimed.checked_add(claimable).unwrap();
+        require!(
+            ctx.accounts.treasury.lamports() >= claimable,
+            FairfunRewardsError::InsufficientTreasury
+        );
+
+        let treasury_bump = ctx.accounts.pool.treasury_bump;
+        let token_mint = ctx.accounts.pool.token_mint;
+        let signer_seeds: &[&[u8]] = &[b"rewards_treasury", token_mint.as_ref(), &[treasury_bump]];
+        let transfer_instruction = anchor_lang::solana_program::system_instruction::transfer(
+            &ctx.accounts.treasury.key(),
+            &claimant,
+            claimable,
+        );
+
+        anchor_lang::solana_program::program::invoke_signed(
+            &transfer_instruction,
+            &[
+                ctx.accounts.treasury.to_account_info(),
+                ctx.accounts.claimant.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+            &[signer_seeds],
+        )?;
+
+        user_claim.user = claimant;
+        user_claim.pool = ctx.accounts.pool.key();
+        user_claim.claimed_amount = cumulative_earned;
+        user_claim.bump = ctx.bumps.user_claim;
+
+        ctx.accounts.pool.total_claimed = new_total_claimed;
+        if ctx.accounts.pool.total_deposited < onchain_total_received {
+            ctx.accounts.pool.total_deposited = onchain_total_received;
+        }
+
+        emit!(RewardsClaimed {
+            pool: ctx.accounts.pool.key(),
+            token_mint: ctx.accounts.pool.token_mint,
+            user: claimant,
+            claimable,
+            cumulative_earned,
+            observed_total_deposits,
+            total_claimed: ctx.accounts.pool.total_claimed,
+        });
+
+        Ok(())
+    }
 }
 
 fn build_claim_message(
@@ -387,6 +488,53 @@ pub struct SetPoolActive<'info> {
         bump = pool.bump,
     )]
     pub pool: Account<'info, RewardPool>,
+}
+
+#[derive(Accounts)]
+#[instruction(claimant: Pubkey)]
+pub struct DelegatedClaim<'info> {
+    #[account(mut)]
+    pub delegator: Signer<'info>,
+
+    #[account(
+        init_if_needed,
+        payer = delegator,
+        space = UserClaim::DISCRIMINATOR.len() + UserClaim::INIT_SPACE,
+        seeds = [b"rewards_user_claim", pool.key().as_ref(), claimant.key().as_ref()],
+        bump,
+    )]
+    pub user_claim: Account<'info, UserClaim>,
+
+    #[account(
+        seeds = [b"rewards_config"],
+        bump = config.bump,
+    )]
+    pub config: Account<'info, GlobalConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"rewards_pool", pool.token_mint.as_ref()],
+        bump = pool.bump,
+    )]
+    pub pool: Account<'info, RewardPool>,
+
+    #[account(
+        mut,
+        seeds = [b"rewards_treasury", pool.token_mint.as_ref()],
+        bump = pool.treasury_bump,
+    )]
+    /// CHECK: zero-data system-owned SOL treasury PDA
+    pub treasury: UncheckedAccount<'info>,
+
+    #[account(address = INSTRUCTIONS_ID)]
+    /// CHECK: instructions sysvar is validated by address
+    pub instructions: UncheckedAccount<'info>,
+
+    /// CHECK: the claimant receiving rewards
+    #[account(mut)]
+    pub claimant: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
 }
 
 #[event]

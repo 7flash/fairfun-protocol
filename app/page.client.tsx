@@ -12,6 +12,7 @@ interface LeaderboardEntry {
     gravityShare: number;
     gravityShareFormatted: string;
     totalSolRewardsEarned: number;
+    claimableSolRewards?: number;
 }
 
 interface TreasuryEvent {
@@ -118,6 +119,58 @@ function RankTag({ rank }: { rank: number }) {
             <span className={`rank-digits ${hot ? 'rank-digits-hot' : ''}`}>{padded}</span>
             <span className="rank-bracket">]</span>
         </span>
+    );
+}
+
+interface ActionMenuProps {
+    isOpen: boolean;
+    onClose: () => void;
+    targetAddress: string;
+    connectedAddress: string | null;
+    onDelegatedClaim: (address: string) => void;
+    buttonRef: { current: HTMLButtonElement | null };
+}
+
+function ActionMenu({ isOpen, onClose, targetAddress, connectedAddress, onDelegatedClaim, buttonRef }: ActionMenuProps) {
+    if (!isOpen) return null;
+
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+
+    const isSameUser = connectedAddress?.toLowerCase() === targetAddress.toLowerCase();
+
+    return (
+        <div className="action-menu-overlay" onClick={onClose}>
+            <div
+                className="action-menu"
+                style={{
+                    position: 'absolute',
+                    top: `${rect.bottom + 8}px`,
+                    right: `${rect.left}px`,
+                }}
+                onClick={(e) => e.stopPropagation()}
+            >
+                {connectedAddress && !isSameUser ? (
+                    <button
+                        className="action-menu-item"
+                        type="button"
+                        onClick={() => onDelegatedClaim(targetAddress)}
+                    >
+                        Claim for this user
+                    </button>
+                ) : null}
+                {connectedAddress && isSameUser ? (
+                    <div className="action-menu-item action-menu-item-disabled">
+                        Claim for yourself from Your Position
+                    </div>
+                ) : null}
+                {!connectedAddress ? (
+                    <div className="action-menu-item action-menu-item-disabled">
+                        Connect wallet to claim for others
+                    </div>
+                ) : null}
+            </div>
+        </div>
     );
 }
 
@@ -630,6 +683,10 @@ function ActivityPanel({
     error,
     connectedAddress,
     liveText,
+    openMenuEntry,
+    onOpenMenu,
+    onCloseMenu,
+    onDelegatedClaim,
 }: {
     runtimeConfig: RuntimeConfig;
     activeTab: ActivityTab;
@@ -640,6 +697,10 @@ function ActivityPanel({
     error: string | null;
     connectedAddress: string | null;
     liveText: string;
+    openMenuEntry: string | null;
+    onOpenMenu: (address: string, button: HTMLButtonElement) => void;
+    onCloseMenu: () => void;
+    onDelegatedClaim: (address: string) => Promise<unknown>;
 }) {
     return (
         <div className="activity-shell">
@@ -739,6 +800,8 @@ export default function mount() {
         let toast: ToastState | null = null;
         let toastTimeout: ReturnType<typeof setTimeout> | null = null;
         let lastRefreshAt = Date.now();
+        let openMenuEntry: string | null = null;
+        let menuButtonRef: { current: HTMLButtonElement | null } = { current: null };
 
         const getLedgerMeta = () => {
             if (totalAccumulatedGravity <= 0 && treasuryBalanceSol <= 0) return 'Waiting for indexer data...';
@@ -800,6 +863,17 @@ export default function mount() {
                     error={error}
                     connectedAddress={connectedAddress}
                     liveText={getLedgerMeta()}
+                    openMenuEntry={openMenuEntry}
+                    onOpenMenu={(address, button) => {
+                        openMenuEntry = address;
+                        menuButtonRef = { current: button };
+                        update('open-menu');
+                    }}
+                    onCloseMenu={() => {
+                        openMenuEntry = null;
+                        update('close-menu');
+                    }}
+                    onDelegatedClaim={delegatedClaim}
                 />,
                 leaderboardRoot
             );
@@ -997,6 +1071,114 @@ export default function mount() {
             });
         }
 
+        async function delegatedClaim(claimantAddress: string) {
+            return await measureFrontend('delegated claim', async (m: MeasureFn) => {
+                walletError = null;
+                let signature: string | undefined;
+
+                try {
+                    if (!connectedAddress) {
+                        walletError = 'Connect wallet first.';
+                        update('delegated-claim-no-wallet');
+                        return { success: false, reason: 'no-wallet' };
+                    }
+                    if (!runtimeConfig.claimEnabled) {
+                        walletError = 'Backend signer keypair is not configured on the web process.';
+                        update('delegated-claim-disabled');
+                        return { success: false, reason: 'claim-disabled' };
+                    }
+
+                    const phantom = (window as any).solana;
+                    if (!phantom?.isPhantom || typeof phantom.signTransaction !== 'function') {
+                        walletError = 'Phantom wallet was not found in this browser.';
+                        update('delegated-claim-missing-provider');
+                        return { success: false, reason: 'missing-provider' };
+                    }
+
+                    const response = await m('request delegated claim transaction', () => fetch('/api/claim/delegated', {
+                        method: 'POST',
+                        headers: { 'content-type': 'application/json' },
+                        body: JSON.stringify({
+                            delegatorAddress: connectedAddress,
+                            claimantAddress: claimantAddress,
+                        }),
+                    }));
+                    if (!response) {
+                        throw new Error('Unable to prepare delegated claim transaction.');
+                    }
+                    const data = await m('parse delegated claim transaction payload', () => response.json() as Promise<any>);
+                    if (!data) {
+                        throw new Error('Unable to parse delegated claim transaction.');
+                    }
+                    if (!response.ok) {
+                        walletError = data.error ?? 'Delegated claim is not available yet.';
+                        update('delegated-claim-request-error');
+                        return { success: false, reason: 'delegated-claim-request-error' };
+                    }
+
+                    const web3 = await m('load web3 claim dependencies', () => import('@solana/web3.js'));
+                    if (!web3) {
+                        throw new Error('Unable to load web3 claim dependencies.');
+                    }
+                    const { Connection, Transaction } = web3 as typeof import('@solana/web3.js');
+                    const tx = measureFrontendSync('decode delegated claim transaction', () =>
+                        Transaction.from(Uint8Array.from(atob(data.transaction), (char) => char.charCodeAt(0)))
+                    );
+                    if (!tx) {
+                        throw new Error('Unable to decode delegated claim transaction.');
+                    }
+                    const signed = await m('sign delegated claim transaction', () => phantom.signTransaction(tx));
+                    if (!signed) {
+                        throw new Error('Unable to sign delegated claim transaction.');
+                    }
+                    const conn = new Connection(runtimeConfig.rpcUrl, 'confirmed');
+                    signature = (await m('submit signed delegated claim transaction', () =>
+                        conn.sendRawTransaction((signed as any).serialize(), { skipPreflight: false })
+                    )) ?? undefined;
+                    if (!signature) {
+                        throw new Error('Delegated claim transaction submission failed.');
+                    }
+                    const confirmedSignature = signature;
+                    const confirmation = await m('confirm delegated claim transaction', () => conn.confirmTransaction({
+                        signature: confirmedSignature,
+                        blockhash: data.blockhash,
+                        lastValidBlockHeight: data.lastValidBlockHeight,
+                    }, 'confirmed')) as Awaited<ReturnType<typeof conn.confirmTransaction>> | null;
+                    if (!confirmation) {
+                        throw new Error('Delegated claim transaction confirmation failed.');
+                    }
+                    if (confirmation.value.err) {
+                        throw new Error(typeof confirmation.value.err === 'string'
+                            ? confirmation.value.err
+                            : JSON.stringify(confirmation.value.err));
+                    }
+
+                    await m('report delegated claim confirmation', () => fetch('/api/claim/delegated/finalize', {
+                        method: 'POST',
+                        headers: { 'content-type': 'application/json' },
+                        body: JSON.stringify({
+                            claimantAddress: claimantAddress,
+                            signature: signature,
+                        }),
+                    }));
+
+                    await m('refresh after delegated claim', () => fetchAll('delegated-claim-success'));
+                    showToast({
+                        kind: 'success',
+                        message: `Claimed ${formatNumber(data.cumulativeEarned / 1e9, 'sol')} SOL for ${shortAddress(claimantAddress)}.`,
+                        txSignature: signature,
+                    });
+                    return { success: true, signature, claimant: claimantAddress };
+                } catch (claimError: any) {
+                    walletError = claimError?.message || 'Delegated claim request failed.';
+                    showToast({ kind: 'error', message: walletError ?? 'Delegated claim request failed.', txSignature: signature });
+                }
+
+                update('delegated-claim-error');
+                return { success: false, reason: 'delegated-claim-error' };
+            });
+        }
+
         async function fetchAll(reason = 'manual-refresh') {
             return await measureFrontend(`fetch all (${reason})`, async (m: MeasureFn, ms: MeasureSyncFn) => {
                 try {
@@ -1079,11 +1261,25 @@ export default function mount() {
             });
         }, 5000);
 
+        const handleDocumentClick = (event: MouseEvent) => {
+            if (openMenuEntry) {
+                const target = event.target as HTMLElement;
+                const isMenuButton = target.closest('.action-menu-button');
+                const isMenu = target.closest('.action-menu');
+                if (!isMenuButton && !isMenu) {
+                    openMenuEntry = null;
+                    update('close-menu-outside-click');
+                }
+            }
+        };
+        document.addEventListener('click', handleDocumentClick);
+
         return () => {
             measureFrontendSync('unmount page client', (ms) => {
                 clearInterval(refreshInterval);
                 clearInterval(relativeTimeInterval);
                 if (toastTimeout) clearTimeout(toastTimeout);
+                document.removeEventListener('click', handleDocumentClick);
                 ms('clear rendered roots', () => {
                     render(null, leaderboardRoot);
                     render(null, positionRoot);
