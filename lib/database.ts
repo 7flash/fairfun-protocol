@@ -270,6 +270,10 @@ export function distributeTreasuryFees(params: {
         return { distributed: 0, totalGravity };
     }
 
+    const holderState = new Map<string, HolderRecord>(
+        holders.map((holder) => [holder.address.toLowerCase(), { ...holder }])
+    );
+
     let distributed = 0;
 
     for (const event of params.events) {
@@ -289,22 +293,27 @@ export function distributeTreasuryFees(params: {
         );
 
         for (const holder of holders) {
-            if (!holder.id) continue;
-            const earnedDelta = event.amountSol * (holder.accumulatedGravity / totalGravity);
-            const totalEarned = holder.totalSolRewardsEarned + earnedDelta;
-            const claimable = Math.max(0, totalEarned - holder.totalSolRewardsClaimed);
+            const current = holderState.get(holder.address.toLowerCase());
+            if (!current?.id) continue;
 
-            db.holders.update(holder.id, {
+            const earnedDelta = event.amountSol * (current.accumulatedGravity / totalGravity);
+            const totalEarned = current.totalSolRewardsEarned + earnedDelta;
+            const claimable = Math.max(0, totalEarned - current.totalSolRewardsClaimed);
+
+            db.holders.update(current.id, {
                 totalSolRewardsEarned: totalEarned,
                 claimableSolRewards: claimable,
                 updatedAt: now
             });
 
+            current.totalSolRewardsEarned = totalEarned;
+            current.claimableSolRewards = claimable;
+
             db.treasuryPayouts.upsert(
-                { signature: event.signature, address: holder.address },
+                { signature: event.signature, address: current.address },
                 {
                     signature: event.signature,
-                    address: holder.address,
+                    address: current.address,
                     amountSol: earnedDelta,
                     createdAt: now,
                 }
@@ -374,4 +383,39 @@ export function resetAllHolderRewards(now = Date.now()) {
             updatedAt: now
         });
     }
+}
+
+export function recomputeTreasuryDistributionsFromStoredEvents(now = Date.now()) {
+    const holders = db.holders.select().all() as HolderRecord[];
+    for (const holder of holders) {
+        if (!holder.id) continue;
+        db.holders.update(holder.id, {
+            totalSolRewardsEarned: 0,
+            claimableSolRewards: Math.max(0, 0 - holder.totalSolRewardsClaimed),
+            updatedAt: now
+        });
+    }
+
+    const raw = new BunDatabase(dbPath, { create: true });
+    try {
+        raw.exec('DELETE FROM treasuryPayouts');
+    } finally {
+        raw.close();
+    }
+
+    const events = db.treasuryEvents.select()
+        .orderBy('timestamp', 'asc')
+        .all() as TreasuryEventRecord[];
+
+    return distributeTreasuryFees({
+        events: events.map((event) => ({
+            signature: event.signature,
+            amountSol: event.amountSol,
+            depositorAddress: event.depositorAddress,
+            observedTotalDepositsSol: event.observedTotalDepositsSol,
+            slot: event.slot,
+            timestamp: event.timestamp,
+        })),
+        now
+    });
 }
