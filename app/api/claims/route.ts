@@ -9,7 +9,9 @@ export async function GET(req: Request) {
         const wallet = url.searchParams.get('wallet') ?? undefined;
         const limit = Number(url.searchParams.get('limit') ?? 50);
         const solPriceUsd = await getCurrentSolPrice();
-        const events = getRecentClaimEvents(limit, wallet).map((event) => ({
+        const events = getRecentClaimEvents(limit, wallet)
+            .filter((event) => event.grossAmountSol > 0 || event.claimantAmountSol > 0 || event.delegatorFeeSol > 0)
+            .map((event) => ({
             signature: event.signature,
             claimantAddress: event.claimantAddress,
             claimantAddressShort: formatAddress(event.claimantAddress),

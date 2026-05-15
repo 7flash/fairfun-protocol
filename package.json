@@ -11,6 +11,7 @@
         "dev:indexer": "bun --watch indexer.ts",
         "dev:claimer": "bun --watch claimer.ts",
         "dev:creator-fees": "bun --watch creator-fees.ts",
+        "db:prune-zero-claim-events": "bun scripts/prune-zero-claim-events.ts",
         "start:web": "bun server.ts",
         "start:indexer": "bun indexer.ts",
         "start:claimer": "bun claimer.ts",

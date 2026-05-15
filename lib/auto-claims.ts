@@ -96,22 +96,25 @@ export async function runAutomaticRewardClaimPass(now = Date.now()) {
                     totalSolRewardsClaimed: totalClaimedSol,
                     claimableSolRewards: nextClaimable,
                 });
-                recordClaimEvent({
-                    signature: transactionResult.signature,
-                    claimantAddress: holder.address,
-                    delegatorAddress: backend.publicKey.toBase58(),
-                    grossAmountSol,
-                    claimantAmountSol: grossAmountSol * 0.9,
-                    delegatorFeeSol: grossAmountSol * 0.1,
-                    mode: 'delegated',
-                    timestamp: now,
-                });
+                if (grossAmountSol > 0) {
+                    recordClaimEvent({
+                        signature: transactionResult.signature,
+                        claimantAddress: holder.address,
+                        delegatorAddress: backend.publicKey.toBase58(),
+                        grossAmountSol,
+                        claimantAmountSol: grossAmountSol * 0.9,
+                        delegatorFeeSol: grossAmountSol * 0.1,
+                        mode: 'delegated',
+                        timestamp: now,
+                    });
+                }
 
                 return {
                     attempted: true,
                     completed: true,
                     claimantAddress: holder.address,
                     signature: transactionResult.signature,
+                    grossAmountSol,
                     lookupTableAddress: transactionResult.lookupTableAddress,
                     minimumTokenAmountOut: transactionResult.minimumTokenAmountOut,
                     recentClaimsSeen: getRecentClaimEvents(1).length,

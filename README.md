@@ -30,6 +30,8 @@ This repo now contains the full FairFun stack:
 
 - the Solana program
 - a separate offchain indexer process
+- a separate claimer worker
+- a separate creator-fee worker
 - a separate TradJS app with built-in claim signing
 
 ## Repo Layout
@@ -85,6 +87,27 @@ It does four jobs:
 
 The web app does not own this job anymore.
 
+### 2b. Claimer worker
+
+The claimer is a separate Bun worker started from [claimer.ts](/C:/Code/fairfun-protocol/claimer.ts:1).
+
+It:
+
+- chooses the highest eligible holder
+- clamps claim amounts against on-chain headroom
+- sends delegated tokenized claims through PumpSwap
+- records claim events back into the local DB
+
+### 2c. Creator-fee worker
+
+The creator-fee worker is started from [creator-fees.ts](/C:/Code/fairfun-protocol/creator-fees.ts:1).
+
+It:
+
+- checks claimable Pump creator fees
+- decides whether they are above policy threshold
+- claims or forwards treasury funding when configured to do so
+
 ### 3. TradJS app
 
 The app is a separate Bun server started from [server.ts](/C:/Code/fairfun-protocol/server.ts:1).
@@ -97,6 +120,21 @@ It does four jobs:
 - signs claim payloads with the configured backend authority keypair
 
 Branding, token identity, RPC, treasury address, signer keypair path, and site title all come from `.config.toml`.
+
+## Production Shape
+
+The live public deployment uses:
+
+- Caddy for `https://fairfun.xyz/rewards`
+- `bgrun` for process supervision
+- one web process
+- one indexer process
+- one claimer process
+- one creator-fee process
+
+Important runtime rule:
+
+- after editing `.config.toml`, regenerate the flattened shell env before restarting workers
 
 ## Config
 
@@ -152,12 +190,26 @@ Start the indexer in a second terminal:
 bun run start:indexer
 ```
 
+Start the claimer:
+
+```bash
+bun run start:claimer
+```
+
+Start the creator-fee worker:
+
+```bash
+bun run start:creator-fees
+```
+
 For development with file watching:
 
 ```bash
 bun run dev:web
 bun run dev:indexer
 ```
+
+There is no hot-watch script for the separate claimer or creator-fee worker right now.
 
 ## Build And Test
 
@@ -252,9 +304,19 @@ Claim support:
 - if `rewards.backend_keypair_path` is empty, the app stays read-only
 - if `rewards.backend_keypair_path` points to the backend authority keypair, the app signs claims directly in the web process
 - claim expiry is controlled by `rewards.claim_expires_in_seconds`
-- delegated claims are enabled by default
-- delegated claimers receive a 10% cut of the claimed SOL
-- each wallet can opt out of delegated claims from the frontend
+- delegated claims are enabled by default at the protocol layer
+- delegated claimers receive a 10% cut of the bought FAIRFUN
+- current production UX no longer exposes end-user delegation controls
+
+## Current Reward Model
+
+- treasury deposits arrive as SOL
+- off-chain accounting distributes those deposits by gravity share
+- claims are executed as tokenized buys into FAIRFUN
+- the claimant receives about 90% of bought tokens
+- the delegated claimer receives 10% as an execution incentive
+
+Because FAIRFUN is already graduated, the buy path uses PumpSwap AMM rather than the old Pump bonding curve.
 
 ## Claim Model
 

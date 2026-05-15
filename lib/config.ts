@@ -117,15 +117,15 @@ function parseConfig(): RuntimeConfig {
             tokenPriceUsd: Math.max(0, getNumber(env('INDEXER_TOKEN_PRICE_USD'), 0)),
         },
         claimer: {
-            intervalMs: Math.max(1000, getNumber(env('CLAIMER_INTERVAL_MS'), 30000)),
+            intervalMs: Math.max(1000, getNumber(env('CLAIMER_INTERVAL_MS'), 300000)),
             minClaimSol: Math.max(0.000001, getNumber(env('CLAIMER_MIN_CLAIM_SOL'), 0.01)),
         },
         creatorFees: {
             enabled: getBoolean(env('CREATOR_FEES_ENABLED'), false),
             mint: getOptionalString(env('CREATOR_FEES_MINT'), requireString(env('TOKEN_MINT'), 'TOKEN_MINT')),
             walletKeypairPath: getOptionalString(env('CREATOR_FEES_WALLET_KEYPAIR_PATH'), getOptionalString(env('REWARDS_BACKEND_KEYPAIR_PATH'))),
-            intervalMs: Math.max(1000, getNumber(env('CREATOR_FEES_INTERVAL_MS'), 30000)),
-            minClaimLamports: BigInt(Math.max(1, Math.floor(getNumber(env('CREATOR_FEES_MIN_CLAIM_LAMPORTS'), 50_000_000)))),
+            intervalMs: Math.max(1000, getNumber(env('CREATOR_FEES_INTERVAL_MS'), 300000)),
+            minClaimLamports: BigInt(Math.max(1, Math.floor(getNumber(env('CREATOR_FEES_MIN_CLAIM_LAMPORTS'), 10_000_000)))),
             priorityFeeMicroLamports: Math.max(0, getNumber(env('CREATOR_FEES_PRIORITY_FEE_MICROLAMPORTS'), 10_000)),
             computeUnitLimit: Math.max(1, getNumber(env('CREATOR_FEES_COMPUTE_UNIT_LIMIT'), 250000)),
             treasuryTopupReserveSol: Math.max(0, getNumber(env('CREATOR_FEES_TREASURY_TOPUP_RESERVE_SOL'), 0.02)),

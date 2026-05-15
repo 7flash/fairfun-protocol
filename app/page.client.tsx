@@ -12,6 +12,7 @@ interface LeaderboardEntry {
     gravityShare: number;
     gravityShareFormatted: string;
     totalSolRewardsEarned: number;
+    totalSolRewardsClaimed: number;
     claimableSolRewards?: number;
     delegatedClaimsEnabled?: boolean;
 }
@@ -216,6 +217,10 @@ function formatSignedGravityDelta(value: number) {
     if (value > 0) return `(+${formatNumber(value, 'gravity')})`;
     if (value < 0) return `(${formatNumber(value, 'gravity')})`;
     return '(0)';
+}
+
+function hasIndexedClaimAmounts(event: ClaimEvent) {
+    return event.grossAmountSol > 0 || event.claimantAmountSol > 0 || event.delegatorFeeSol > 0;
 }
 
 function AnimatedValue({ value, kind }: { value: number; kind: NumberFormatKind }) {
@@ -581,7 +586,12 @@ function LeaderboardTable({
                                     </td>
                                     <td className="td-num">{formatNumber(entry.accumulatedGravity, 'gravity')}</td>
                                     <td className="td-num">{entry.gravityShareFormatted}</td>
-                                    <td className="td-num">{formatNumber(entry.totalSolRewardsEarned, 'sol')}</td>
+                                    <td className="td-num">
+                                        <div>{formatNumber(entry.totalSolRewardsEarned, 'sol')}</div>
+                                        {entry.totalSolRewardsClaimed > 0 ? (
+                                            <div className="num-sub">claimed {formatNumber(entry.totalSolRewardsClaimed, 'sol')}</div>
+                                        ) : null}
+                                    </td>
                                 </tr>
                             );
                         })}
@@ -703,6 +713,7 @@ function ClaimsTable({
                     events.map((event) => {
                         const isClaimant = connectedAddress?.toLowerCase() === event.claimantAddress.toLowerCase();
                         const isDelegator = connectedAddress?.toLowerCase() === event.delegatorAddress.toLowerCase();
+                        const hasAmounts = hasIndexedClaimAmounts(event);
 
                         return (
                             <tr className="leaderboard-row" key={event.signature}>
@@ -719,16 +730,21 @@ function ClaimsTable({
                                         <>
                                             <span className="wallet-mono">{event.delegatorAddressShort}</span>
                                             {isDelegator ? <span className="you-tag">YOU</span> : null}
-                                            <div className="wallet-sub">10% incentive</div>
                                         </>
                                     ) : 'Self'}
                                 </td>
                                 <td className="td-num">
-                                    <div>{formatNumber(event.claimantAmountSol, 'sol')}</div>
-                                    <div className="num-sub">gross {formatNumber(event.grossAmountSol, 'sol')}</div>
-                                    {event.delegatorFeeSol > 0 ? (
-                                        <div className="num-sub">fee {formatNumber(event.delegatorFeeSol, 'sol')}</div>
-                                    ) : null}
+                                    {hasAmounts ? (
+                                        <>
+                                            <div>{formatNumber(event.claimantAmountSol, 'sol')} to user</div>
+                                            <div className="num-sub">gross {formatNumber(event.grossAmountSol, 'sol')}</div>
+                                            {event.delegatorFeeSol > 0 ? (
+                                                <div className="num-sub">claimer {formatNumber(event.delegatorFeeSol, 'sol')}</div>
+                                            ) : null}
+                                        </>
+                                    ) : (
+                                        <div className="num-sub">amount not indexed</div>
+                                    )}
                                 </td>
                                 <td>
                                     <a
@@ -1424,8 +1440,9 @@ export default function mount() {
                         entries = ms('normalize leaderboard entries', () => leaderboardData.entries
                             .filter((entry) => entry.tokenBalance > 0)
                             .sort((a, b) => {
-                                const direction = sortDirection === 'desc' ? -1 : 1;
-                                const compare = (left: number, right: number) => (left - right) * direction;
+                                const compare = (left: number, right: number) => (
+                                    sortDirection === 'desc' ? right - left : left - right
+                                );
                                 if (sortKey === 'earned') {
                                     const byEarned = compare(a.totalSolRewardsEarned, b.totalSolRewardsEarned);
                                     if (byEarned !== 0) return byEarned;
