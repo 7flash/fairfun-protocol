@@ -107,6 +107,8 @@ interface DelegationPreferenceResponse {
 
 type NumberFormatKind = 'tokens' | 'usd' | 'gravity' | 'sol' | 'int';
 type ActivityTab = 'leaderboard' | 'treasury' | 'claims';
+type LeaderboardSortKey = 'earned' | 'gravity' | 'balance' | 'ownership';
+type SortDirection = 'asc' | 'desc';
 
 interface RuntimeConfig {
     rpcUrl: string;
@@ -151,67 +153,6 @@ function RankTag({ rank }: { rank: number }) {
             <span className={`rank-digits ${hot ? 'rank-digits-hot' : ''}`}>{padded}</span>
             <span className="rank-bracket">]</span>
         </span>
-    );
-}
-
-interface ActionMenuProps {
-    isOpen: boolean;
-    onClose: () => void;
-    targetAddress: string;
-    connectedAddress: string | null;
-    delegatedClaimsEnabled: boolean;
-    onDelegatedClaim: (address: string) => void;
-    buttonRef: { current: HTMLButtonElement | null };
-}
-
-function ActionMenu({ isOpen, onClose, targetAddress, connectedAddress, delegatedClaimsEnabled, onDelegatedClaim, buttonRef }: ActionMenuProps) {
-    if (!isOpen) return null;
-
-    const rect = buttonRef.current?.getBoundingClientRect();
-    if (!rect) return null;
-
-    const isSameUser = connectedAddress?.toLowerCase() === targetAddress.toLowerCase();
-
-    return (
-        <div className="action-menu-overlay" onClick={onClose}>
-            <div
-                className="action-menu"
-                style={{
-                    position: 'absolute',
-                    top: `${rect.bottom + 8}px`,
-                    right: `${rect.left}px`,
-                }}
-                onClick={(e) => e.stopPropagation()}
-            >
-                {connectedAddress && !isSameUser && delegatedClaimsEnabled ? (
-                    <button
-                        className="action-menu-item"
-                        type="button"
-                        onClick={() => {
-                            onClose();
-                            onDelegatedClaim(targetAddress);
-                        }}
-                    >
-                        Claim for this user and earn 10%
-                    </button>
-                ) : null}
-                {connectedAddress && !isSameUser && !delegatedClaimsEnabled ? (
-                    <div className="action-menu-item action-menu-item-disabled">
-                        This wallet opted out of delegated claims
-                    </div>
-                ) : null}
-                {connectedAddress && isSameUser ? (
-                    <div className="action-menu-item action-menu-item-disabled">
-                        Claim for yourself from Your Position
-                    </div>
-                ) : null}
-                {!connectedAddress ? (
-                    <div className="action-menu-item action-menu-item-disabled">
-                        Connect wallet to claim for others
-                    </div>
-                ) : null}
-            </div>
-        </div>
     );
 }
 
@@ -469,13 +410,6 @@ function PositionPanel({
     const canClaim = Boolean(walletTotals?.claimEnabled && claimableRewards > 0);
     const earnedRewards = walletTotals?.totalSolRewardsEarned ?? 0;
     const claimedRewards = walletTotals?.totalSolRewardsClaimed ?? 0;
-    const delegatedClaimFeePercent = walletTotals?.delegatedClaimFeePercent ?? 10;
-    const claimStateMessage = !runtimeConfig.claimEnabled
-        ? 'Claim signing is temporarily paused.'
-        : claimableRewards <= 0
-            ? 'Rewards are accumulating. Claims open once you have claimable SOL.'
-            : 'Claims open soon.';
-
     return (
         <div className={`position-panel ${walletTotals?.rank ? 'is-ranked' : ''}`}>
             <div className="position-head">
@@ -541,43 +475,13 @@ function PositionPanel({
                     </div>
                 </div>
 
-                <div className="position-group">
-                    <div className="group-label">Delegated Claims</div>
-                    <div className="preference-card">
-                        <div>
-                            <div className="cell-label">Community claimers can earn {delegatedClaimFeePercent}%</div>
-                            <div className="preference-copy">
-                                {walletTotals?.delegatedClaimsEnabled
-                                    ? `Anyone can claim for you and keep ${delegatedClaimFeePercent}% of the payout as an incentive.`
-                                    : 'Only you can claim right now. Community claimers are blocked for this wallet.'}
-                            </div>
-                        </div>
-                        <button
-                            className="secondary-button"
-                            disabled={delegationPreferencePending}
-                            onClick={() => setDelegatedClaimsEnabled(!(walletTotals?.delegatedClaimsEnabled ?? true))}
-                            type="button"
-                        >
-                            {delegationPreferencePending
-                                ? 'Saving...'
-                                : walletTotals?.delegatedClaimsEnabled
-                                    ? 'Opt out'
-                                    : 'Enable 10% incentive'}
-                        </button>
-                    </div>
-                </div>
             </div>
 
             {canClaim ? (
                 <button className="claim-button" onClick={claim} type="button">
                     Claim {formatNumber(claimableRewards, 'sol')}
                 </button>
-            ) : (
-                <div className="claim-status-row">
-                    <span className="claim-status-pill"><span className="claim-status-icon">!</span>Claims Paused</span>
-                    <span className="claim-status-text">{claimStateMessage}</span>
-                </div>
-            )}
+            ) : null}
 
             {walletError ? <div className="inline-error">{walletError}</div> : null}
         </div>
@@ -607,25 +511,22 @@ function LeaderboardTable({
     error,
     connectedAddress,
     tokenSymbol,
-    openMenuEntry,
-    onOpenMenu,
-    onCloseMenu,
-    onDelegatedClaim,
-    menuButtonRef,
+    sortKey,
+    sortDirection,
+    onSort,
 }: {
     entries: LeaderboardEntry[];
     loading: boolean;
     error: string | null;
     connectedAddress: string | null;
     tokenSymbol: string;
-    openMenuEntry: string | null;
-    onOpenMenu: (address: string, button: HTMLButtonElement) => void;
-    onCloseMenu: () => void;
-    onDelegatedClaim: (address: string) => Promise<unknown>;
-    menuButtonRef: { current: HTMLButtonElement | null };
+    sortKey: LeaderboardSortKey;
+    sortDirection: SortDirection;
+    onSort: (key: LeaderboardSortKey) => void;
 }) {
     const connectedAddressLower = connectedAddress?.toLowerCase() ?? null;
     const displayEntries = entries.slice(0, 150);
+    const sortArrow = (key: LeaderboardSortKey) => sortKey === key ? (sortDirection === 'desc' ? ' ↓' : ' ↑') : '';
 
     return (
         <table className="leaderboard-table">
@@ -633,29 +534,39 @@ function LeaderboardTable({
                 <tr>
                     <th className="th-rank">#</th>
                     <th>Wallet</th>
-                    <th className="th-num">{tokenSymbol}</th>
+                    <th className="th-num">
+                        <button className="table-sort-button" onClick={() => onSort('balance')} type="button">
+                            {tokenSymbol}{sortArrow('balance')}
+                        </button>
+                    </th>
                     <th className="th-num header-tooltip" data-tooltip="Gravity is the cumulative USD-minutes held by each wallet.">
-                        Gravity
+                        <button className="table-sort-button" onClick={() => onSort('gravity')} type="button">
+                            Gravity{sortArrow('gravity')}
+                        </button>
                     </th>
                     <th className="th-num header-tooltip" data-tooltip="Ownership is your share of total gravity, not your spot balance at a single snapshot.">
-                        Ownership
+                        <button className="table-sort-button" onClick={() => onSort('ownership')} type="button">
+                            Ownership{sortArrow('ownership')}
+                        </button>
                     </th>
-                    <th className="th-num">Earned</th>
-                    <th className="th-actions"></th>
+                    <th className="th-num">
+                        <button className="table-sort-button" onClick={() => onSort('earned')} type="button">
+                            Earned{sortArrow('earned')}
+                        </button>
+                    </th>
                 </tr>
             </thead>
             <tbody>
                 {error ? (
-                    <tr><td className="state-row error-state" colSpan={7}>{error}</td></tr>
+                    <tr><td className="state-row error-state" colSpan={6}>{error}</td></tr>
                 ) : loading && entries.length === 0 ? (
                     <SkeletonRows />
                 ) : entries.length === 0 ? (
-                    <tr><td className="state-row" colSpan={7}>No indexed holders found yet.</td></tr>
+                    <tr><td className="state-row" colSpan={6}>No indexed holders found yet.</td></tr>
                 ) : (
                     <>
                         {displayEntries.map((entry) => {
                             const isYou = connectedAddressLower === entry.address.toLowerCase();
-                            const menuOpen = openMenuEntry === entry.address;
                             return (
                                 <tr className={`leaderboard-row ${isYou ? 'is-you' : ''}`} key={entry.address}>
                                     <td><RankTag rank={entry.rank} /></td>
@@ -671,31 +582,6 @@ function LeaderboardTable({
                                     <td className="td-num">{formatNumber(entry.accumulatedGravity, 'gravity')}</td>
                                     <td className="td-num">{entry.gravityShareFormatted}</td>
                                     <td className="td-num">{formatNumber(entry.totalSolRewardsEarned, 'sol')}</td>
-                                    <td className="td-actions">
-                                        <button
-                                            className="action-menu-button"
-                                            onClick={(event: any) => {
-                                                const button = event.currentTarget as HTMLButtonElement;
-                                                if (menuOpen) {
-                                                    onCloseMenu();
-                                                    return;
-                                                }
-                                                onOpenMenu(entry.address, button);
-                                            }}
-                                            type="button"
-                                        >
-                                            <span className="action-menu-dots">...</span>
-                                        </button>
-                                        <ActionMenu
-                                            isOpen={menuOpen}
-                                            onClose={onCloseMenu}
-                                            targetAddress={entry.address}
-                                            connectedAddress={connectedAddress}
-                                            delegatedClaimsEnabled={entry.delegatedClaimsEnabled !== false}
-                                            onDelegatedClaim={onDelegatedClaim}
-                                            buttonRef={menuButtonRef}
-                                        />
-                                    </td>
                                 </tr>
                             );
                         })}
@@ -800,21 +686,19 @@ function ClaimsTable({
             <thead>
                 <tr>
                     <th>When</th>
-                    <th>Claimant</th>
+                    <th>Wallet</th>
                     <th>Claimer</th>
-                    <th className="th-num">Gross</th>
-                    <th className="th-num">User Got</th>
-                    <th className="th-num">Claimer Fee</th>
+                    <th className="th-num">Payout</th>
                     <th>Transaction</th>
                 </tr>
             </thead>
             <tbody>
                 {error ? (
-                    <tr><td className="state-row error-state" colSpan={7}>{error}</td></tr>
+                    <tr><td className="state-row error-state" colSpan={5}>{error}</td></tr>
                 ) : loading && events.length === 0 ? (
                     <SkeletonRows />
                 ) : events.length === 0 ? (
-                    <tr><td className="state-row" colSpan={7}>No claims have been indexed yet.</td></tr>
+                    <tr><td className="state-row" colSpan={5}>No claims have been indexed yet.</td></tr>
                 ) : (
                     events.map((event) => {
                         const isClaimant = connectedAddress?.toLowerCase() === event.claimantAddress.toLowerCase();
@@ -835,12 +719,17 @@ function ClaimsTable({
                                         <>
                                             <span className="wallet-mono">{event.delegatorAddressShort}</span>
                                             {isDelegator ? <span className="you-tag">YOU</span> : null}
+                                            <div className="wallet-sub">10% incentive</div>
                                         </>
                                     ) : 'Self'}
                                 </td>
-                                <td className="td-num">{formatNumber(event.grossAmountSol, 'sol')}</td>
-                                <td className="td-num">{formatNumber(event.claimantAmountSol, 'sol')}</td>
-                                <td className="td-num">{formatNumber(event.delegatorFeeSol, 'sol')}</td>
+                                <td className="td-num">
+                                    <div>{formatNumber(event.claimantAmountSol, 'sol')}</div>
+                                    <div className="num-sub">gross {formatNumber(event.grossAmountSol, 'sol')}</div>
+                                    {event.delegatorFeeSol > 0 ? (
+                                        <div className="num-sub">fee {formatNumber(event.delegatorFeeSol, 'sol')}</div>
+                                    ) : null}
+                                </td>
                                 <td>
                                     <a
                                         className="tx-link"
@@ -871,11 +760,9 @@ function ActivityPanel({
     error,
     connectedAddress,
     liveText,
-    openMenuEntry,
-    onOpenMenu,
-    onCloseMenu,
-    onDelegatedClaim,
-    menuButtonRef,
+    sortKey,
+    sortDirection,
+    onSort,
 }: {
     runtimeConfig: RuntimeConfig;
     activeTab: ActivityTab;
@@ -887,11 +774,9 @@ function ActivityPanel({
     error: string | null;
     connectedAddress: string | null;
     liveText: string;
-    openMenuEntry: string | null;
-    onOpenMenu: (address: string, button: HTMLButtonElement) => void;
-    onCloseMenu: () => void;
-    onDelegatedClaim: (address: string) => Promise<unknown>;
-    menuButtonRef: { current: HTMLButtonElement | null };
+    sortKey: LeaderboardSortKey;
+    sortDirection: SortDirection;
+    onSort: (key: LeaderboardSortKey) => void;
 }) {
     return (
         <div className="activity-shell">
@@ -939,11 +824,9 @@ function ActivityPanel({
                         error={error}
                         connectedAddress={connectedAddress}
                         tokenSymbol={runtimeConfig.tokenSymbol}
-                        openMenuEntry={openMenuEntry}
-                        onOpenMenu={onOpenMenu}
-                        onCloseMenu={onCloseMenu}
-                        onDelegatedClaim={onDelegatedClaim}
-                        menuButtonRef={menuButtonRef}
+                        sortKey={sortKey}
+                        sortDirection={sortDirection}
+                        onSort={onSort}
                     />
                 ) : activeTab === 'treasury' ? (
                     <TreasuryTable
@@ -1012,8 +895,8 @@ export default function mount() {
         let toast: ToastState | null = null;
         let toastTimeout: ReturnType<typeof setTimeout> | null = null;
         let lastRefreshAt = Date.now();
-        let openMenuEntry: string | null = null;
-        let menuButtonRef: { current: HTMLButtonElement | null } = { current: null };
+        let sortKey: LeaderboardSortKey = 'earned';
+        let sortDirection: SortDirection = 'desc';
         let delegationPreferencePending = false;
 
         const getLedgerMeta = () => {
@@ -1079,18 +962,17 @@ export default function mount() {
                     error={error}
                     connectedAddress={connectedAddress}
                     liveText={getLedgerMeta()}
-                    openMenuEntry={openMenuEntry}
-                    onOpenMenu={(address, button) => {
-                        openMenuEntry = address;
-                        menuButtonRef = { current: button };
-                        update('open-menu');
+                    sortKey={sortKey}
+                    sortDirection={sortDirection}
+                    onSort={(key) => {
+                        if (sortKey === key) {
+                            sortDirection = sortDirection === 'desc' ? 'asc' : 'desc';
+                        } else {
+                            sortKey = key;
+                            sortDirection = 'desc';
+                        }
+                        update('sort-change');
                     }}
-                    onCloseMenu={() => {
-                        openMenuEntry = null;
-                        update('close-menu');
-                    }}
-                    onDelegatedClaim={delegatedClaim}
-                    menuButtonRef={menuButtonRef}
                 />,
                 leaderboardRoot
             );
@@ -1542,6 +1424,25 @@ export default function mount() {
                         entries = ms('normalize leaderboard entries', () => leaderboardData.entries
                             .filter((entry) => entry.tokenBalance > 0)
                             .sort((a, b) => {
+                                const direction = sortDirection === 'desc' ? -1 : 1;
+                                const compare = (left: number, right: number) => (left - right) * direction;
+                                if (sortKey === 'earned') {
+                                    const byEarned = compare(a.totalSolRewardsEarned, b.totalSolRewardsEarned);
+                                    if (byEarned !== 0) return byEarned;
+                                }
+                                if (sortKey === 'gravity') {
+                                    const byGravity = compare(a.accumulatedGravity, b.accumulatedGravity);
+                                    if (byGravity !== 0) return byGravity;
+                                }
+                                if (sortKey === 'balance') {
+                                    const byBalance = compare(a.tokenBalance, b.tokenBalance);
+                                    if (byBalance !== 0) return byBalance;
+                                }
+                                if (sortKey === 'ownership') {
+                                    const byOwnership = compare(a.gravityShare, b.gravityShare);
+                                    if (byOwnership !== 0) return byOwnership;
+                                }
+                                if (b.totalSolRewardsEarned !== a.totalSolRewardsEarned) return b.totalSolRewardsEarned - a.totalSolRewardsEarned;
                                 if (b.gravityShare !== a.gravityShare) return b.gravityShare - a.gravityShare;
                                 if (b.accumulatedGravity !== a.accumulatedGravity) return b.accumulatedGravity - a.accumulatedGravity;
                                 return b.tokenBalance - a.tokenBalance;
@@ -1602,25 +1503,11 @@ export default function mount() {
             });
         }, 5000);
 
-        const handleDocumentClick = (event: MouseEvent) => {
-            if (openMenuEntry) {
-                const target = event.target as HTMLElement;
-                const isMenuButton = target.closest('.action-menu-button');
-                const isMenu = target.closest('.action-menu');
-                if (!isMenuButton && !isMenu) {
-                    openMenuEntry = null;
-                    update('close-menu-outside-click');
-                }
-            }
-        };
-        document.addEventListener('click', handleDocumentClick);
-
         return () => {
             measureFrontendSync('unmount page client', (ms) => {
                 clearInterval(refreshInterval);
                 clearInterval(relativeTimeInterval);
                 if (toastTimeout) clearTimeout(toastTimeout);
-                document.removeEventListener('click', handleDocumentClick);
                 ms('clear rendered roots', () => {
                     render(null, leaderboardRoot);
                     render(null, positionRoot);

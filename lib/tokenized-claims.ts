@@ -13,7 +13,7 @@ import {
 } from './fairfun-program';
 import { connection } from './solana';
 
-const LOOKUP_TABLE_METADATA_KEY = 'tokenizedClaimLookupTableAddress';
+const LOOKUP_TABLE_METADATA_KEY_PREFIX = 'tokenizedClaimLookupTableAddress';
 const LOOKUP_TABLE_CHUNK_SIZE = 20;
 const LOOKUP_TABLE_FINALIZATION_POLL_MS = 1_000;
 const LOOKUP_TABLE_FINALIZATION_RETRIES = 15;
@@ -73,7 +73,6 @@ async function createLookupTable(authority: Keypair) {
         recentSlot,
     });
     await sendVersionedTransaction([createInstruction], authority);
-    setMeta(LOOKUP_TABLE_METADATA_KEY, lookupTableAddress.toBase58());
     return lookupTableAddress;
 }
 
@@ -101,12 +100,14 @@ async function ensureTokenizedClaimLookupTable(
     authority: Keypair,
     instructions: Array<TransactionInstruction>,
 ) {
-    const storedAddress = getMeta(LOOKUP_TABLE_METADATA_KEY);
+    const metadataKey = `${LOOKUP_TABLE_METADATA_KEY_PREFIX}:${authority.publicKey.toBase58()}`;
+    const storedAddress = getMeta(metadataKey);
     let lookupTableAddress = storedAddress ? new PublicKey(storedAddress) : null;
     let lookupTable = lookupTableAddress ? await loadLookupTable(lookupTableAddress) : null;
 
     if (!lookupTableAddress || !lookupTable) {
         lookupTableAddress = await createLookupTable(authority);
+        setMeta(metadataKey, lookupTableAddress.toBase58());
         lookupTable = await waitForLookupTableAddresses(lookupTableAddress, 0);
         if (!lookupTable) {
             throw new Error('Lookup table was not found after creation');
