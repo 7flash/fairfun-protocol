@@ -1,6 +1,10 @@
 import { createHash } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
 import path from 'path';
+import BN from 'bn.js';
+import bs58 from 'bs58';
+import { ASSOCIATED_TOKEN_PROGRAM_ID, NATIVE_MINT, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from '@solana/spl-token';
+import { GLOBAL_CONFIG_PDA as PUMP_AMM_GLOBAL_CONFIG_PDA, GLOBAL_VOLUME_ACCUMULATOR_PDA as PUMP_AMM_GLOBAL_VOLUME_ACCUMULATOR_PDA, OnlinePumpAmmSdk, PUMP_AMM_EVENT_AUTHORITY_PDA, PUMP_AMM_FEE_CONFIG_PDA, PUMP_AMM_PROGRAM_ID, PUMP_AMM_SDK, PUMP_FEE_PROGRAM_ID, buyQuoteInput as quotePumpAmmBuyQuoteInput, canonicalPumpPoolPda, coinCreatorVaultAuthorityPda, poolV2Pda, userVolumeAccumulatorPda } from '@pump-fun/pump-swap-sdk';
 import { Ed25519Program, Keypair, PublicKey, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY, Transaction, TransactionInstruction } from '@solana/web3.js';
 import { config } from './config';
 import { connection } from './solana';
@@ -161,28 +165,47 @@ export async function fetchUserDelegationSettingsState(user: PublicKey) {
     return decodeUserDelegationSettings(Buffer.from(account.data));
 }
 
-function resolveKeypairPath() {
-    const keypairPath = config.rewards.backendKeypairPath;
-    if (!keypairPath) {
-        return null;
+function parseConfiguredSecretKey(configuredValue: string) {
+    const trimmedValue = configuredValue.trim();
+    if (trimmedValue.length === 0) {
+        throw new Error('Backend keypair is not configured');
     }
-    return path.resolve(process.cwd(), keypairPath);
-}
 
-export function claimSigningEnabled() {
-    const keypairPath = resolveKeypairPath();
-    return Boolean(keypairPath && existsSync(keypairPath));
-}
+    if (trimmedValue.startsWith('[')) {
+        const secret = JSON.parse(trimmedValue) as Array<number>;
+        return Uint8Array.from(secret);
+    }
 
-export function loadBackendKeypair() {
-    const keypairPath = resolveKeypairPath();
-    if (!keypairPath || !existsSync(keypairPath)) {
+    if (/^[1-9A-HJ-NP-Za-km-z]+$/.test(trimmedValue)) {
+        return bs58.decode(trimmedValue);
+    }
+
+    const keypairPath = path.resolve(process.cwd(), trimmedValue);
+    if (!existsSync(keypairPath)) {
         throw new Error('Backend keypair is not configured');
     }
 
     const raw = readFileSync(keypairPath, 'utf8').trim();
-    const secret = JSON.parse(raw) as number[];
-    return Keypair.fromSecretKey(Uint8Array.from(secret));
+    const secret = JSON.parse(raw) as Array<number>;
+    return Uint8Array.from(secret);
+}
+
+export function claimSigningEnabled() {
+    const configuredValue = config.rewards.backendKeypairPath;
+    if (!configuredValue) {
+        return false;
+    }
+
+    try {
+        const secretKey = parseConfiguredSecretKey(configuredValue);
+        return secretKey.length === 64;
+    } catch {
+        return false;
+    }
+}
+
+export function loadBackendKeypair() {
+    return Keypair.fromSecretKey(parseConfiguredSecretKey(config.rewards.backendKeypairPath));
 }
 
 export function solToLamportsBigInt(amount: number) {
@@ -318,6 +341,153 @@ export async function buildDelegatedClaimTransaction(
         signerPubkey: signer.publicKey.toBase58(),
         claimantPubkey: claimant.toBase58(),
         delegatorPubkey: delegator.toBase58(),
+    };
+}
+
+export async function buildDelegatedClaimToTokensTransaction(
+    delegator: PublicKey,
+    claimant: PublicKey,
+    cumulativeEarned: bigint,
+    observedTotalDeposits: bigint,
+    estimatedClaimableLamports: bigint,
+) {
+    const expiresAt = BigInt(Math.floor(Date.now() / 1000) + config.rewards.claimExpiresInSeconds);
+    const message = buildClaimMessage(claimant, derivePoolPda(), cumulativeEarned, observedTotalDeposits, expiresAt);
+    const signer = loadBackendKeypair();
+    const ed25519Instruction = Ed25519Program.createInstructionWithPrivateKey({
+        privateKey: signer.secretKey,
+        message,
+    });
+
+    const treasury = deriveTreasuryPda();
+    const pumpAmmSdk = new OnlinePumpAmmSdk(connection);
+    const pumpPool = canonicalPumpPoolPda(new PublicKey(config.token.mint));
+    const swapState = await pumpAmmSdk.swapSolanaState(pumpPool, treasury);
+    const swapAccounts = (PUMP_AMM_SDK as any).swapAccounts(swapState) as {
+        protocolFeeRecipient: PublicKey;
+        protocolFeeRecipientTokenAccount: PublicKey;
+        buybackFeeRecipient: PublicKey;
+        buybackFeeRecipientTokenAccount: PublicKey;
+        coinCreatorVaultAta: PublicKey;
+        coinCreatorVaultAuthority: PublicKey;
+        globalVolumeAccumulator: PublicKey;
+        userVolumeAccumulator: PublicKey;
+        feeConfig: PublicKey;
+        feeProgram: PublicKey;
+        baseMint: PublicKey;
+        quoteMint: PublicKey;
+        pool: PublicKey;
+        poolBaseTokenAccount: PublicKey;
+        poolQuoteTokenAccount: PublicKey;
+        baseTokenProgram: PublicKey;
+        quoteTokenProgram: PublicKey;
+    };
+
+    const quote = quotePumpAmmBuyQuoteInput({
+        quote: new BN(estimatedClaimableLamports.toString()),
+        slippage: 15,
+        baseReserve: swapState.poolBaseAmount,
+        quoteReserve: swapState.poolQuoteAmount,
+        globalConfig: swapState.globalConfig,
+        baseMintAccount: swapState.baseMintAccount,
+        baseMint: swapState.baseMint,
+        coinCreator: swapState.pool.coinCreator,
+        creator: swapState.pool.creator,
+        feeConfig: swapState.feeConfig,
+    });
+
+    const treasuryTokenAccount = getAssociatedTokenAddressSync(
+        new PublicKey(config.token.mint),
+        treasury,
+        true,
+        TOKEN_2022_PROGRAM_ID,
+    );
+    const treasuryWsolAccount = getAssociatedTokenAddressSync(
+        NATIVE_MINT,
+        treasury,
+        true,
+        TOKEN_PROGRAM_ID,
+    );
+    const claimantTokenAccount = getAssociatedTokenAddressSync(
+        new PublicKey(config.token.mint),
+        claimant,
+        false,
+        TOKEN_2022_PROGRAM_ID,
+    );
+    const delegatorTokenAccount = getAssociatedTokenAddressSync(
+        new PublicKey(config.token.mint),
+        delegator,
+        false,
+        TOKEN_2022_PROGRAM_ID,
+    );
+
+    const data = Buffer.alloc(8 + 32 + 8 + 8 + 8 + 8);
+    instructionDiscriminator('delegated_claim_to_tokens').copy(data, 0);
+    claimant.toBuffer().copy(data, 8);
+    data.writeBigUInt64LE(cumulativeEarned, 40);
+    data.writeBigUInt64LE(observedTotalDeposits, 48);
+    data.writeBigInt64LE(expiresAt, 56);
+    data.writeBigUInt64LE(BigInt(quote.base.toString()), 64);
+
+    const instruction = new TransactionInstruction({
+        programId: getProgramId(),
+        keys: [
+            { pubkey: delegator, isSigner: true, isWritable: true },
+            { pubkey: deriveUserClaimPda(claimant), isSigner: false, isWritable: true },
+            { pubkey: deriveUserDelegationSettingsPda(claimant), isSigner: false, isWritable: true },
+            { pubkey: deriveConfigPda(), isSigner: false, isWritable: false },
+            { pubkey: derivePoolPda(), isSigner: false, isWritable: true },
+            { pubkey: treasury, isSigner: false, isWritable: true },
+            { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
+            { pubkey: claimant, isSigner: false, isWritable: true },
+            { pubkey: new PublicKey(PUMP_AMM_PROGRAM_ID.toString()), isSigner: false, isWritable: false },
+            { pubkey: new PublicKey(PUMP_AMM_GLOBAL_CONFIG_PDA.toString()), isSigner: false, isWritable: false },
+            { pubkey: swapAccounts.baseMint, isSigner: false, isWritable: false },
+            { pubkey: swapAccounts.quoteMint, isSigner: false, isWritable: false },
+            { pubkey: swapAccounts.pool, isSigner: false, isWritable: true },
+            { pubkey: treasuryTokenAccount, isSigner: false, isWritable: true },
+            { pubkey: treasuryWsolAccount, isSigner: false, isWritable: true },
+            { pubkey: swapAccounts.poolBaseTokenAccount, isSigner: false, isWritable: true },
+            { pubkey: swapAccounts.poolQuoteTokenAccount, isSigner: false, isWritable: true },
+            { pubkey: swapAccounts.protocolFeeRecipient, isSigner: false, isWritable: false },
+            { pubkey: swapAccounts.protocolFeeRecipientTokenAccount, isSigner: false, isWritable: true },
+            { pubkey: swapAccounts.baseTokenProgram, isSigner: false, isWritable: false },
+            { pubkey: swapAccounts.quoteTokenProgram, isSigner: false, isWritable: false },
+            { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: new PublicKey(PUMP_AMM_EVENT_AUTHORITY_PDA.toString()), isSigner: false, isWritable: false },
+            { pubkey: swapAccounts.coinCreatorVaultAta, isSigner: false, isWritable: true },
+            { pubkey: coinCreatorVaultAuthorityPda(swapState.pool.coinCreator), isSigner: false, isWritable: false },
+            { pubkey: swapState.pool.coinCreator, isSigner: false, isWritable: false },
+            { pubkey: new PublicKey(PUMP_AMM_GLOBAL_VOLUME_ACCUMULATOR_PDA.toString()), isSigner: false, isWritable: false },
+            { pubkey: userVolumeAccumulatorPda(treasury), isSigner: false, isWritable: true },
+            { pubkey: new PublicKey(PUMP_AMM_FEE_CONFIG_PDA.toString()), isSigner: false, isWritable: false },
+            { pubkey: new PublicKey(PUMP_FEE_PROGRAM_ID.toString()), isSigner: false, isWritable: false },
+            { pubkey: poolV2Pda(new PublicKey(config.token.mint)), isSigner: false, isWritable: false },
+            { pubkey: swapAccounts.buybackFeeRecipient, isSigner: false, isWritable: false },
+            { pubkey: swapAccounts.buybackFeeRecipientTokenAccount, isSigner: false, isWritable: true },
+            { pubkey: claimantTokenAccount, isSigner: false, isWritable: true },
+            { pubkey: delegatorTokenAccount, isSigner: false, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        ],
+        data,
+    });
+
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+    const transaction = new Transaction({
+        feePayer: delegator,
+        blockhash,
+        lastValidBlockHeight,
+    }).add(ed25519Instruction, instruction);
+
+    return {
+        transaction,
+        blockhash,
+        lastValidBlockHeight,
+        expiresAt: Number(expiresAt),
+        signerPubkey: signer.publicKey.toBase58(),
+        claimantPubkey: claimant.toBase58(),
+        delegatorPubkey: delegator.toBase58(),
+        minimumTokenAmountOut: quote.base.toString(),
     };
 }
 

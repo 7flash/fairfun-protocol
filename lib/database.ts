@@ -59,19 +59,32 @@ export const db = new Database(dbPath, {
         address: z.string(),
         amountSol: z.number(),
         createdAt: z.number().default(0)
+    }),
+    claimEvents: z.object({
+        signature: z.string(),
+        claimantAddress: z.string(),
+        delegatorAddress: z.string().default(''),
+        grossAmountSol: z.number().default(0),
+        claimantAmountSol: z.number().default(0),
+        delegatorFeeSol: z.number().default(0),
+        mode: z.string().default('direct'),
+        timestamp: z.number().default(0),
+        createdAt: z.number().default(0)
     })
 }, {
     indexes: {
         holders: ['address', 'tokenBalance', 'accumulatedGravity', 'claimableSolRewards'],
         metadata: ['key'],
         treasuryEvents: ['signature', 'timestamp'],
-        treasuryPayouts: ['signature', 'address']
+        treasuryPayouts: ['signature', 'address'],
+        claimEvents: ['signature', 'claimantAddress', 'delegatorAddress', 'timestamp']
     },
     unique: {
         holders: [['address']],
         metadata: [['key']],
         treasuryEvents: [['signature']],
-        treasuryPayouts: [['signature', 'address']]
+        treasuryPayouts: [['signature', 'address']],
+        claimEvents: [['signature']]
     }
 });
 
@@ -113,6 +126,19 @@ export interface TreasuryPayoutRecord {
     signature: string;
     address: string;
     amountSol: number;
+    createdAt: number;
+}
+
+export interface ClaimEventRecord {
+    id?: number;
+    signature: string;
+    claimantAddress: string;
+    delegatorAddress: string;
+    grossAmountSol: number;
+    claimantAmountSol: number;
+    delegatorFeeSol: number;
+    mode: string;
+    timestamp: number;
     createdAt: number;
 }
 
@@ -378,6 +404,45 @@ export function updateHolderRewards(
     });
 
     return getHolder(address);
+}
+
+export function recordClaimEvent(event: {
+    signature: string;
+    claimantAddress: string;
+    delegatorAddress?: string;
+    grossAmountSol: number;
+    claimantAmountSol: number;
+    delegatorFeeSol?: number;
+    mode: 'direct' | 'delegated';
+    timestamp?: number;
+}) {
+    const now = Date.now();
+    db.claimEvents.upsert(
+        { signature: event.signature },
+        {
+            signature: event.signature,
+            claimantAddress: event.claimantAddress,
+            delegatorAddress: event.delegatorAddress ?? '',
+            grossAmountSol: event.grossAmountSol,
+            claimantAmountSol: event.claimantAmountSol,
+            delegatorFeeSol: event.delegatorFeeSol ?? 0,
+            mode: event.mode,
+            timestamp: event.timestamp ?? now,
+            createdAt: now,
+        }
+    );
+}
+
+export function getRecentClaimEvents(limit = 50, walletAddress?: string) {
+    const query = db.claimEvents.select().orderBy('timestamp', 'desc');
+    const events = (typeof limit === 'number' ? query.limit(limit) : query).all() as ClaimEventRecord[];
+    if (!walletAddress) return events;
+
+    const walletLower = walletAddress.toLowerCase();
+    return events.filter((event) =>
+        event.claimantAddress.toLowerCase() === walletLower
+        || event.delegatorAddress.toLowerCase() === walletLower
+    );
 }
 
 export function resetAllHolderRewards(now = Date.now()) {

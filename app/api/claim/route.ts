@@ -1,5 +1,5 @@
 import { PublicKey } from '@solana/web3.js';
-import { getHolder, getMetaNumber, updateHolderRewards } from '../../../lib/database';
+import { getHolder, getMetaNumber, recordClaimEvent, updateHolderRewards } from '../../../lib/database';
 import { buildClaimTransaction, claimSigningEnabled, fetchRewardPoolState, fetchUserClaimState, lamportsToSolNumber, solToLamportsBigInt } from '../../../lib/fairfun-program';
 
 const LAMPORT_IN_SOL = 1_000_000_000;
@@ -77,12 +77,24 @@ export async function PUT(req: Request) {
 
         const holder = getHolder(address);
         if (holder) {
+            const previousClaimedSol = clampSolAmount(holder.totalSolRewardsClaimed);
             const claimedSol = clampSolAmount(lamportsToSolNumber(claimState.claimedAmount));
+            const grossAmountSol = clampSolAmount(Math.max(0, claimedSol - previousClaimedSol));
             const claimable = clampSolAmount(Math.max(0, holder.totalSolRewardsEarned - claimedSol));
             updateHolderRewards(address, {
                 totalSolRewardsClaimed: claimedSol,
                 claimableSolRewards: claimable,
             });
+            if (grossAmountSol > 0) {
+                recordClaimEvent({
+                    signature,
+                    claimantAddress: address,
+                    grossAmountSol,
+                    claimantAmountSol: grossAmountSol,
+                    delegatorFeeSol: 0,
+                    mode: 'direct',
+                });
+            }
         }
 
         return Response.json({

@@ -27,6 +27,19 @@ interface TreasuryEvent {
     timestamp: number;
 }
 
+interface ClaimEvent {
+    signature: string;
+    claimantAddress: string;
+    claimantAddressShort: string;
+    delegatorAddress: string;
+    delegatorAddressShort: string;
+    grossAmountSol: number;
+    claimantAmountSol: number;
+    delegatorFeeSol: number;
+    mode: string;
+    timestamp: number;
+}
+
 interface WalletTotals {
     address: string;
     addressShort: string;
@@ -66,6 +79,12 @@ interface TreasuryResponse {
     total: number;
 }
 
+interface ClaimsResponse {
+    success: boolean;
+    events: ClaimEvent[];
+    total: number;
+}
+
 interface WalletResponse {
     success: boolean;
     wallet: WalletTotals;
@@ -87,7 +106,7 @@ interface DelegationPreferenceResponse {
 }
 
 type NumberFormatKind = 'tokens' | 'usd' | 'gravity' | 'sol' | 'int';
-type ActivityTab = 'leaderboard' | 'treasury';
+type ActivityTab = 'leaderboard' | 'treasury' | 'claims';
 
 interface RuntimeConfig {
     rpcUrl: string;
@@ -763,12 +782,91 @@ function TreasuryTable({
     );
 }
 
+function ClaimsTable({
+    runtimeConfig,
+    events,
+    loading,
+    error,
+    connectedAddress,
+}: {
+    runtimeConfig: RuntimeConfig;
+    events: ClaimEvent[];
+    loading: boolean;
+    error: string | null;
+    connectedAddress: string | null;
+}) {
+    return (
+        <table className="leaderboard-table">
+            <thead>
+                <tr>
+                    <th>When</th>
+                    <th>Claimant</th>
+                    <th>Claimer</th>
+                    <th className="th-num">Gross</th>
+                    <th className="th-num">User Got</th>
+                    <th className="th-num">Claimer Fee</th>
+                    <th>Transaction</th>
+                </tr>
+            </thead>
+            <tbody>
+                {error ? (
+                    <tr><td className="state-row error-state" colSpan={7}>{error}</td></tr>
+                ) : loading && events.length === 0 ? (
+                    <SkeletonRows />
+                ) : events.length === 0 ? (
+                    <tr><td className="state-row" colSpan={7}>No claims have been indexed yet.</td></tr>
+                ) : (
+                    events.map((event) => {
+                        const isClaimant = connectedAddress?.toLowerCase() === event.claimantAddress.toLowerCase();
+                        const isDelegator = connectedAddress?.toLowerCase() === event.delegatorAddress.toLowerCase();
+
+                        return (
+                            <tr className="leaderboard-row" key={event.signature}>
+                                <td>
+                                    <div>{formatRelativeTime(event.timestamp)}</div>
+                                    <div className="wallet-sub">{new Date(event.timestamp).toLocaleString()}</div>
+                                </td>
+                                <td>
+                                    <span className="wallet-mono">{event.claimantAddressShort}</span>
+                                    {isClaimant ? <span className="you-tag">YOU</span> : null}
+                                </td>
+                                <td>
+                                    {event.mode === 'delegated' ? (
+                                        <>
+                                            <span className="wallet-mono">{event.delegatorAddressShort}</span>
+                                            {isDelegator ? <span className="you-tag">YOU</span> : null}
+                                        </>
+                                    ) : 'Self'}
+                                </td>
+                                <td className="td-num">{formatNumber(event.grossAmountSol, 'sol')}</td>
+                                <td className="td-num">{formatNumber(event.claimantAmountSol, 'sol')}</td>
+                                <td className="td-num">{formatNumber(event.delegatorFeeSol, 'sol')}</td>
+                                <td>
+                                    <a
+                                        className="tx-link"
+                                        href={`${runtimeConfig.explorerTxBaseUrl}${event.signature}`}
+                                        rel="noreferrer"
+                                        target="_blank"
+                                    >
+                                        {shortAddress(event.signature)}
+                                    </a>
+                                </td>
+                            </tr>
+                        );
+                    })
+                )}
+            </tbody>
+        </table>
+    );
+}
+
 function ActivityPanel({
     runtimeConfig,
     activeTab,
     setActiveTab,
     entries,
     treasuryEvents,
+    claimEvents,
     loading,
     error,
     connectedAddress,
@@ -784,6 +882,7 @@ function ActivityPanel({
     setActiveTab: (tab: ActivityTab) => void;
     entries: LeaderboardEntry[];
     treasuryEvents: TreasuryEvent[];
+    claimEvents: ClaimEvent[];
     loading: boolean;
     error: string | null;
     connectedAddress: string | null;
@@ -818,6 +917,13 @@ function ActivityPanel({
                     >
                         Treasury Additions
                     </button>
+                    <button
+                        className={`board-tab ${activeTab === 'claims' ? 'is-active' : ''}`}
+                        onClick={() => setActiveTab('claims')}
+                        type="button"
+                    >
+                        Claimed Rewards
+                    </button>
                 </div>
                 <div className="ledger-live">
                     <span className="live-dot">LIVE</span>
@@ -839,10 +945,18 @@ function ActivityPanel({
                         onDelegatedClaim={onDelegatedClaim}
                         menuButtonRef={menuButtonRef}
                     />
-                ) : (
+                ) : activeTab === 'treasury' ? (
                     <TreasuryTable
                         runtimeConfig={runtimeConfig}
                         events={treasuryEvents}
+                        loading={loading}
+                        error={error}
+                        connectedAddress={connectedAddress}
+                    />
+                ) : (
+                    <ClaimsTable
+                        runtimeConfig={runtimeConfig}
+                        events={claimEvents}
                         loading={loading}
                         error={error}
                         connectedAddress={connectedAddress}
@@ -879,6 +993,7 @@ export default function mount() {
 
         let entries: LeaderboardEntry[] = [];
         let treasuryEvents: TreasuryEvent[] = [];
+        let claimEvents: ClaimEvent[] = [];
         let total = 0;
         let totalSupply = 0;
         let tokenPriceUsd = 0;
@@ -959,6 +1074,7 @@ export default function mount() {
                     }}
                     entries={entries}
                     treasuryEvents={treasuryEvents}
+                    claimEvents={claimEvents}
                     loading={loading}
                     error={error}
                     connectedAddress={connectedAddress}
@@ -982,6 +1098,7 @@ export default function mount() {
                 activeTab,
                 entries: entries.length,
                 treasuryEvents: treasuryEvents.length,
+                claimEvents: claimEvents.length,
                 loading,
             };
         });
@@ -1017,6 +1134,7 @@ export default function mount() {
                 reason,
                 total,
                 treasuryEvents: treasuryEvents.length,
+                claimEvents: claimEvents.length,
                 connected: Boolean(connectedAddress),
             };
         });
@@ -1259,6 +1377,9 @@ export default function mount() {
                         headers: { 'content-type': 'application/json' },
                         body: JSON.stringify({
                             claimantAddress: claimantAddress,
+                            delegatorAddress: connectedAddress,
+                            claimantAmountSol: Number(data.claimantPayout ?? 0) / 1e9,
+                            delegatorFeeSol: Number(data.delegatorFee ?? 0) / 1e9,
                             signature: signature,
                         }),
                     }));
@@ -1395,19 +1516,21 @@ export default function mount() {
                     ms('mark loading and render', () => update(`fetch-start:${reason}`));
 
                     const suffix = connectedAddress ? `?wallet=${encodeURIComponent(connectedAddress)}` : '';
-                    const [leaderboardResponse, treasuryResponse] = await Promise.all([
+                    const [leaderboardResponse, treasuryResponse, claimsResponse] = await Promise.all([
                         m('fetch leaderboard api', () => fetch(`/api/leaderboard${suffix}`)),
                         m('fetch treasury api', () => fetch(`/api/treasury${suffix}`)),
+                        m('fetch claims api', () => fetch(`/api/claims${suffix}`)),
                     ]);
-                    if (!leaderboardResponse || !treasuryResponse) {
+                    if (!leaderboardResponse || !treasuryResponse || !claimsResponse) {
                         throw new Error('Activity API request failed.');
                     }
 
-                    const [leaderboardData, treasuryData] = await Promise.all([
+                    const [leaderboardData, treasuryData, claimsData] = await Promise.all([
                         m('parse leaderboard payload', () => leaderboardResponse.json() as Promise<LeaderboardResponse>),
                         m('parse treasury payload', () => treasuryResponse.json() as Promise<TreasuryResponse>),
+                        m('parse claims payload', () => claimsResponse.json() as Promise<ClaimsResponse>),
                     ]);
-                    if (!leaderboardData || !treasuryData) {
+                    if (!leaderboardData || !treasuryData || !claimsData) {
                         throw new Error('Activity API payload parsing failed.');
                     }
 
@@ -1440,6 +1563,11 @@ export default function mount() {
                         treasuryEvents = treasuryData.events;
                     } else if (!error) {
                         error = 'Failed to load treasury additions.';
+                    }
+                    if (claimsData.success) {
+                        claimEvents = claimsData.events;
+                    } else if (!error) {
+                        error = 'Failed to load claim history.';
                     }
 
                     await m('refresh wallet totals', () => loadWalletTotals());

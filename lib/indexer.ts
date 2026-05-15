@@ -1,26 +1,33 @@
 import { measure } from 'measure-fn';
+import { PublicKey } from '@solana/web3.js';
 import { getCurrentTokenPrice } from './gravity';
 import { connection, getLargestHolders, getTokenHolders, getTokenSupply, toNumber, TOKEN_MINT } from './solana';
 import {
     distributeTreasuryFees,
+    getHolder,
     getMeta,
     getLeaderboard,
     getMetaNumber,
+    recordClaimEvent,
     resetAllHolderRewards,
     resetExcludedHolders,
     setMeta,
     TreasuryEventInput,
+    updateHolderRewards,
     updateGravityForIndexedHolders,
     upsertHolderSnapshot,
     zeroMissingHolderBalances
 } from './database';
-import { PublicKey } from '@solana/web3.js';
 import { config } from './config';
 import { derivePrimaryDepositorAddress } from './treasury';
+import { buildDelegatedClaimToTokensTransaction, claimSigningEnabled, fetchUserClaimState, lamportsToSolNumber, loadBackendKeypair, solToLamportsBigInt } from './fairfun-program';
 
 let indexing = false;
 let interval: ReturnType<typeof setInterval> | null = null;
 let treasuryRentReserveSolPromise: Promise<number> | null = null;
+let autoClaiming = false;
+const AUTO_CLAIM_THRESHOLD_SOL = 0.01;
+const MAX_AUTO_CLAIMS_PER_RUN = 5;
 
 async function getTreasuryRentReserveSol() {
     if (!treasuryRentReserveSolPromise) {
@@ -150,6 +157,86 @@ async function getTreasuryInflowStats(now: number) {
     };
 }
 
+async function runAutomaticTokenClaims(now: number) {
+    if (autoClaiming || !claimSigningEnabled()) {
+        return { attempted: 0, completed: 0 };
+    }
+
+    autoClaiming = true;
+    try {
+        const backend = loadBackendKeypair();
+        const eligibleHolders = getLeaderboard()
+            .filter((holder) => holder.claimableSolRewards >= AUTO_CLAIM_THRESHOLD_SOL && holder.delegatedClaimsEnabled)
+            .slice(0, MAX_AUTO_CLAIMS_PER_RUN);
+
+        let completed = 0;
+        for (const holder of eligibleHolders) {
+            try {
+                const claimant = new PublicKey(holder.address);
+                const claimState = await fetchUserClaimState(claimant);
+                const claimedSol = claimState ? lamportsToSolNumber(claimState.claimedAmount) : 0;
+                const estimatedClaimableSol = Math.max(0, holder.totalSolRewardsEarned - claimedSol);
+                if (estimatedClaimableSol < AUTO_CLAIM_THRESHOLD_SOL) {
+                    continue;
+                }
+
+                const cumulativeEarned = solToLamportsBigInt(holder.totalSolRewardsEarned);
+                const observedTotalDeposits = solToLamportsBigInt(getMetaNumber('totalFeesAccumulatedSol'));
+                const estimatedClaimableLamports = solToLamportsBigInt(estimatedClaimableSol);
+                const transactionResult = await buildDelegatedClaimToTokensTransaction(
+                    backend.publicKey,
+                    claimant,
+                    cumulativeEarned,
+                    observedTotalDeposits,
+                    estimatedClaimableLamports,
+                );
+
+                transactionResult.transaction.sign(backend);
+                const signature = await connection.sendRawTransaction(
+                    transactionResult.transaction.serialize(),
+                    { skipPreflight: false }
+                );
+                const confirmation = await connection.confirmTransaction({
+                    signature,
+                    blockhash: transactionResult.blockhash,
+                    lastValidBlockHeight: transactionResult.lastValidBlockHeight,
+                }, 'confirmed');
+                if (confirmation.value.err) {
+                    throw new Error(JSON.stringify(confirmation.value.err));
+                }
+
+                const refreshedClaimState = await fetchUserClaimState(claimant);
+                if (refreshedClaimState) {
+                    const totalClaimedSol = lamportsToSolNumber(refreshedClaimState.claimedAmount);
+                    const nextClaimable = Math.max(0, holder.totalSolRewardsEarned - totalClaimedSol);
+                    updateHolderRewards(holder.address, {
+                        totalSolRewardsClaimed: totalClaimedSol,
+                        claimableSolRewards: nextClaimable,
+                    });
+                    recordClaimEvent({
+                        signature,
+                        claimantAddress: holder.address,
+                        delegatorAddress: backend.publicKey.toBase58(),
+                        grossAmountSol: Math.max(0, totalClaimedSol - claimedSol),
+                        claimantAmountSol: Math.max(0, (totalClaimedSol - claimedSol) * 0.9),
+                        delegatorFeeSol: Math.max(0, (totalClaimedSol - claimedSol) * 0.1),
+                        mode: 'delegated',
+                        timestamp: now,
+                    });
+                }
+
+                completed++;
+            } catch (error) {
+                console.error(`[Indexer] Auto claim failed for ${holder.address}:`, error);
+            }
+        }
+
+        return { attempted: eligibleHolders.length, completed };
+    } finally {
+        autoClaiming = false;
+    }
+}
+
 export async function indexLeaderboardSnapshot() {
     if (indexing) {
         return {
@@ -250,6 +337,7 @@ export async function indexLeaderboardSnapshot() {
                 setMeta('lastTreasuryScanAt', now);
                 setMeta('lastGravityDelta', lastGravityDelta);
                 setMeta('totalAccumulatedGravity', feeDistribution.totalGravity);
+                const autoClaims = await m('Run automatic token claims', () => runAutomaticTokenClaims(now));
 
                 return {
                     skipped: false,
@@ -258,6 +346,7 @@ export async function indexLeaderboardSnapshot() {
                     totalSupply: supply.amount,
                     treasuryBalanceSol,
                     totalFeesAccumulatedSol,
+                    autoClaimsCompleted: autoClaims.completed,
                     epochIndex,
                     timestamp: now
                 };
