@@ -27,3 +27,12 @@ pub struct UserClaim {
     pub claimed_amount: u64,
     pub bump: u8,
 }
+
+#[account]
+#[derive(InitSpace)]
+pub struct UserDelegationSettings {
+    pub user: Pubkey,
+    pub pool: Pubkey,
+    pub delegated_claims_enabled: bool,
+    pub bump: u8,
+}

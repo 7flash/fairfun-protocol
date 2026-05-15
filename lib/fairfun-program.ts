@@ -7,7 +7,10 @@ import { connection } from './solana';
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const USER_CLAIM_ACCOUNT_SIZE = 8 + 32 + 32 + 8 + 1;
+const USER_DELEGATION_SETTINGS_ACCOUNT_SIZE = 8 + 32 + 32 + 1 + 1;
 const REWARD_POOL_ACCOUNT_SIZE = 8 + 32 + 8 + 8 + 1 + 1 + 1;
+export const DELEGATED_CLAIM_FEE_BPS = 1_000;
+export const BASIS_POINTS_DENOMINATOR = 10_000;
 
 export interface RewardPoolState {
     tokenMint: PublicKey;
@@ -22,6 +25,13 @@ export interface UserClaimState {
     user: PublicKey;
     pool: PublicKey;
     claimedAmount: bigint;
+    bump: number;
+}
+
+export interface UserDelegationSettingsState {
+    user: PublicKey;
+    pool: PublicKey;
+    delegatedClaimsEnabled: boolean;
     bump: number;
 }
 
@@ -43,6 +53,10 @@ export function deriveTreasuryPda(tokenMint = new PublicKey(config.token.mint)) 
 
 export function deriveUserClaimPda(user: PublicKey, pool = derivePoolPda()) {
     return PublicKey.findProgramAddressSync([Buffer.from('rewards_user_claim'), pool.toBuffer(), user.toBuffer()], getProgramId())[0];
+}
+
+export function deriveUserDelegationSettingsPda(user: PublicKey, pool = derivePoolPda()) {
+    return PublicKey.findProgramAddressSync([Buffer.from('rewards_user_delegation_settings'), pool.toBuffer(), user.toBuffer()], getProgramId())[0];
 }
 
 function accountDiscriminator(name: string) {
@@ -106,6 +120,20 @@ export function decodeUserClaim(buffer: Buffer): UserClaimState {
     };
 }
 
+export function decodeUserDelegationSettings(buffer: Buffer): UserDelegationSettingsState {
+    assertDiscriminator(buffer, accountDiscriminator('UserDelegationSettings'), 'UserDelegationSettings');
+    if (buffer.length < USER_DELEGATION_SETTINGS_ACCOUNT_SIZE) {
+        throw new Error('UserDelegationSettings account data is too short');
+    }
+
+    return {
+        user: new PublicKey(buffer.subarray(8, 40)),
+        pool: new PublicKey(buffer.subarray(40, 72)),
+        delegatedClaimsEnabled: buffer.readUInt8(72) === 1,
+        bump: buffer.readUInt8(73),
+    };
+}
+
 export async function fetchRewardPoolState() {
     const pool = derivePoolPda();
     const account = await connection.getAccountInfo(pool, 'confirmed');
@@ -122,6 +150,15 @@ export async function fetchUserClaimState(user: PublicKey) {
         return null;
     }
     return decodeUserClaim(Buffer.from(account.data));
+}
+
+export async function fetchUserDelegationSettingsState(user: PublicKey) {
+    const settings = deriveUserDelegationSettingsPda(user);
+    const account = await connection.getAccountInfo(settings, 'confirmed');
+    if (!account) {
+        return null;
+    }
+    return decodeUserDelegationSettings(Buffer.from(account.data));
 }
 
 function resolveKeypairPath() {
@@ -284,3 +321,45 @@ export async function buildDelegatedClaimTransaction(
     };
 }
 
+export function buildSetDelegatedClaimsEnabledInstruction(
+    user: PublicKey,
+    enabled: boolean,
+) {
+    const pool = derivePoolPda();
+    const settings = deriveUserDelegationSettingsPda(user, pool);
+    const data = Buffer.alloc(8 + 1);
+    instructionDiscriminator('set_delegated_claims_enabled').copy(data, 0);
+    data.writeUInt8(enabled ? 1 : 0, 8);
+
+    return new TransactionInstruction({
+        programId: getProgramId(),
+        keys: [
+            { pubkey: user, isSigner: true, isWritable: true },
+            { pubkey: pool, isSigner: false, isWritable: true },
+            { pubkey: settings, isSigner: false, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        ],
+        data,
+    });
+}
+
+export async function buildSetDelegatedClaimsEnabledTransaction(
+    user: PublicKey,
+    enabled: boolean,
+) {
+    const instruction = buildSetDelegatedClaimsEnabledInstruction(user, enabled);
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+
+    const transaction = new Transaction({
+        feePayer: user,
+        blockhash,
+        lastValidBlockHeight,
+    }).add(instruction);
+
+    return {
+        transaction,
+        blockhash,
+        lastValidBlockHeight,
+        enabled,
+    };
+}

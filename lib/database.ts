@@ -16,6 +16,10 @@ function resetLegacyTables() {
         if (columns.length > 0 && (!names.has('id') || !names.has('tokenBalance'))) {
             legacy.exec('DROP TABLE IF EXISTS holders');
         }
+        if (columns.length > 0 && !names.has('delegatedClaimsEnabled')) {
+            legacy.exec('ALTER TABLE holders ADD COLUMN delegatedClaimsEnabled INTEGER DEFAULT 1');
+            legacy.exec('UPDATE holders SET delegatedClaimsEnabled = 1 WHERE delegatedClaimsEnabled IS NULL');
+        }
     } finally {
         legacy.close();
     }
@@ -32,6 +36,7 @@ export const db = new Database(dbPath, {
         totalSolRewardsEarned: z.number().default(0),
         totalSolRewardsClaimed: z.number().default(0),
         claimableSolRewards: z.number().default(0),
+        delegatedClaimsEnabled: z.boolean().default(true),
         lastHoldingUpdate: z.number().default(0),
         lastGravityUpdate: z.number().default(0),
         updatedAt: z.number().default(0)
@@ -79,6 +84,7 @@ export interface HolderRecord {
     totalSolRewardsEarned: number;
     totalSolRewardsClaimed: number;
     claimableSolRewards: number;
+    delegatedClaimsEnabled: boolean;
     lastHoldingUpdate: number;
     lastGravityUpdate: number;
     updatedAt: number;
@@ -146,6 +152,7 @@ export function upsertHolderSnapshot(input: HolderSnapshotInput): HolderRecord {
         totalSolRewardsEarned: existing?.totalSolRewardsEarned ?? 0,
         totalSolRewardsClaimed: existing?.totalSolRewardsClaimed ?? 0,
         claimableSolRewards: existing?.claimableSolRewards ?? 0,
+        delegatedClaimsEnabled: existing?.delegatedClaimsEnabled ?? true,
         lastHoldingUpdate: now,
         lastGravityUpdate: existing?.lastGravityUpdate ?? now,
         updatedAt: now
@@ -245,6 +252,7 @@ export function resetExcludedHolders(excludedAddresses: Set<string>, now = Date.
             totalSolRewardsEarned: 0,
             totalSolRewardsClaimed: 0,
             claimableSolRewards: 0,
+            delegatedClaimsEnabled: true,
             lastHoldingUpdate: now,
             lastGravityUpdate: now,
             updatedAt: now
@@ -359,7 +367,7 @@ export function getRecentTreasuryEvents(limit = 25, walletAddress?: string) {
 
 export function updateHolderRewards(
     address: string,
-    rewards: Partial<Pick<HolderRecord, 'totalSolRewardsEarned' | 'totalSolRewardsClaimed' | 'claimableSolRewards'>>
+    rewards: Partial<Pick<HolderRecord, 'totalSolRewardsEarned' | 'totalSolRewardsClaimed' | 'claimableSolRewards' | 'delegatedClaimsEnabled'>>
 ) {
     const holder = getHolder(address);
     if (!holder?.id) return null;
@@ -380,6 +388,7 @@ export function resetAllHolderRewards(now = Date.now()) {
             totalSolRewardsEarned: 0,
             totalSolRewardsClaimed: 0,
             claimableSolRewards: 0,
+            delegatedClaimsEnabled: holder.delegatedClaimsEnabled,
             updatedAt: now
         });
     }

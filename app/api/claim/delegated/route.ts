@@ -1,6 +1,6 @@
 import { PublicKey } from '@solana/web3.js';
-import { getHolder, getMetaNumber, updateHolderRewards } from '../../../../lib/database';
-import { buildDelegatedClaimTransaction, claimSigningEnabled, fetchRewardPoolState, lamportsToSolNumber, solToLamportsBigInt } from '../../../../lib/fairfun-program';
+import { getHolder, getMetaNumber } from '../../../../lib/database';
+import { BASIS_POINTS_DENOMINATOR, DELEGATED_CLAIM_FEE_BPS, buildDelegatedClaimTransaction, claimSigningEnabled, fetchRewardPoolState, fetchUserDelegationSettingsState, solToLamportsBigInt } from '../../../../lib/fairfun-program';
 
 const LAMPORT_IN_SOL = 1_000_000_000;
 const MIN_CLAIMABLE_SOL = 1 / LAMPORT_IN_SOL;
@@ -31,6 +31,11 @@ export async function POST(req: Request) {
         if (!holder) {
             return Response.json({ success: false, error: 'Claimant wallet has no indexed rewards yet.' }, { status: 404 });
         }
+        const delegationSettings = await fetchUserDelegationSettingsState(new PublicKey(claimantAddress));
+        const delegatedClaimsEnabled = delegationSettings?.delegatedClaimsEnabled ?? holder.delegatedClaimsEnabled ?? true;
+        if (!delegatedClaimsEnabled) {
+            return Response.json({ success: false, error: 'This wallet disabled delegated claims.' }, { status: 409 });
+        }
 
         const pool = await fetchRewardPoolState();
         if (!pool.active) {
@@ -49,6 +54,9 @@ export async function POST(req: Request) {
             cumulativeEarned,
             observedTotalDeposits,
         );
+        const grossClaimLamports = cumulativeEarned;
+        const delegatorFeeLamports = grossClaimLamports * BigInt(DELEGATED_CLAIM_FEE_BPS) / BigInt(BASIS_POINTS_DENOMINATOR);
+        const claimantPayoutLamports = grossClaimLamports - delegatorFeeLamports;
 
         return Response.json({
             success: true,
@@ -58,6 +66,9 @@ export async function POST(req: Request) {
             expiresAt: transactionResult.expiresAt,
             observedTotalDeposits: observedTotalDeposits.toString(),
             cumulativeEarned: cumulativeEarned.toString(),
+            claimantPayout: claimantPayoutLamports.toString(),
+            delegatorFee: delegatorFeeLamports.toString(),
+            delegatedClaimFeeBps: DELEGATED_CLAIM_FEE_BPS,
             signer: transactionResult.signerPubkey,
             claimant: transactionResult.claimantPubkey,
             delegator: transactionResult.delegatorPubkey,

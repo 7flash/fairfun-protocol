@@ -60,6 +60,7 @@ The program owns:
 - per-token rewards pool PDA
 - per-token treasury PDA
 - per-user claim state PDA
+- per-user delegated-claim preference PDA
 
 Main PDA derivations:
 
@@ -68,6 +69,7 @@ config   = PDA(["rewards_config"], program_id)
 pool     = PDA(["rewards_pool", token_mint], program_id)
 treasury = PDA(["rewards_treasury", token_mint], program_id)
 user     = PDA(["rewards_user_claim", pool, wallet], program_id)
+prefs    = PDA(["rewards_user_delegation_settings", pool, wallet], program_id)
 ```
 
 ### 2. Indexer process
@@ -250,6 +252,9 @@ Claim support:
 - if `rewards.backend_keypair_path` is empty, the app stays read-only
 - if `rewards.backend_keypair_path` points to the backend authority keypair, the app signs claims directly in the web process
 - claim expiry is controlled by `rewards.claim_expires_in_seconds`
+- delegated claims are enabled by default
+- delegated claimers receive a 10% cut of the claimed SOL
+- each wallet can opt out of delegated claims from the frontend
 
 ## Claim Model
 
@@ -266,6 +271,15 @@ claimable = cumulative_earned - previously_claimed
 ```
 
 This keeps accounting monotonic and prevents replaying old claims.
+
+Delegated claims use the same cumulative accounting, but split the payout:
+
+```text
+claimant receives 90%
+delegator receives 10%
+```
+
+The current treasury and payout asset are SOL. Token buyback payouts are not implemented in this version.
 
 ## Program Safety Checks
 

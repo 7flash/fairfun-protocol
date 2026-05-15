@@ -42,4 +42,8 @@ pub enum FairfunRewardsError {
     ClaimExceedsPoolDeposits,
     #[msg("Treasury balance is insufficient")]
     InsufficientTreasury,
+    #[msg("Delegated claims are disabled for this user")]
+    DelegatedClaimsDisabled,
+    #[msg("Delegator and claimant must be different wallets")]
+    InvalidDelegatedClaimTarget,
 }

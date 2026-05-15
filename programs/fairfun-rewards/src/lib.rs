@@ -9,7 +9,10 @@ mod state;
 
 use errors::FairfunRewardsError;
 use introspection::verify_ed25519_ix_integrity;
-pub use state::{GlobalConfig, RewardPool, UserClaim};
+pub use state::{GlobalConfig, RewardPool, UserClaim, UserDelegationSettings};
+
+const DELEGATED_CLAIM_FEE_BPS: u64 = 1_000;
+const BASIS_POINTS_DENOMINATOR: u64 = 10_000;
 
 declare_id!("HsydRBzU6Bcw6ku3h4K6JqimRTxTeCfvZQL6yDBvAi4A");
 
@@ -45,6 +48,29 @@ fn calculate_claimable(
     );
 
     Ok(claimable)
+}
+
+fn calculate_delegated_claim_split(claimable: u64) -> (u64, u64) {
+    let delegator_fee = claimable
+        .checked_mul(DELEGATED_CLAIM_FEE_BPS)
+        .unwrap()
+        / BASIS_POINTS_DENOMINATOR;
+    let claimant_amount = claimable.checked_sub(delegator_fee).unwrap();
+    (claimant_amount, delegator_fee)
+}
+
+fn initialize_delegation_settings_if_empty(
+    settings: &mut Account<UserDelegationSettings>,
+    user: Pubkey,
+    pool: Pubkey,
+    bump: u8,
+) {
+    if settings.user == Pubkey::default() && settings.pool == Pubkey::default() {
+        settings.user = user;
+        settings.pool = pool;
+        settings.delegated_claims_enabled = true;
+        settings.bump = bump;
+    }
 }
 
 #[program]
@@ -215,6 +241,24 @@ pub mod fairfun_rewards {
         Ok(())
     }
 
+    pub fn set_delegated_claims_enabled(
+        ctx: Context<SetDelegatedClaimsEnabled>,
+        enabled: bool,
+    ) -> Result<()> {
+        let settings = &mut ctx.accounts.settings;
+        initialize_delegation_settings_if_empty(
+            settings,
+            ctx.accounts.user.key(),
+            ctx.accounts.pool.key(),
+            ctx.bumps.settings,
+        );
+        settings.user = ctx.accounts.user.key();
+        settings.pool = ctx.accounts.pool.key();
+        settings.delegated_claims_enabled = enabled;
+        settings.bump = ctx.bumps.settings;
+        Ok(())
+    }
+
     pub fn delegated_claim(
         ctx: Context<DelegatedClaim>,
         claimant: Pubkey,
@@ -229,6 +273,21 @@ pub mod fairfun_rewards {
         );
 
         require!(ctx.accounts.pool.active, FairfunRewardsError::PoolInactive);
+        require_keys_neq!(
+            ctx.accounts.delegator.key(),
+            claimant,
+            FairfunRewardsError::InvalidDelegatedClaimTarget
+        );
+        initialize_delegation_settings_if_empty(
+            &mut ctx.accounts.claimant_settings,
+            claimant,
+            ctx.accounts.pool.key(),
+            ctx.bumps.claimant_settings,
+        );
+        require!(
+            ctx.accounts.claimant_settings.delegated_claims_enabled,
+            FairfunRewardsError::DelegatedClaimsDisabled
+        );
 
         // Anyone can claim for anyone else - no approval needed
 
@@ -269,6 +328,7 @@ pub mod fairfun_rewards {
             ctx.accounts.pool.total_claimed,
         )?;
         let new_total_claimed = ctx.accounts.pool.total_claimed.checked_add(claimable).unwrap();
+        let (claimant_amount, delegator_fee) = calculate_delegated_claim_split(claimable);
         require!(
             ctx.accounts.treasury.lamports() >= claimable,
             FairfunRewardsError::InsufficientTreasury
@@ -277,14 +337,14 @@ pub mod fairfun_rewards {
         let treasury_bump = ctx.accounts.pool.treasury_bump;
         let token_mint = ctx.accounts.pool.token_mint;
         let signer_seeds: &[&[u8]] = &[b"rewards_treasury", token_mint.as_ref(), &[treasury_bump]];
-        let transfer_instruction = anchor_lang::solana_program::system_instruction::transfer(
+        let claimant_transfer_instruction = anchor_lang::solana_program::system_instruction::transfer(
             &ctx.accounts.treasury.key(),
             &claimant,
-            claimable,
+            claimant_amount,
         );
 
         anchor_lang::solana_program::program::invoke_signed(
-            &transfer_instruction,
+            &claimant_transfer_instruction,
             &[
                 ctx.accounts.treasury.to_account_info(),
                 ctx.accounts.claimant.to_account_info(),
@@ -292,6 +352,24 @@ pub mod fairfun_rewards {
             ],
             &[signer_seeds],
         )?;
+
+        if delegator_fee > 0 {
+            let delegator_transfer_instruction = anchor_lang::solana_program::system_instruction::transfer(
+                &ctx.accounts.treasury.key(),
+                &ctx.accounts.delegator.key(),
+                delegator_fee,
+            );
+
+            anchor_lang::solana_program::program::invoke_signed(
+                &delegator_transfer_instruction,
+                &[
+                    ctx.accounts.treasury.to_account_info(),
+                    ctx.accounts.delegator.to_account_info(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
+                &[signer_seeds],
+            )?;
+        }
 
         user_claim.user = claimant;
         user_claim.pool = ctx.accounts.pool.key();
@@ -491,6 +569,30 @@ pub struct SetPoolActive<'info> {
 }
 
 #[derive(Accounts)]
+pub struct SetDelegatedClaimsEnabled<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"rewards_pool", pool.token_mint.as_ref()],
+        bump = pool.bump,
+    )]
+    pub pool: Account<'info, RewardPool>,
+
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = UserDelegationSettings::DISCRIMINATOR.len() + UserDelegationSettings::INIT_SPACE,
+        seeds = [b"rewards_user_delegation_settings", pool.key().as_ref(), user.key().as_ref()],
+        bump,
+    )]
+    pub settings: Account<'info, UserDelegationSettings>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 #[instruction(claimant: Pubkey)]
 pub struct DelegatedClaim<'info> {
     #[account(mut)]
@@ -504,6 +606,15 @@ pub struct DelegatedClaim<'info> {
         bump,
     )]
     pub user_claim: Account<'info, UserClaim>,
+
+    #[account(
+        init_if_needed,
+        payer = delegator,
+        space = UserDelegationSettings::DISCRIMINATOR.len() + UserDelegationSettings::INIT_SPACE,
+        seeds = [b"rewards_user_delegation_settings", pool.key().as_ref(), claimant.key().as_ref()],
+        bump,
+    )]
+    pub claimant_settings: Account<'info, UserDelegationSettings>,
 
     #[account(
         seeds = [b"rewards_config"],
@@ -580,6 +691,13 @@ mod tests {
     fn calculate_claimable_rejects_snapshot_above_pool() {
         let result = calculate_claimable(100, 250, 600, 500, 100);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn delegated_claim_split_keeps_ten_percent_fee() {
+        let (claimant_amount, delegator_fee) = calculate_delegated_claim_split(1_000);
+        assert_eq!(claimant_amount, 900);
+        assert_eq!(delegator_fee, 100);
     }
 
     #[test]

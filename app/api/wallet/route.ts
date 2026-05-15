@@ -3,7 +3,7 @@ import { PublicKey } from '@solana/web3.js';
 import { getHolder, getHolderRank, getMetaNumber } from '../../../lib/database';
 import { formatAddress } from '../../../lib/solana';
 import { formatGravity, formatSOL, formatUSD } from '../../../lib/gravity';
-import { claimSigningEnabled, fetchUserClaimState, lamportsToSolNumber } from '../../../lib/fairfun-program';
+import { BASIS_POINTS_DENOMINATOR, DELEGATED_CLAIM_FEE_BPS, claimSigningEnabled, fetchUserClaimState, fetchUserDelegationSettingsState, lamportsToSolNumber } from '../../../lib/fairfun-program';
 
 const LAMPORT_IN_SOL = 1_000_000_000;
 const MIN_CLAIMABLE_SOL = 1 / LAMPORT_IN_SOL;
@@ -43,6 +43,9 @@ export async function GET(req: Request) {
                     totalSolRewardsClaimedFormatted: '0 SOL',
                     claimableSolRewards: 0,
                     claimableSolRewardsFormatted: '0 SOL',
+                    delegatedClaimsEnabled: true,
+                    delegatedClaimFeeBps: DELEGATED_CLAIM_FEE_BPS,
+                    delegatedClaimFeePercent: DELEGATED_CLAIM_FEE_BPS / BASIS_POINTS_DENOMINATOR * 100,
                     claimEnabled: false,
                     claimDisabledReason: claimSigningEnabled()
                         ? 'No claimable rewards yet.'
@@ -53,12 +56,17 @@ export async function GET(req: Request) {
 
         let claimedSol = holder.totalSolRewardsClaimed;
         let claimableSol = holder.claimableSolRewards;
+        let delegatedClaimsEnabled = holder.delegatedClaimsEnabled;
 
         try {
             const claimState = await fetchUserClaimState(new PublicKey(address));
             if (claimState) {
                 claimedSol = clampSolAmount(lamportsToSolNumber(claimState.claimedAmount));
                 claimableSol = clampSolAmount(Math.max(0, holder.totalSolRewardsEarned - claimedSol));
+            }
+            const delegationSettings = await fetchUserDelegationSettingsState(new PublicKey(address));
+            if (delegationSettings) {
+                delegatedClaimsEnabled = delegationSettings.delegatedClaimsEnabled;
             }
         } catch {
             // Fall back to indexed claim state if the onchain read fails.
@@ -91,6 +99,9 @@ export async function GET(req: Request) {
                 totalSolRewardsClaimedFormatted: formatSOL(claimedSol),
                 claimableSolRewards: claimableSol,
                 claimableSolRewardsFormatted: formatSOL(claimableSol),
+                delegatedClaimsEnabled,
+                delegatedClaimFeeBps: DELEGATED_CLAIM_FEE_BPS,
+                delegatedClaimFeePercent: DELEGATED_CLAIM_FEE_BPS / BASIS_POINTS_DENOMINATOR * 100,
                 claimEnabled,
                 claimDisabledReason: claimEnabled
                     ? ''

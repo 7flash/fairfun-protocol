@@ -46,6 +46,7 @@ export async function GET(req: Request) {
                 totalSolRewardsClaimed: holder.totalSolRewardsClaimed,
                 claimableSolRewards: holder.claimableSolRewards,
                 claimableSolRewardsFormatted: formatSOL(holder.claimableSolRewards),
+                delegatedClaimsEnabled: holder.delegatedClaimsEnabled,
                 lastUpdated: holder.updatedAt
             };
             });
