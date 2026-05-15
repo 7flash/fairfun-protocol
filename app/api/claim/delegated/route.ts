@@ -1,13 +1,7 @@
 import { PublicKey } from '@solana/web3.js';
 import { getHolder, getMetaNumber } from '../../../../lib/database';
-import { BASIS_POINTS_DENOMINATOR, DELEGATED_CLAIM_FEE_BPS, buildDelegatedClaimTransaction, claimSigningEnabled, fetchRewardPoolState, fetchUserDelegationSettingsState, solToLamportsBigInt } from '../../../../lib/fairfun-program';
-
-const LAMPORT_IN_SOL = 1_000_000_000;
-const MIN_CLAIMABLE_SOL = 1 / LAMPORT_IN_SOL;
-
-function clampSolAmount(value: number) {
-    return Math.abs(value) < MIN_CLAIMABLE_SOL ? 0 : value;
-}
+import { BASIS_POINTS_DENOMINATOR, DELEGATED_CLAIM_FEE_BPS, claimSigningEnabled, fetchUserDelegationSettingsState, loadBackendKeypair, prepareClaimAmounts, solToLamportsBigInt } from '../../../../lib/fairfun-program';
+import { buildVersionedDelegatedTokenClaimTransaction } from '../../../../lib/tokenized-claims';
 
 export async function POST(req: Request) {
     try {
@@ -37,41 +31,50 @@ export async function POST(req: Request) {
             return Response.json({ success: false, error: 'This wallet disabled delegated claims.' }, { status: 409 });
         }
 
-        const pool = await fetchRewardPoolState();
-        if (!pool.active) {
+        const claimantPublicKey = new PublicKey(claimantAddress);
+        const delegatorPublicKey = new PublicKey(delegatorAddress);
+        const backend = loadBackendKeypair();
+        const preparedClaim = await prepareClaimAmounts(
+            claimantPublicKey,
+            solToLamportsBigInt(holder.totalSolRewardsEarned),
+            solToLamportsBigInt(getMetaNumber('totalFeesAccumulatedSol')),
+        );
+        if (!preparedClaim.poolActive) {
             return Response.json({ success: false, error: 'Rewards pool is paused.' }, { status: 409 });
         }
-
-        const cumulativeEarned = solToLamportsBigInt(holder.totalSolRewardsEarned);
-        const observedTotalDeposits = solToLamportsBigInt(getMetaNumber('totalFeesAccumulatedSol'));
-        if (cumulativeEarned <= 0n || observedTotalDeposits <= 0n) {
+        if (preparedClaim.estimatedClaimableLamports <= 0n || preparedClaim.observedTotalDeposits <= 0n) {
             return Response.json({ success: false, error: 'Nothing to claim yet.' }, { status: 409 });
         }
 
-        const transactionResult = await buildDelegatedClaimTransaction(
-            new PublicKey(delegatorAddress),
-            new PublicKey(claimantAddress),
-            cumulativeEarned,
-            observedTotalDeposits,
+        const transactionResult = await buildVersionedDelegatedTokenClaimTransaction(
+            backend,
+            delegatorPublicKey,
+            claimantPublicKey,
+            preparedClaim.cumulativeEarned,
+            preparedClaim.observedTotalDeposits,
+            preparedClaim.estimatedClaimableLamports,
         );
-        const grossClaimLamports = cumulativeEarned;
+        const grossClaimLamports = preparedClaim.estimatedClaimableLamports;
         const delegatorFeeLamports = grossClaimLamports * BigInt(DELEGATED_CLAIM_FEE_BPS) / BigInt(BASIS_POINTS_DENOMINATOR);
         const claimantPayoutLamports = grossClaimLamports - delegatorFeeLamports;
 
         return Response.json({
             success: true,
-            transaction: transactionResult.transaction.serialize({ requireAllSignatures: false }).toString('base64'),
+            transaction: Buffer.from(transactionResult.transaction.serialize()).toString('base64'),
+            version: 0,
             blockhash: transactionResult.blockhash,
             lastValidBlockHeight: transactionResult.lastValidBlockHeight,
-            expiresAt: transactionResult.expiresAt,
-            observedTotalDeposits: observedTotalDeposits.toString(),
-            cumulativeEarned: cumulativeEarned.toString(),
+            observedTotalDeposits: preparedClaim.observedTotalDeposits.toString(),
+            cumulativeEarned: preparedClaim.cumulativeEarned.toString(),
+            estimatedClaimable: grossClaimLamports.toString(),
             claimantPayout: claimantPayoutLamports.toString(),
             delegatorFee: delegatorFeeLamports.toString(),
             delegatedClaimFeeBps: DELEGATED_CLAIM_FEE_BPS,
-            signer: transactionResult.signerPubkey,
-            claimant: transactionResult.claimantPubkey,
-            delegator: transactionResult.delegatorPubkey,
+            signer: backend.publicKey.toBase58(),
+            claimant: claimantPublicKey.toBase58(),
+            delegator: delegatorPublicKey.toBase58(),
+            lookupTableAddress: transactionResult.lookupTableAddress,
+            minimumTokenAmountOut: transactionResult.minimumTokenAmountOut,
         });
     } catch (error) {
         console.error('Error building delegated claim transaction:', error);

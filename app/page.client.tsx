@@ -1339,10 +1339,14 @@ export default function mount() {
                     if (!web3) {
                         throw new Error('Unable to load web3 claim dependencies.');
                     }
-                    const { Connection, Transaction } = web3 as typeof import('@solana/web3.js');
-                    const tx = measureFrontendSync('decode delegated claim transaction', () =>
-                        Transaction.from(Uint8Array.from(atob(data.transaction), (char) => char.charCodeAt(0)))
-                    );
+                    const { Connection, Transaction, VersionedTransaction } = web3 as typeof import('@solana/web3.js');
+                    const tx = measureFrontendSync('decode delegated claim transaction', () => {
+                        const bytes = Uint8Array.from(atob(data.transaction), (char) => char.charCodeAt(0));
+                        if (data.version === 0) {
+                            return VersionedTransaction.deserialize(bytes);
+                        }
+                        return Transaction.from(bytes);
+                    });
                     if (!tx) {
                         throw new Error('Unable to decode delegated claim transaction.');
                     }

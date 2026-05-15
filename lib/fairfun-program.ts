@@ -13,6 +13,8 @@ const LAMPORTS_PER_SOL = 1_000_000_000;
 const USER_CLAIM_ACCOUNT_SIZE = 8 + 32 + 32 + 8 + 1;
 const USER_DELEGATION_SETTINGS_ACCOUNT_SIZE = 8 + 32 + 32 + 1 + 1;
 const REWARD_POOL_ACCOUNT_SIZE = 8 + 32 + 8 + 8 + 1 + 1 + 1;
+const TOKENIZED_CLAIM_MIN_OUTPUT_BPS = 9_500n;
+const TOKENIZED_CLAIM_BPS_DENOMINATOR = 10_000n;
 export const DELEGATED_CLAIM_FEE_BPS = 1_000;
 export const BASIS_POINTS_DENOMINATOR = 10_000;
 
@@ -37,6 +39,16 @@ export interface UserDelegationSettingsState {
     pool: PublicKey;
     delegatedClaimsEnabled: boolean;
     bump: number;
+}
+
+export interface PreparedClaimAmounts {
+    poolActive: boolean;
+    claimedAmount: bigint;
+    cumulativeEarned: bigint;
+    estimatedClaimableLamports: bigint;
+    observedTotalDeposits: bigint;
+    onchainTotalReceived: bigint;
+    remainingPoolCapacity: bigint;
 }
 
 export function getProgramId() {
@@ -147,6 +159,12 @@ export async function fetchRewardPoolState() {
     return decodeRewardPool(Buffer.from(account.data));
 }
 
+export async function fetchOnchainTotalReceived(poolState?: RewardPoolState) {
+    const pool = poolState ?? await fetchRewardPoolState();
+    const treasuryBalance = BigInt(await connection.getBalance(deriveTreasuryPda(pool.tokenMint), 'confirmed'));
+    return treasuryBalance + pool.totalClaimed;
+}
+
 export async function fetchUserClaimState(user: PublicKey) {
     const userClaim = deriveUserClaimPda(user);
     const account = await connection.getAccountInfo(userClaim, 'confirmed');
@@ -214,6 +232,43 @@ export function solToLamportsBigInt(amount: number) {
 
 export function lamportsToSolNumber(amount: bigint) {
     return Number(amount) / LAMPORTS_PER_SOL;
+}
+
+export async function prepareClaimAmounts(
+    user: PublicKey,
+    totalEarnedLamports: bigint,
+    observedTotalDepositsLamports: bigint,
+): Promise<PreparedClaimAmounts> {
+    const pool = await fetchRewardPoolState();
+    const claimState = await fetchUserClaimState(user);
+    const claimedAmount = claimState?.claimedAmount ?? 0n;
+    const onchainTotalReceived = await fetchOnchainTotalReceived(pool);
+    const observedTotalDeposits = observedTotalDepositsLamports < onchainTotalReceived
+        ? observedTotalDepositsLamports
+        : onchainTotalReceived;
+    const cappedEarned = totalEarnedLamports < observedTotalDeposits
+        ? totalEarnedLamports
+        : observedTotalDeposits;
+    const remainingPoolCapacity = onchainTotalReceived > pool.totalClaimed
+        ? onchainTotalReceived - pool.totalClaimed
+        : 0n;
+    const maxCumulativeEarned = claimedAmount + remainingPoolCapacity;
+    const cumulativeEarned = cappedEarned < maxCumulativeEarned
+        ? cappedEarned
+        : maxCumulativeEarned;
+    const estimatedClaimableLamports = cumulativeEarned > claimedAmount
+        ? cumulativeEarned - claimedAmount
+        : 0n;
+
+    return {
+        poolActive: pool.active,
+        claimedAmount,
+        cumulativeEarned,
+        estimatedClaimableLamports,
+        observedTotalDeposits,
+        onchainTotalReceived,
+        remainingPoolCapacity,
+    };
 }
 
 export function buildClaimInstruction(
@@ -395,6 +450,8 @@ export async function buildDelegatedClaimToTokensTransaction(
         creator: swapState.pool.creator,
         feeConfig: swapState.feeConfig,
     });
+    const quotedBaseAmountOut = BigInt(quote.base.toString());
+    const minimumTokenAmountOut = quotedBaseAmountOut * TOKENIZED_CLAIM_MIN_OUTPUT_BPS / TOKENIZED_CLAIM_BPS_DENOMINATOR;
 
     const treasuryTokenAccount = getAssociatedTokenAddressSync(
         new PublicKey(config.token.mint),
@@ -427,7 +484,7 @@ export async function buildDelegatedClaimToTokensTransaction(
     data.writeBigUInt64LE(cumulativeEarned, 40);
     data.writeBigUInt64LE(observedTotalDeposits, 48);
     data.writeBigInt64LE(expiresAt, 56);
-    data.writeBigUInt64LE(BigInt(quote.base.toString()), 64);
+    data.writeBigUInt64LE(minimumTokenAmountOut, 64);
 
     const instruction = new TransactionInstruction({
         programId: getProgramId(),
@@ -487,7 +544,7 @@ export async function buildDelegatedClaimToTokensTransaction(
         signerPubkey: signer.publicKey.toBase58(),
         claimantPubkey: claimant.toBase58(),
         delegatorPubkey: delegator.toBase58(),
-        minimumTokenAmountOut: quote.base.toString(),
+        minimumTokenAmountOut: minimumTokenAmountOut.toString(),
     };
 }
 

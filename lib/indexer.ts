@@ -20,7 +20,8 @@ import {
 } from './database';
 import { config } from './config';
 import { derivePrimaryDepositorAddress } from './treasury';
-import { buildDelegatedClaimToTokensTransaction, claimSigningEnabled, fetchUserClaimState, lamportsToSolNumber, loadBackendKeypair, solToLamportsBigInt } from './fairfun-program';
+import { claimSigningEnabled, fetchUserClaimState, lamportsToSolNumber, loadBackendKeypair, prepareClaimAmounts, solToLamportsBigInt } from './fairfun-program';
+import { sendSignedDelegatedTokenClaimTransaction } from './tokenized-claims';
 
 let indexing = false;
 let interval: ReturnType<typeof setInterval> | null = null;
@@ -90,53 +91,65 @@ async function getTreasuryInflowStats(now: number) {
     let processed = 0;
     const MAX_TRANSACTIONS_PER_RUN = 1000;
 
-    while (!stop && processed < MAX_TRANSACTIONS_PER_RUN) {
-        const signatures = await connection.getSignaturesForAddress(treasury, { before, limit: 100 }, 'confirmed');
-        if (signatures.length === 0) break;
+    try {
+        while (!stop && processed < MAX_TRANSACTIONS_PER_RUN) {
+            const signatures = await connection.getSignaturesForAddress(treasury, { before, limit: 100 }, 'confirmed');
+            if (signatures.length === 0) break;
 
-        for (const signatureInfo of signatures) {
-            if (!newestSeen) newestSeen = signatureInfo.signature;
-            if (signatureInfo.signature === lastProcessedSignature) {
-                stop = true;
-                break;
-            }
-            if (signatureInfo.blockTime && signatureInfo.blockTime * 1000 < launchTs) {
-                stop = true;
-                break;
-            }
+            for (const signatureInfo of signatures) {
+                if (!newestSeen) newestSeen = signatureInfo.signature;
+                if (signatureInfo.signature === lastProcessedSignature) {
+                    stop = true;
+                    break;
+                }
+                if (signatureInfo.blockTime && signatureInfo.blockTime * 1000 < launchTs) {
+                    stop = true;
+                    break;
+                }
 
-            processed++;
-            const tx = await connection.getTransaction(signatureInfo.signature, {
-                commitment: 'confirmed',
-                maxSupportedTransactionVersion: 0
-            });
-            if (!tx?.meta || !tx.transaction) continue;
-
-            const accountKeys = tx.transaction.message.getAccountKeys().staticAccountKeys;
-            const treasuryIndex = accountKeys.findIndex((key) => key.equals(treasury));
-            if (treasuryIndex < 0) continue;
-
-            const pre = tx.meta.preBalances[treasuryIndex] ?? 0;
-            const post = tx.meta.postBalances[treasuryIndex] ?? 0;
-            const preDistributable = Math.max(0, pre / 1_000_000_000 - rentReserveSol);
-            const postDistributable = Math.max(0, post / 1_000_000_000 - rentReserveSol);
-            const deltaLamports = Math.round((postDistributable - preDistributable) * 1_000_000_000);
-            if (deltaLamports > 0) {
-                const amountSol = deltaLamports / 1_000_000_000;
-                feeDeltaSol += amountSol;
-                const depositorAddress = derivePrimaryDepositorAddress(tx, treasury);
-                events.push({
-                    signature: signatureInfo.signature,
-                    amountSol,
-                    depositorAddress,
-                    slot: signatureInfo.slot,
-                    timestamp: signatureInfo.blockTime ? signatureInfo.blockTime * 1000 : now,
+                processed++;
+                const tx = await connection.getTransaction(signatureInfo.signature, {
+                    commitment: 'confirmed',
+                    maxSupportedTransactionVersion: 0
                 });
-            }
-        }
+                if (!tx?.meta || !tx.transaction) continue;
 
-        before = signatures[signatures.length - 1]?.signature;
-        if (signatures.length < 100) break;
+                const accountKeys = tx.transaction.message.getAccountKeys({
+                    accountKeysFromLookups: tx.meta.loadedAddresses ?? undefined,
+                }).keySegments().flat();
+                const treasuryIndex = accountKeys.findIndex((key) => key.equals(treasury));
+                if (treasuryIndex < 0) continue;
+
+                const pre = tx.meta.preBalances[treasuryIndex] ?? 0;
+                const post = tx.meta.postBalances[treasuryIndex] ?? 0;
+                const preDistributable = Math.max(0, pre / 1_000_000_000 - rentReserveSol);
+                const postDistributable = Math.max(0, post / 1_000_000_000 - rentReserveSol);
+                const deltaLamports = Math.round((postDistributable - preDistributable) * 1_000_000_000);
+                if (deltaLamports > 0) {
+                    const amountSol = deltaLamports / 1_000_000_000;
+                    feeDeltaSol += amountSol;
+                    const depositorAddress = derivePrimaryDepositorAddress(tx, treasury);
+                    events.push({
+                        signature: signatureInfo.signature,
+                        amountSol,
+                        depositorAddress,
+                        slot: signatureInfo.slot,
+                        timestamp: signatureInfo.blockTime ? signatureInfo.blockTime * 1000 : now,
+                    });
+                }
+            }
+
+            before = signatures[signatures.length - 1]?.signature;
+            if (signatures.length < 100) break;
+        }
+    } catch (error) {
+        console.error('[Indexer] Treasury inflow scan failed:', error);
+        return {
+            totalFeesAccumulatedSol: existingTotal,
+            feeDeltaSol: 0,
+            latestSignature: newestSeen || lastProcessedSignature,
+            events: [] as Array<TreasuryEventInput & { observedTotalDepositsSol: number }>,
+        };
     }
 
     const orderedEvents = events.reverse();
@@ -173,37 +186,25 @@ async function runAutomaticTokenClaims(now: number) {
         for (const holder of eligibleHolders) {
             try {
                 const claimant = new PublicKey(holder.address);
-                const claimState = await fetchUserClaimState(claimant);
-                const claimedSol = claimState ? lamportsToSolNumber(claimState.claimedAmount) : 0;
-                const estimatedClaimableSol = Math.max(0, holder.totalSolRewardsEarned - claimedSol);
-                if (estimatedClaimableSol < AUTO_CLAIM_THRESHOLD_SOL) {
+                const preparedClaim = await prepareClaimAmounts(
+                    claimant,
+                    solToLamportsBigInt(holder.totalSolRewardsEarned),
+                    solToLamportsBigInt(getMetaNumber('totalFeesAccumulatedSol')),
+                );
+                const claimedSol = lamportsToSolNumber(preparedClaim.claimedAmount);
+                const estimatedClaimableSol = lamportsToSolNumber(preparedClaim.estimatedClaimableLamports);
+                if (estimatedClaimableSol < AUTO_CLAIM_THRESHOLD_SOL || preparedClaim.cumulativeEarned <= preparedClaim.claimedAmount) {
                     continue;
                 }
 
-                const cumulativeEarned = solToLamportsBigInt(holder.totalSolRewardsEarned);
-                const observedTotalDeposits = solToLamportsBigInt(getMetaNumber('totalFeesAccumulatedSol'));
-                const estimatedClaimableLamports = solToLamportsBigInt(estimatedClaimableSol);
-                const transactionResult = await buildDelegatedClaimToTokensTransaction(
-                    backend.publicKey,
+                const transactionResult = await sendSignedDelegatedTokenClaimTransaction(
+                    backend,
                     claimant,
-                    cumulativeEarned,
-                    observedTotalDeposits,
-                    estimatedClaimableLamports,
+                    preparedClaim.cumulativeEarned,
+                    preparedClaim.observedTotalDeposits,
+                    preparedClaim.estimatedClaimableLamports,
                 );
-
-                transactionResult.transaction.sign(backend);
-                const signature = await connection.sendRawTransaction(
-                    transactionResult.transaction.serialize(),
-                    { skipPreflight: false }
-                );
-                const confirmation = await connection.confirmTransaction({
-                    signature,
-                    blockhash: transactionResult.blockhash,
-                    lastValidBlockHeight: transactionResult.lastValidBlockHeight,
-                }, 'confirmed');
-                if (confirmation.value.err) {
-                    throw new Error(JSON.stringify(confirmation.value.err));
-                }
+                const signature = transactionResult.signature;
 
                 const refreshedClaimState = await fetchUserClaimState(claimant);
                 if (refreshedClaimState) {

@@ -1,6 +1,6 @@
 import { PublicKey } from '@solana/web3.js';
 import { getHolder, getMetaNumber, recordClaimEvent, updateHolderRewards } from '../../../lib/database';
-import { buildClaimTransaction, claimSigningEnabled, fetchRewardPoolState, fetchUserClaimState, lamportsToSolNumber, solToLamportsBigInt } from '../../../lib/fairfun-program';
+import { buildClaimTransaction, claimSigningEnabled, fetchUserClaimState, lamportsToSolNumber, prepareClaimAmounts, solToLamportsBigInt } from '../../../lib/fairfun-program';
 
 const LAMPORT_IN_SOL = 1_000_000_000;
 const MIN_CLAIMABLE_SOL = 1 / LAMPORT_IN_SOL;
@@ -26,26 +26,32 @@ export async function POST(req: Request) {
             return Response.json({ success: false, error: 'Wallet has no indexed rewards yet.' }, { status: 404 });
         }
 
-        const pool = await fetchRewardPoolState();
-        if (!pool.active) {
+        const preparedClaim = await prepareClaimAmounts(
+            new PublicKey(address),
+            solToLamportsBigInt(holder.totalSolRewardsEarned),
+            solToLamportsBigInt(getMetaNumber('totalFeesAccumulatedSol')),
+        );
+        if (!preparedClaim.poolActive) {
             return Response.json({ success: false, error: 'Rewards pool is paused.' }, { status: 409 });
         }
-
-        const cumulativeEarned = solToLamportsBigInt(holder.totalSolRewardsEarned);
-        const observedTotalDeposits = solToLamportsBigInt(getMetaNumber('totalFeesAccumulatedSol'));
-        if (cumulativeEarned <= 0n || observedTotalDeposits <= 0n) {
+        if (preparedClaim.estimatedClaimableLamports <= 0n || preparedClaim.observedTotalDeposits <= 0n) {
             return Response.json({ success: false, error: 'Nothing to claim yet.' }, { status: 409 });
         }
 
-        const transactionResult = await buildClaimTransaction(new PublicKey(address), cumulativeEarned, observedTotalDeposits);
+        const transactionResult = await buildClaimTransaction(
+            new PublicKey(address),
+            preparedClaim.cumulativeEarned,
+            preparedClaim.observedTotalDeposits,
+        );
         return Response.json({
             success: true,
             transaction: transactionResult.transaction.serialize({ requireAllSignatures: false }).toString('base64'),
             blockhash: transactionResult.blockhash,
             lastValidBlockHeight: transactionResult.lastValidBlockHeight,
             expiresAt: transactionResult.expiresAt,
-            observedTotalDeposits: observedTotalDeposits.toString(),
-            cumulativeEarned: cumulativeEarned.toString(),
+            observedTotalDeposits: preparedClaim.observedTotalDeposits.toString(),
+            cumulativeEarned: preparedClaim.cumulativeEarned.toString(),
+            estimatedClaimable: preparedClaim.estimatedClaimableLamports.toString(),
             signer: transactionResult.signerPubkey,
         });
     } catch (error) {

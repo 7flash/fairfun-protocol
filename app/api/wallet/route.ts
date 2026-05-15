@@ -3,7 +3,7 @@ import { PublicKey } from '@solana/web3.js';
 import { getHolder, getHolderRank, getMetaNumber } from '../../../lib/database';
 import { formatAddress } from '../../../lib/solana';
 import { formatGravity, formatSOL, formatUSD } from '../../../lib/gravity';
-import { BASIS_POINTS_DENOMINATOR, DELEGATED_CLAIM_FEE_BPS, claimSigningEnabled, fetchUserClaimState, fetchUserDelegationSettingsState, lamportsToSolNumber } from '../../../lib/fairfun-program';
+import { BASIS_POINTS_DENOMINATOR, DELEGATED_CLAIM_FEE_BPS, claimSigningEnabled, fetchUserDelegationSettingsState, lamportsToSolNumber, prepareClaimAmounts, solToLamportsBigInt } from '../../../lib/fairfun-program';
 
 const LAMPORT_IN_SOL = 1_000_000_000;
 const MIN_CLAIMABLE_SOL = 1 / LAMPORT_IN_SOL;
@@ -57,13 +57,17 @@ export async function GET(req: Request) {
         let claimedSol = holder.totalSolRewardsClaimed;
         let claimableSol = holder.claimableSolRewards;
         let delegatedClaimsEnabled = holder.delegatedClaimsEnabled;
+        let poolActive = true;
 
         try {
-            const claimState = await fetchUserClaimState(new PublicKey(address));
-            if (claimState) {
-                claimedSol = clampSolAmount(lamportsToSolNumber(claimState.claimedAmount));
-                claimableSol = clampSolAmount(Math.max(0, holder.totalSolRewardsEarned - claimedSol));
-            }
+            const preparedClaim = await prepareClaimAmounts(
+                new PublicKey(address),
+                solToLamportsBigInt(holder.totalSolRewardsEarned),
+                solToLamportsBigInt(getMetaNumber('totalFeesAccumulatedSol')),
+            );
+            poolActive = preparedClaim.poolActive;
+            claimedSol = clampSolAmount(lamportsToSolNumber(preparedClaim.claimedAmount));
+            claimableSol = clampSolAmount(lamportsToSolNumber(preparedClaim.estimatedClaimableLamports));
             const delegationSettings = await fetchUserDelegationSettingsState(new PublicKey(address));
             if (delegationSettings) {
                 delegatedClaimsEnabled = delegationSettings.delegatedClaimsEnabled;
@@ -75,7 +79,7 @@ export async function GET(req: Request) {
         claimedSol = clampSolAmount(claimedSol);
         claimableSol = clampSolAmount(claimableSol);
         const claimConfigured = claimSigningEnabled();
-        const claimEnabled = claimConfigured && claimableSol > 0;
+        const claimEnabled = claimConfigured && poolActive && claimableSol > 0;
 
         return Response.json({
             success: true,
@@ -105,7 +109,9 @@ export async function GET(req: Request) {
                 claimEnabled,
                 claimDisabledReason: claimEnabled
                     ? ''
-                    : (claimConfigured ? 'No claimable rewards yet.' : 'Backend signer keypair is not configured on the web process.')
+                    : (!claimConfigured
+                        ? 'Backend signer keypair is not configured on the web process.'
+                        : (!poolActive ? 'Rewards pool is paused.' : 'No claimable rewards yet.'))
             }
         });
     }, (error) => {
