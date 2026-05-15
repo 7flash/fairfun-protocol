@@ -183,7 +183,7 @@ export async function fetchUserDelegationSettingsState(user: PublicKey) {
     return decodeUserDelegationSettings(Buffer.from(account.data));
 }
 
-function parseConfiguredSecretKey(configuredValue: string) {
+export function parseConfiguredSecretKey(configuredValue: string) {
     const trimmedValue = configuredValue.trim();
     if (trimmedValue.length === 0) {
         throw new Error('Backend keypair is not configured');
@@ -224,6 +224,10 @@ export function claimSigningEnabled() {
 
 export function loadBackendKeypair() {
     return Keypair.fromSecretKey(parseConfiguredSecretKey(config.rewards.backendKeypairPath));
+}
+
+export function loadKeypairFromConfiguredValue(configuredValue: string) {
+    return Keypair.fromSecretKey(parseConfiguredSecretKey(configuredValue));
 }
 
 export function solToLamportsBigInt(amount: number) {

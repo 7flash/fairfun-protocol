@@ -9,12 +9,17 @@
         "typecheck": "tsc --noEmit",
         "dev:web": "bun --watch server.ts",
         "dev:indexer": "bun --watch indexer.ts",
+        "dev:claimer": "bun --watch claimer.ts",
+        "dev:creator-fees": "bun --watch creator-fees.ts",
         "start:web": "bun server.ts",
         "start:indexer": "bun indexer.ts",
+        "start:claimer": "bun claimer.ts",
+        "start:creator-fees": "bun creator-fees.ts",
         "test": "npm run build && npm run test:program && npm run check:program && npm run typecheck"
     },
     "dependencies": {
         "@coral-xyz/anchor": "^0.32.1",
+        "@pump-fun/pump-sdk": "^1.35.0",
         "@pump-fun/pump-swap-sdk": "^1.14.0",
         "@solana/spl-token": "^0.4.14",
         "@solana/web3.js": "^1.98.4",

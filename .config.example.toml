@@ -25,3 +25,17 @@ db_path = "./data/leaderboard.db"
 interval_ms = 60000
 launch_timestamp = 0
 token_price_usd = 0
+
+[claimer]
+interval_ms = 30000
+min_claim_sol = 0.01
+
+[creator_fees]
+enabled = false
+mint = "REPLACE_WITH_YOUR_TOKEN_MINT"
+wallet_keypair_path = ""
+interval_ms = 30000
+min_claim_lamports = 50000000
+priority_fee_microlamports = 10000
+compute_unit_limit = 250000
+treasury_topup_reserve_sol = 0.02
