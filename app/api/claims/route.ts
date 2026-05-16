@@ -2,6 +2,7 @@ import { measure } from 'measure-fn';
 import { getRecentClaimEvents } from '../../../lib/database';
 import { formatAddress } from '../../../lib/solana';
 import { formatSOL, getCurrentSolPrice, formatUSD } from '../../../lib/gravity';
+import { getClaimStatsSummary } from '../../../lib/claim-stats';
 
 export async function GET(req: Request) {
     return await measure('GET /api/claims', async () => {
@@ -9,6 +10,7 @@ export async function GET(req: Request) {
         const wallet = url.searchParams.get('wallet') ?? undefined;
         const limit = Number(url.searchParams.get('limit') ?? 50);
         const solPriceUsd = await getCurrentSolPrice();
+        const summary = await getClaimStatsSummary();
         const events = getRecentClaimEvents(limit, wallet)
             .filter((event) => event.grossAmountSol > 0 || event.claimantAmountSol > 0 || event.delegatorFeeSol > 0)
             .map((event) => ({
@@ -33,6 +35,7 @@ export async function GET(req: Request) {
             success: true,
             events,
             total: events.length,
+            summary,
             solPriceUsd,
             timestamp: Date.now(),
         });

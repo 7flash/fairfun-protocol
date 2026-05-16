@@ -691,6 +691,25 @@ a {
     border-radius: 2px;
 }
 
+.activity-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 10px;
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0)),
+        rgba(255, 255, 255, 0.015);
+}
+
+.activity-stat-card {
+    padding: 12px 12px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.02);
+    min-width: 0;
+}
+
 .board-tabs {
     display: flex;
     gap: 8px;

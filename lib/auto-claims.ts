@@ -21,6 +21,43 @@ function getEligibleHolders() {
         .sort((a, b) => b.claimableSolRewards - a.claimableSolRewards);
 }
 
+export function getClaimerPressureSnapshot() {
+    const eligibleHolders = getEligibleHolders();
+    const treasuryBalanceSol = getMetaNumber('treasuryBalanceSol', 0);
+    const eligibleClaimableSol = eligibleHolders.reduce((sum, holder) => sum + holder.claimableSolRewards, 0);
+    const coverageRatio = eligibleClaimableSol > 0 ? treasuryBalanceSol / eligibleClaimableSol : 0;
+    return {
+        treasuryBalanceSol,
+        eligibleHolderCount: eligibleHolders.length,
+        eligibleClaimableSol,
+        coverageRatio,
+    };
+}
+
+export function getRecommendedClaimerIntervalMs() {
+    const baseIntervalMs = config.claimer.intervalMs;
+    const thresholdSol = config.claimer.minClaimSol;
+    const snapshot = getClaimerPressureSnapshot();
+
+    let intervalMs = baseIntervalMs;
+    if (snapshot.eligibleHolderCount === 0) {
+        intervalMs = Math.max(baseIntervalMs, 15 * 60_000);
+    } else if (snapshot.treasuryBalanceSol < thresholdSol) {
+        intervalMs = Math.max(baseIntervalMs, 45 * 60_000);
+    } else if (snapshot.coverageRatio < 0.15) {
+        intervalMs = Math.max(baseIntervalMs, 30 * 60_000);
+    } else if (snapshot.coverageRatio < 0.35) {
+        intervalMs = Math.max(baseIntervalMs, 20 * 60_000);
+    } else if (snapshot.coverageRatio < 0.75) {
+        intervalMs = Math.max(baseIntervalMs, 10 * 60_000);
+    }
+
+    return {
+        intervalMs,
+        ...snapshot,
+    };
+}
+
 async function fetchClaimStateWithRetry(claimant: PublicKey, attempts = 5, delayMs = 1200) {
     for (let attempt = 0; attempt < attempts; attempt++) {
         const claimState = await fetchUserClaimState(claimant);

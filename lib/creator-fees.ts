@@ -5,8 +5,25 @@ import { config } from './config';
 import { loadKeypairFromConfiguredValue } from './fairfun-program';
 import { decodeBondingCurve } from './pump/bonding-curve';
 import { bondingCurvePda } from './pump/pda';
+import { getMetaNumber, setMeta } from './database';
 
 let running = false;
+let creatorFeeStatusCache: {
+    expiresAt: number;
+    value: CreatorFeeStatus;
+} | null = null;
+
+export interface CreatorFeeStatus {
+    enabled: boolean;
+    sharing: boolean;
+    creator: string;
+    claimer: string;
+    currentUnclaimedLamports: string;
+    currentUnclaimedSol: number;
+    minClaimLamports: string;
+    minClaimSol: number;
+    trackedTreasuryTopupSol: number;
+}
 
 function getCreatorFeeWallet() {
     const configured = config.creatorFees.walletKeypairPath || config.rewards.backendKeypairPath;
@@ -65,6 +82,47 @@ async function sendTreasuryTopup(
             lamports: Number(lamports),
         }),
     ]);
+}
+
+export async function getCreatorFeeStatus(forceRefresh = false): Promise<CreatorFeeStatus> {
+    const now = Date.now();
+    if (!forceRefresh && creatorFeeStatusCache && creatorFeeStatusCache.expiresAt > now) {
+        return creatorFeeStatusCache.value;
+    }
+
+    const connection = new Connection(config.chain.rpcUrl, 'processed');
+    const sdk = new OnlinePumpSdk(connection);
+    const wallet = getCreatorFeeWallet();
+    const mint = new PublicKey(config.creatorFees.mint || config.token.mint);
+    const curve = bondingCurvePda(mint);
+    const curveInfo = await connection.getAccountInfo(curve, 'processed');
+    if (!curveInfo) {
+        throw new Error(`Missing bonding curve for mint ${mint.toBase58()}`);
+    }
+
+    const decoded = decodeBondingCurve(Buffer.from(curveInfo.data));
+    const creator = decoded.creator;
+    const sharing = hasCoinCreatorMigratedToSharingConfig({ mint, creator });
+    const currentUnclaimedLamports = sharing
+        ? BigInt((await sdk.getMinimumDistributableFee(mint)).distributableFees.toString())
+        : BigInt((await sdk.getCreatorVaultBalanceBothPrograms(creator)).toString());
+
+    const value: CreatorFeeStatus = {
+        enabled: config.creatorFees.enabled,
+        sharing,
+        creator: creator.toBase58(),
+        claimer: wallet.publicKey.toBase58(),
+        currentUnclaimedLamports: currentUnclaimedLamports.toString(),
+        currentUnclaimedSol: Number(currentUnclaimedLamports) / 1_000_000_000,
+        minClaimLamports: config.creatorFees.minClaimLamports.toString(),
+        minClaimSol: Number(config.creatorFees.minClaimLamports) / 1_000_000_000,
+        trackedTreasuryTopupSol: getMetaNumber('creatorFeeTopupTotalSol', 0),
+    };
+    creatorFeeStatusCache = {
+        value,
+        expiresAt: now + 30_000,
+    };
+    return value;
 }
 
 export async function runCreatorFeeClaimPass() {
@@ -139,6 +197,14 @@ export async function runCreatorFeeClaimPass() {
             const spendableLamports = afterClaimBalance > reserveLamports ? afterClaimBalance - reserveLamports : 0n;
             const topupLamports = spendableLamports < claimableLamports ? spendableLamports : claimableLamports;
             const treasurySignature = await sendTreasuryTopup(connection, wallet, topupLamports);
+            if (treasurySignature && topupLamports > 0n) {
+                const topupSol = Number(topupLamports) / 1_000_000_000;
+                setMeta('creatorFeeTopupTotalSol', getMetaNumber('creatorFeeTopupTotalSol', 0) + topupSol);
+                setMeta('creatorFeeLastTreasuryTopupSignature', treasurySignature);
+                setMeta('creatorFeeLastTreasuryTopupLamports', topupLamports.toString());
+                setMeta('creatorFeeLastClaimSignature', claimSignature ?? '');
+            }
+            creatorFeeStatusCache = null;
 
             return {
                 attempted: true,

@@ -4,6 +4,8 @@ import { formatSOL, getCurrentSolPrice, formatUSD } from '../../../lib/gravity';
 import { formatAddress } from '../../../lib/solana';
 import { fetchTreasuryDepositorAddress } from '../../../lib/treasury';
 import { config } from '../../../lib/config';
+import { getCreatorFeeStatus } from '../../../lib/creator-fees';
+import { getMetaNumber } from '../../../lib/database';
 
 export async function GET(req: Request) {
     return await measure('GET /api/treasury', async () => {
@@ -11,6 +13,7 @@ export async function GET(req: Request) {
         const wallet = url.searchParams.get('wallet') ?? undefined;
         const limit = Number(url.searchParams.get('limit') ?? 25);
         const solPriceUsd = await getCurrentSolPrice();
+        const creatorFeeStatus = await getCreatorFeeStatus();
         const rawEvents = getRecentTreasuryEvents(limit, wallet ?? undefined);
         const events = await Promise.all(rawEvents.map(async (event) => {
             const depositorAddress = event.depositorAddress
@@ -35,6 +38,12 @@ export async function GET(req: Request) {
             success: true,
             events,
             total: events.length,
+            summary: {
+                totalDepositedSol: getMetaNumber('totalFeesAccumulatedSol', 0),
+                creatorFeeTopupTotalSol: creatorFeeStatus.trackedTreasuryTopupSol,
+                currentUnclaimedCreatorFeeSol: creatorFeeStatus.currentUnclaimedSol,
+                creatorFeeMinClaimSol: creatorFeeStatus.minClaimSol,
+            },
             solPriceUsd,
             timestamp: Date.now(),
         });

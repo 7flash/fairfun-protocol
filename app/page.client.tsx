@@ -41,6 +41,23 @@ interface ClaimEvent {
     timestamp: number;
 }
 
+interface ClaimsSummary {
+    totalClaims: number;
+    totalGrossSol: number;
+    totalClaimantSol: number;
+    totalDelegatorFeeSol: number;
+    totalClaimantTokens: number;
+    totalDelegatorTokens: number;
+    totalDistributedTokens: number;
+}
+
+interface TreasurySummary {
+    totalDepositedSol: number;
+    creatorFeeTopupTotalSol: number;
+    currentUnclaimedCreatorFeeSol: number;
+    creatorFeeMinClaimSol: number;
+}
+
 interface WalletTotals {
     address: string;
     addressShort: string;
@@ -78,12 +95,14 @@ interface TreasuryResponse {
     success: boolean;
     events: TreasuryEvent[];
     total: number;
+    summary: TreasurySummary;
 }
 
 interface ClaimsResponse {
     success: boolean;
     events: ClaimEvent[];
     total: number;
+    summary: ClaimsSummary;
 }
 
 interface WalletResponse {
@@ -605,146 +624,80 @@ function LeaderboardTable({
 function TreasuryTable({
     runtimeConfig,
     events,
+    summary,
     loading,
     error,
     connectedAddress,
 }: {
     runtimeConfig: RuntimeConfig;
     events: TreasuryEvent[];
+    summary: TreasurySummary | null;
     loading: boolean;
     error: string | null;
     connectedAddress: string | null;
 }) {
     return (
-        <table className="leaderboard-table">
-            <thead>
-                <tr>
-                    <th>When</th>
-                    <th className="th-num">Treasury Added</th>
-                    <th>Deposited By</th>
-                    <th className="th-num">You Got</th>
-                    <th>Transaction</th>
-                </tr>
-            </thead>
-            <tbody>
-                {error ? (
-                    <tr><td className="state-row error-state" colSpan={5}>{error}</td></tr>
-                ) : loading && events.length === 0 ? (
-                    <SkeletonRows />
-                ) : events.length === 0 ? (
-                    <tr><td className="state-row" colSpan={5}>No treasury additions have been indexed yet.</td></tr>
-                ) : (
-                    events.map((event) => (
-                        <tr className="leaderboard-row" key={event.signature}>
-                            <td>
-                                <div>{formatRelativeTime(event.timestamp)}</div>
-                                <div className="wallet-sub">{new Date(event.timestamp).toLocaleString()}</div>
-                            </td>
-                            <td className="td-num">
-                                <div>{formatNumber(event.amountSol, 'sol')}</div>
-                                <div className="num-sub">{formatNumber(event.amountUsd, 'usd')}</div>
-                            </td>
-                            <td>
-                                {event.depositorAddress ? (
-                                    <>
-                                        <span className="wallet-mono">{event.depositorAddressShort}</span>
-                                        <div className="wallet-sub">{event.depositorAddress}</div>
-                                    </>
-                                ) : 'Unknown'}
-                            </td>
-                            <td className="td-num">
-                                {connectedAddress ? (
-                                    <>
-                                        <div>{formatNumber(event.payoutAmountSol, 'sol')}</div>
-                                        <div className="num-sub">{formatNumber(event.payoutAmountUsd, 'usd')}</div>
-                                    </>
-                                ) : 'Connect wallet'}
-                            </td>
-                            <td>
-                                <a
-                                    className="tx-link"
-                                    href={`${runtimeConfig.explorerTxBaseUrl}${event.signature}`}
-                                    rel="noreferrer"
-                                    target="_blank"
-                                >
-                                    {shortAddress(event.signature)}
-                                </a>
-                            </td>
-                        </tr>
-                    ))
-                )}
-            </tbody>
-        </table>
-    );
-}
-
-function ClaimsTable({
-    runtimeConfig,
-    events,
-    loading,
-    error,
-    connectedAddress,
-}: {
-    runtimeConfig: RuntimeConfig;
-    events: ClaimEvent[];
-    loading: boolean;
-    error: string | null;
-    connectedAddress: string | null;
-}) {
-    return (
-        <table className="leaderboard-table">
-            <thead>
-                <tr>
-                    <th>When</th>
-                    <th>Wallet</th>
-                    <th>Claimer</th>
-                    <th className="th-num">Payout</th>
-                    <th>Transaction</th>
-                </tr>
-            </thead>
-            <tbody>
-                {error ? (
-                    <tr><td className="state-row error-state" colSpan={5}>{error}</td></tr>
-                ) : loading && events.length === 0 ? (
-                    <SkeletonRows />
-                ) : events.length === 0 ? (
-                    <tr><td className="state-row" colSpan={5}>No claims have been indexed yet.</td></tr>
-                ) : (
-                    events.map((event) => {
-                        const isClaimant = connectedAddress?.toLowerCase() === event.claimantAddress.toLowerCase();
-                        const isDelegator = connectedAddress?.toLowerCase() === event.delegatorAddress.toLowerCase();
-                        const hasAmounts = hasIndexedClaimAmounts(event);
-
-                        return (
+        <>
+            {summary ? (
+                <div className="activity-stats-grid">
+                    <div className="activity-stat-card">
+                        <div className="small-label">Total Deposited</div>
+                        <div className="inline-value">{formatNumber(summary.totalDepositedSol, 'sol')}</div>
+                    </div>
+                    <div className="activity-stat-card">
+                        <div className="small-label">Creator Fees Routed</div>
+                        <div className="inline-value">{formatNumber(summary.creatorFeeTopupTotalSol, 'sol')}</div>
+                    </div>
+                    <div className="activity-stat-card">
+                        <div className="small-label">Unclaimed Creator Fees</div>
+                        <div className="inline-value">{formatNumber(summary.currentUnclaimedCreatorFeeSol, 'sol')}</div>
+                        <div className="num-sub">auto-claim at {formatNumber(summary.creatorFeeMinClaimSol, 'sol')}</div>
+                    </div>
+                </div>
+            ) : null}
+            <table className="leaderboard-table">
+                <thead>
+                    <tr>
+                        <th>When</th>
+                        <th className="th-num">Treasury Added</th>
+                        <th>Deposited By</th>
+                        <th className="th-num">You Got</th>
+                        <th>Transaction</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {error ? (
+                        <tr><td className="state-row error-state" colSpan={5}>{error}</td></tr>
+                    ) : loading && events.length === 0 ? (
+                        <SkeletonRows />
+                    ) : events.length === 0 ? (
+                        <tr><td className="state-row" colSpan={5}>No treasury additions have been indexed yet.</td></tr>
+                    ) : (
+                        events.map((event) => (
                             <tr className="leaderboard-row" key={event.signature}>
                                 <td>
                                     <div>{formatRelativeTime(event.timestamp)}</div>
                                     <div className="wallet-sub">{new Date(event.timestamp).toLocaleString()}</div>
                                 </td>
-                                <td>
-                                    <span className="wallet-mono">{event.claimantAddressShort}</span>
-                                    {isClaimant ? <span className="you-tag">YOU</span> : null}
+                                <td className="td-num">
+                                    <div>{formatNumber(event.amountSol, 'sol')}</div>
+                                    <div className="num-sub">{formatNumber(event.amountUsd, 'usd')}</div>
                                 </td>
                                 <td>
-                                    {event.mode === 'delegated' ? (
+                                    {event.depositorAddress ? (
                                         <>
-                                            <span className="wallet-mono">{event.delegatorAddressShort}</span>
-                                            {isDelegator ? <span className="you-tag">YOU</span> : null}
+                                            <span className="wallet-mono">{event.depositorAddressShort}</span>
+                                            <div className="wallet-sub">{event.depositorAddress}</div>
                                         </>
-                                    ) : 'Self'}
+                                    ) : 'Unknown'}
                                 </td>
                                 <td className="td-num">
-                                    {hasAmounts ? (
+                                    {connectedAddress ? (
                                         <>
-                                            <div>{formatNumber(event.claimantAmountSol, 'sol')} to user</div>
-                                            <div className="num-sub">gross {formatNumber(event.grossAmountSol, 'sol')}</div>
-                                            {event.delegatorFeeSol > 0 ? (
-                                                <div className="num-sub">claimer {formatNumber(event.delegatorFeeSol, 'sol')}</div>
-                                            ) : null}
+                                            <div>{formatNumber(event.payoutAmountSol, 'sol')}</div>
+                                            <div className="num-sub">{formatNumber(event.payoutAmountUsd, 'usd')}</div>
                                         </>
-                                    ) : (
-                                        <div className="num-sub">amount not indexed</div>
-                                    )}
+                                    ) : 'Connect wallet'}
                                 </td>
                                 <td>
                                     <a
@@ -757,11 +710,125 @@ function ClaimsTable({
                                     </a>
                                 </td>
                             </tr>
-                        );
-                    })
-                )}
-            </tbody>
-        </table>
+                        ))
+                    )}
+                </tbody>
+            </table>
+        </>
+    );
+}
+
+function ClaimsTable({
+    runtimeConfig,
+    events,
+    summary,
+    loading,
+    error,
+    connectedAddress,
+}: {
+    runtimeConfig: RuntimeConfig;
+    events: ClaimEvent[];
+    summary: ClaimsSummary | null;
+    loading: boolean;
+    error: string | null;
+    connectedAddress: string | null;
+}) {
+    return (
+        <>
+            {summary ? (
+                <div className="activity-stats-grid">
+                    <div className="activity-stat-card">
+                        <div className="small-label">Claims</div>
+                        <div className="inline-value">{formatNumber(summary.totalClaims, 'int')}</div>
+                    </div>
+                    <div className="activity-stat-card">
+                        <div className="small-label">Holders Got</div>
+                        <div className="inline-value">{formatNumber(summary.totalClaimantTokens, 'tokens')} FAIRFUN</div>
+                        <div className="num-sub">{formatNumber(summary.totalClaimantSol, 'sol')}</div>
+                    </div>
+                    <div className="activity-stat-card">
+                        <div className="small-label">Claimers Got</div>
+                        <div className="inline-value">{formatNumber(summary.totalDelegatorTokens, 'tokens')} FAIRFUN</div>
+                        <div className="num-sub">{formatNumber(summary.totalDelegatorFeeSol, 'sol')}</div>
+                    </div>
+                    <div className="activity-stat-card">
+                        <div className="small-label">Total Distributed</div>
+                        <div className="inline-value">{formatNumber(summary.totalDistributedTokens, 'tokens')} FAIRFUN</div>
+                        <div className="num-sub">gross {formatNumber(summary.totalGrossSol, 'sol')}</div>
+                    </div>
+                </div>
+            ) : null}
+            <table className="leaderboard-table">
+                <thead>
+                    <tr>
+                        <th>When</th>
+                        <th>Wallet</th>
+                        <th>Claimer</th>
+                        <th className="th-num">Payout</th>
+                        <th>Transaction</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {error ? (
+                        <tr><td className="state-row error-state" colSpan={5}>{error}</td></tr>
+                    ) : loading && events.length === 0 ? (
+                        <SkeletonRows />
+                    ) : events.length === 0 ? (
+                        <tr><td className="state-row" colSpan={5}>No claims have been indexed yet.</td></tr>
+                    ) : (
+                        events.map((event) => {
+                            const isClaimant = connectedAddress?.toLowerCase() === event.claimantAddress.toLowerCase();
+                            const isDelegator = connectedAddress?.toLowerCase() === event.delegatorAddress.toLowerCase();
+                            const hasAmounts = hasIndexedClaimAmounts(event);
+
+                            return (
+                                <tr className="leaderboard-row" key={event.signature}>
+                                    <td>
+                                        <div>{formatRelativeTime(event.timestamp)}</div>
+                                        <div className="wallet-sub">{new Date(event.timestamp).toLocaleString()}</div>
+                                    </td>
+                                    <td>
+                                        <span className="wallet-mono">{event.claimantAddressShort}</span>
+                                        {isClaimant ? <span className="you-tag">YOU</span> : null}
+                                    </td>
+                                    <td>
+                                        {event.mode === 'delegated' ? (
+                                            <>
+                                                <span className="wallet-mono">{event.delegatorAddressShort}</span>
+                                                {isDelegator ? <span className="you-tag">YOU</span> : null}
+                                            </>
+                                        ) : 'Self'}
+                                    </td>
+                                    <td className="td-num">
+                                        {hasAmounts ? (
+                                            <>
+                                                <div>{formatNumber(event.claimantAmountSol, 'sol')} to user</div>
+                                                <div className="num-sub">gross {formatNumber(event.grossAmountSol, 'sol')}</div>
+                                                {event.delegatorFeeSol > 0 ? (
+                                                    <div className="num-sub">claimer {formatNumber(event.delegatorFeeSol, 'sol')}</div>
+                                                ) : null}
+                                            </>
+                                        ) : (
+                                            <div className="num-sub">amount not indexed</div>
+                                        )}
+                                    </td>
+                                    <td>
+                                        <a
+                                            className="tx-link"
+                                            href={`${runtimeConfig.explorerTxBaseUrl}${event.signature}`}
+                                            rel="noreferrer"
+                                            target="_blank"
+                                        >
+                                            {shortAddress(event.signature)}
+                                        </a>
+                                    </td>
+                                </tr>
+                            );
+                        })
+                    )}
+                </tbody>
+            </table>
+        </>
     );
 }
 
@@ -772,6 +839,8 @@ function ActivityPanel({
     entries,
     treasuryEvents,
     claimEvents,
+    treasurySummary,
+    claimsSummary,
     loading,
     error,
     connectedAddress,
@@ -786,6 +855,8 @@ function ActivityPanel({
     entries: LeaderboardEntry[];
     treasuryEvents: TreasuryEvent[];
     claimEvents: ClaimEvent[];
+    treasurySummary: TreasurySummary | null;
+    claimsSummary: ClaimsSummary | null;
     loading: boolean;
     error: string | null;
     connectedAddress: string | null;
@@ -848,6 +919,7 @@ function ActivityPanel({
                     <TreasuryTable
                         runtimeConfig={runtimeConfig}
                         events={treasuryEvents}
+                        summary={treasurySummary}
                         loading={loading}
                         error={error}
                         connectedAddress={connectedAddress}
@@ -856,6 +928,7 @@ function ActivityPanel({
                     <ClaimsTable
                         runtimeConfig={runtimeConfig}
                         events={claimEvents}
+                        summary={claimsSummary}
                         loading={loading}
                         error={error}
                         connectedAddress={connectedAddress}
@@ -893,6 +966,8 @@ export default function mount() {
         let entries: LeaderboardEntry[] = [];
         let treasuryEvents: TreasuryEvent[] = [];
         let claimEvents: ClaimEvent[] = [];
+        let treasurySummary: TreasurySummary | null = null;
+        let claimsSummary: ClaimsSummary | null = null;
         let total = 0;
         let totalSupply = 0;
         let tokenPriceUsd = 0;
@@ -974,6 +1049,8 @@ export default function mount() {
                     entries={entries}
                     treasuryEvents={treasuryEvents}
                     claimEvents={claimEvents}
+                    treasurySummary={treasurySummary}
+                    claimsSummary={claimsSummary}
                     loading={loading}
                     error={error}
                     connectedAddress={connectedAddress}
@@ -1483,11 +1560,13 @@ export default function mount() {
 
                     if (treasuryData.success) {
                         treasuryEvents = treasuryData.events;
+                        treasurySummary = treasuryData.summary ?? null;
                     } else if (!error) {
                         error = 'Failed to load treasury additions.';
                     }
                     if (claimsData.success) {
                         claimEvents = claimsData.events;
+                        claimsSummary = claimsData.summary ?? null;
                     } else if (!error) {
                         error = 'Failed to load claim history.';
                     }

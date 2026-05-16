@@ -445,6 +445,12 @@ export function getRecentClaimEvents(limit = 50, walletAddress?: string) {
     );
 }
 
+export function getAllClaimEvents() {
+    return db.claimEvents.select()
+        .orderBy('timestamp', 'asc')
+        .all() as ClaimEventRecord[];
+}
+
 export function resetAllHolderRewards(now = Date.now()) {
     const holders = db.holders.select().all() as HolderRecord[];
     for (const holder of holders) {
