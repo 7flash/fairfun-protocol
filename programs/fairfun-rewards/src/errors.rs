@@ -46,4 +46,16 @@ pub enum FairfunRewardsError {
     DelegatedClaimsDisabled,
     #[msg("Delegator and claimant must be different wallets")]
     InvalidDelegatedClaimTarget,
+    #[msg("Invalid batch size")]
+    InvalidBatchSize,
+    #[msg("Invalid remaining accounts for batch claim")]
+    InvalidBatchClaimAccounts,
+    #[msg("Claim account PDA mismatch")]
+    InvalidUserClaimAccount,
+    #[msg("Delegation settings PDA mismatch")]
+    InvalidDelegationSettingsAccount,
+    #[msg("Claimant account mismatch")]
+    InvalidClaimantAccount,
+    #[msg("Batch claim amount is below the minimum threshold")]
+    BatchClaimBelowMinimum,
 }

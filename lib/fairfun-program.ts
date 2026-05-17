@@ -51,6 +51,13 @@ export interface PreparedClaimAmounts {
     remainingPoolCapacity: bigint;
 }
 
+export interface BatchClaimEntry {
+    claimant: PublicKey;
+    cumulativeEarned: bigint;
+    observedTotalDeposits: bigint;
+    expiresAt: bigint;
+}
+
 export function getProgramId() {
     return new PublicKey(config.rewards.programId);
 }
@@ -103,6 +110,29 @@ export function buildClaimMessage(
     message.writeBigUInt64LE(cumulativeEarned, 64);
     message.writeBigUInt64LE(observedTotalDeposits, 72);
     message.writeBigInt64LE(expiresAt, 80);
+    return message;
+}
+
+export function buildBatchClaimMessage(
+    pool: PublicKey,
+    entries: Array<BatchClaimEntry>,
+) {
+    const message = Buffer.alloc(32 + 4 + entries.length * 56);
+    pool.toBuffer().copy(message, 0);
+    message.writeUInt32LE(entries.length, 32);
+
+    let offset = 36;
+    for (const entry of entries) {
+        entry.claimant.toBuffer().copy(message, offset);
+        offset += 32;
+        message.writeBigUInt64LE(entry.cumulativeEarned, offset);
+        offset += 8;
+        message.writeBigUInt64LE(entry.observedTotalDeposits, offset);
+        offset += 8;
+        message.writeBigInt64LE(entry.expiresAt, offset);
+        offset += 8;
+    }
+
     return message;
 }
 
@@ -364,6 +394,52 @@ export function buildDelegatedClaimInstruction(
     });
 }
 
+export function buildDelegatedClaimManyInstruction(
+    delegator: PublicKey,
+    entries: Array<BatchClaimEntry>,
+) {
+    const pool = derivePoolPda();
+    const treasury = deriveTreasuryPda();
+    const data = Buffer.alloc(8 + 4 + entries.length * 56);
+    instructionDiscriminator('delegated_claim_many').copy(data, 0);
+    data.writeUInt32LE(entries.length, 8);
+
+    let offset = 12;
+    for (const entry of entries) {
+        entry.claimant.toBuffer().copy(data, offset);
+        offset += 32;
+        data.writeBigUInt64LE(entry.cumulativeEarned, offset);
+        offset += 8;
+        data.writeBigUInt64LE(entry.observedTotalDeposits, offset);
+        offset += 8;
+        data.writeBigInt64LE(entry.expiresAt, offset);
+        offset += 8;
+    }
+
+    const keys = [
+        { pubkey: delegator, isSigner: true, isWritable: true },
+        { pubkey: deriveConfigPda(), isSigner: false, isWritable: false },
+        { pubkey: pool, isSigner: false, isWritable: true },
+        { pubkey: treasury, isSigner: false, isWritable: true },
+        { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ];
+
+    for (const entry of entries) {
+        keys.push(
+            { pubkey: deriveUserClaimPda(entry.claimant, pool), isSigner: false, isWritable: true },
+            { pubkey: deriveUserDelegationSettingsPda(entry.claimant, pool), isSigner: false, isWritable: true },
+            { pubkey: entry.claimant, isSigner: false, isWritable: true },
+        );
+    }
+
+    return new TransactionInstruction({
+        programId: getProgramId(),
+        keys,
+        data,
+    });
+}
+
 export async function buildDelegatedClaimTransaction(
     delegator: PublicKey,
     claimant: PublicKey,
@@ -400,6 +476,38 @@ export async function buildDelegatedClaimTransaction(
         signerPubkey: signer.publicKey.toBase58(),
         claimantPubkey: claimant.toBase58(),
         delegatorPubkey: delegator.toBase58(),
+    };
+}
+
+export async function buildDelegatedClaimManyTransaction(
+    delegator: PublicKey,
+    entries: Array<BatchClaimEntry>,
+) {
+    const message = buildBatchClaimMessage(derivePoolPda(), entries);
+    const signer = loadBackendKeypair();
+    const ed25519Instruction = Ed25519Program.createInstructionWithPrivateKey({
+        privateKey: signer.secretKey,
+        message,
+    });
+    const claimInstruction = buildDelegatedClaimManyInstruction(
+        delegator,
+        entries,
+    );
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+
+    const transaction = new Transaction({
+        feePayer: delegator,
+        blockhash,
+        lastValidBlockHeight,
+    }).add(ed25519Instruction, claimInstruction);
+
+    return {
+        transaction,
+        blockhash,
+        lastValidBlockHeight,
+        signerPubkey: signer.publicKey.toBase58(),
+        delegatorPubkey: delegator.toBase58(),
+        claimants: entries.map((entry) => entry.claimant.toBase58()),
     };
 }
 

@@ -1,9 +1,12 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::{
+    account_info::next_account_info,
     program::invoke,
     program::invoke_signed,
     program_error::ProgramError,
+    system_instruction,
 };
+use std::io::Cursor;
 use spl_associated_token_account::{
     get_associated_token_address_with_program_id,
     instruction::create_associated_token_account_idempotent,
@@ -27,6 +30,8 @@ pub use state::{GlobalConfig, RewardPool, UserClaim, UserDelegationSettings};
 
 const DELEGATED_CLAIM_FEE_BPS: u64 = 1_000;
 const BASIS_POINTS_DENOMINATOR: u64 = 10_000;
+const MIN_BATCH_CLAIM_LAMPORTS: u64 = 1_000_000;
+const MAX_BATCH_CLAIMANTS: usize = 8;
 const PUMP_AMM_BUY_DISCRIMINATOR: [u8; 8] = [102, 6, 61, 18, 1, 218, 235, 234];
 const PUMP_AMM_PROGRAM_ID: Pubkey = pubkey!("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA");
 const PUMP_FEE_PROGRAM_ID: Pubkey = pubkey!("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ");
@@ -349,6 +354,119 @@ fn initialize_delegation_settings_if_empty(
     }
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct BatchClaimEntry {
+    pub claimant: Pubkey,
+    pub cumulative_earned: u64,
+    pub observed_total_deposits: u64,
+    pub expires_at: i64,
+}
+
+fn build_batch_claim_message(pool: &Pubkey, entries: &Vec<BatchClaimEntry>) -> Vec<u8> {
+    let mut message = Vec::with_capacity(36 + entries.len() * 56);
+    message.extend_from_slice(pool.as_ref());
+    message.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+    for entry in entries {
+        message.extend_from_slice(entry.claimant.as_ref());
+        message.extend_from_slice(&entry.cumulative_earned.to_le_bytes());
+        message.extend_from_slice(&entry.observed_total_deposits.to_le_bytes());
+        message.extend_from_slice(&entry.expires_at.to_le_bytes());
+    }
+    message
+}
+
+fn create_program_owned_pda_if_needed<'info>(
+    payer: &AccountInfo<'info>,
+    target: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    space: usize,
+    seeds: &[&[u8]],
+) -> Result<()> {
+    if !target.data_is_empty() {
+        require_keys_eq!(*target.owner, crate::ID, FairfunRewardsError::InvalidProgramId);
+        return Ok(());
+    }
+
+    let rent = Rent::get()?;
+    let lamports = rent.minimum_balance(space);
+    let instruction = system_instruction::create_account(
+        payer.key,
+        target.key,
+        lamports,
+        space as u64,
+        &crate::ID,
+    );
+    invoke_signed(
+        &instruction,
+        &[payer.clone(), target.clone(), system_program.clone()],
+        &[seeds],
+    )?;
+    Ok(())
+}
+
+fn load_user_claim(account_info: &AccountInfo) -> Result<UserClaim> {
+    if account_info.data_is_empty() {
+        return Ok(UserClaim {
+            user: Pubkey::default(),
+            pool: Pubkey::default(),
+            claimed_amount: 0,
+            bump: 0,
+        });
+    }
+
+    let data = account_info.try_borrow_data()?;
+    if data.iter().all(|byte| *byte == 0) {
+        return Ok(UserClaim {
+            user: Pubkey::default(),
+            pool: Pubkey::default(),
+            claimed_amount: 0,
+            bump: 0,
+        });
+    }
+    let mut slice: &[u8] = &data;
+    UserClaim::try_deserialize(&mut slice)
+}
+
+fn save_user_claim(account_info: &AccountInfo, user_claim: &UserClaim) -> Result<()> {
+    let mut data = account_info.try_borrow_mut_data()?;
+    let mut cursor = Cursor::new(&mut data[..]);
+    user_claim.try_serialize(&mut cursor)?;
+    Ok(())
+}
+
+fn load_user_delegation_settings(account_info: &AccountInfo) -> Result<UserDelegationSettings> {
+    if account_info.data_is_empty() {
+        return Ok(UserDelegationSettings {
+            user: Pubkey::default(),
+            pool: Pubkey::default(),
+            delegated_claims_enabled: false,
+            bump: 0,
+        });
+    }
+
+    let data = account_info.try_borrow_data()?;
+    if data.iter().all(|byte| *byte == 0) {
+        return Ok(UserDelegationSettings {
+            user: Pubkey::default(),
+            pool: Pubkey::default(),
+            delegated_claims_enabled: false,
+            bump: 0,
+        });
+    }
+    let mut slice: &[u8] = &data;
+    UserDelegationSettings::try_deserialize(&mut slice)
+}
+
+fn save_user_delegation_settings(
+    account_info: &AccountInfo,
+    settings: &UserDelegationSettings,
+) -> Result<()> {
+    let mut data = account_info.try_borrow_mut_data()?;
+    let mut cursor = Cursor::new(&mut data[..]);
+    settings.try_serialize(&mut cursor)?;
+    Ok(())
+}
+
 #[program]
 pub mod fairfun_rewards {
     use super::*;
@@ -665,6 +783,236 @@ pub mod fairfun_rewards {
             cumulative_earned,
             observed_total_deposits,
             total_claimed: ctx.accounts.pool.total_claimed,
+        });
+
+        Ok(())
+    }
+
+    pub fn delegated_claim_many<'info>(
+        ctx: Context<'info, DelegatedClaimMany<'info>>,
+        entries: Vec<BatchClaimEntry>,
+    ) -> Result<()> {
+        require!(
+            !entries.is_empty() && entries.len() <= MAX_BATCH_CLAIMANTS,
+            FairfunRewardsError::InvalidBatchSize
+        );
+
+        let instruction_index = load_current_index_checked(&ctx.accounts.instructions)?;
+        require!(
+            instruction_index > 0,
+            FairfunRewardsError::MissingSignatureInstruction
+        );
+        let signature_instruction =
+            load_instruction_at_checked((instruction_index - 1) as usize, &ctx.accounts.instructions)?;
+        let expected_message = build_batch_claim_message(&ctx.accounts.pool.key(), &entries);
+        verify_ed25519_ix_integrity(
+            &signature_instruction,
+            &ctx.accounts.config.backend_authority.to_bytes(),
+            &expected_message,
+        )?;
+
+        require!(
+            ctx.remaining_accounts.len() == entries.len() * 3,
+            FairfunRewardsError::InvalidBatchClaimAccounts
+        );
+
+        let mut total_claimed_amount = 0u64;
+        let mut total_delegator_fee = 0u64;
+        let mut remaining_accounts_iter = ctx.remaining_accounts.iter();
+        let clock = Clock::get()?;
+        let pool_key = ctx.accounts.pool.key();
+
+        for claim_entry in &entries {
+            let user_claim_account = next_account_info(&mut remaining_accounts_iter)?;
+            let claimant_settings_account = next_account_info(&mut remaining_accounts_iter)?;
+            let claimant_account = next_account_info(&mut remaining_accounts_iter)?;
+
+            let (expected_user_claim, user_claim_bump) = Pubkey::find_program_address(
+                &[
+                    b"rewards_user_claim",
+                    pool_key.as_ref(),
+                    claim_entry.claimant.as_ref(),
+                ],
+                &crate::ID,
+            );
+            require_keys_eq!(
+                user_claim_account.key(),
+                expected_user_claim,
+                FairfunRewardsError::InvalidUserClaimAccount
+            );
+
+            let (expected_claimant_settings, claimant_settings_bump) = Pubkey::find_program_address(
+                &[
+                    b"rewards_user_delegation_settings",
+                    pool_key.as_ref(),
+                    claim_entry.claimant.as_ref(),
+                ],
+                &crate::ID,
+            );
+            require_keys_eq!(
+                claimant_settings_account.key(),
+                expected_claimant_settings,
+                FairfunRewardsError::InvalidDelegationSettingsAccount
+            );
+            require_keys_eq!(
+                claimant_account.key(),
+                claim_entry.claimant,
+                FairfunRewardsError::InvalidClaimantAccount
+            );
+
+            let user_claim_seeds: &[&[u8]] = &[
+                b"rewards_user_claim",
+                pool_key.as_ref(),
+                claim_entry.claimant.as_ref(),
+                &[user_claim_bump],
+            ];
+            create_program_owned_pda_if_needed(
+                &ctx.accounts.delegator.to_account_info(),
+                user_claim_account,
+                &ctx.accounts.system_program.to_account_info(),
+                UserClaim::DISCRIMINATOR.len() + UserClaim::INIT_SPACE,
+                user_claim_seeds,
+            )?;
+
+            let claimant_settings_seeds: &[&[u8]] = &[
+                b"rewards_user_delegation_settings",
+                pool_key.as_ref(),
+                claim_entry.claimant.as_ref(),
+                &[claimant_settings_bump],
+            ];
+            create_program_owned_pda_if_needed(
+                &ctx.accounts.delegator.to_account_info(),
+                claimant_settings_account,
+                &ctx.accounts.system_program.to_account_info(),
+                UserDelegationSettings::DISCRIMINATOR.len() + UserDelegationSettings::INIT_SPACE,
+                claimant_settings_seeds,
+            )?;
+
+            let mut user_claim = load_user_claim(user_claim_account)?;
+            let mut claimant_settings = load_user_delegation_settings(claimant_settings_account)?;
+
+            require!(
+                clock.unix_timestamp <= claim_entry.expires_at,
+                FairfunRewardsError::SignatureExpired
+            );
+            require!(ctx.accounts.pool.active, FairfunRewardsError::PoolInactive);
+            require_keys_neq!(
+                ctx.accounts.delegator.key(),
+                claim_entry.claimant,
+                FairfunRewardsError::InvalidDelegatedClaimTarget
+            );
+
+            if claimant_settings.user == Pubkey::default()
+                && claimant_settings.pool == Pubkey::default()
+            {
+                claimant_settings.user = claim_entry.claimant;
+                claimant_settings.pool = pool_key;
+                claimant_settings.delegated_claims_enabled = true;
+                claimant_settings.bump = claimant_settings_bump;
+            }
+            require!(
+                claimant_settings.delegated_claims_enabled,
+                FairfunRewardsError::DelegatedClaimsDisabled
+            );
+
+            let onchain_total_received = ctx
+                .accounts
+                .treasury
+                .lamports()
+                .checked_add(ctx.accounts.pool.total_claimed)
+                .unwrap();
+            let claimable = calculate_claimable(
+                user_claim.claimed_amount,
+                claim_entry.cumulative_earned,
+                claim_entry.observed_total_deposits,
+                onchain_total_received,
+                ctx.accounts.pool.total_claimed,
+            )?;
+            require!(
+                claimable >= MIN_BATCH_CLAIM_LAMPORTS,
+                FairfunRewardsError::BatchClaimBelowMinimum
+            );
+
+            let new_total_claimed = ctx.accounts.pool.total_claimed.checked_add(claimable).unwrap();
+            let (claimant_amount, delegator_fee) = calculate_delegated_claim_split(claimable);
+            require!(
+                ctx.accounts.treasury.lamports() >= claimable,
+                FairfunRewardsError::InsufficientTreasury
+            );
+
+            let treasury_bump = ctx.accounts.pool.treasury_bump;
+            let token_mint = ctx.accounts.pool.token_mint;
+            let signer_seeds: &[&[u8]] =
+                &[b"rewards_treasury", token_mint.as_ref(), &[treasury_bump]];
+
+            let claimant_transfer_instruction =
+                anchor_lang::solana_program::system_instruction::transfer(
+                    &ctx.accounts.treasury.key(),
+                    &claim_entry.claimant,
+                    claimant_amount,
+                );
+            anchor_lang::solana_program::program::invoke_signed(
+                &claimant_transfer_instruction,
+                &[
+                    ctx.accounts.treasury.to_account_info(),
+                    claimant_account.clone(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
+                &[signer_seeds],
+            )?;
+
+            if delegator_fee > 0 {
+                let delegator_transfer_instruction =
+                    anchor_lang::solana_program::system_instruction::transfer(
+                        &ctx.accounts.treasury.key(),
+                        &ctx.accounts.delegator.key(),
+                        delegator_fee,
+                    );
+                anchor_lang::solana_program::program::invoke_signed(
+                    &delegator_transfer_instruction,
+                    &[
+                        ctx.accounts.treasury.to_account_info(),
+                        ctx.accounts.delegator.to_account_info(),
+                        ctx.accounts.system_program.to_account_info(),
+                    ],
+                    &[signer_seeds],
+                )?;
+            }
+
+            user_claim.user = claim_entry.claimant;
+            user_claim.pool = pool_key;
+            user_claim.claimed_amount = claim_entry.cumulative_earned;
+            user_claim.bump = user_claim_bump;
+
+            ctx.accounts.pool.total_claimed = new_total_claimed;
+            if ctx.accounts.pool.total_deposited < onchain_total_received {
+                ctx.accounts.pool.total_deposited = onchain_total_received;
+            }
+
+            emit!(RewardsClaimed {
+                pool: pool_key,
+                token_mint: ctx.accounts.pool.token_mint,
+                user: claim_entry.claimant,
+                claimable,
+                cumulative_earned: claim_entry.cumulative_earned,
+                observed_total_deposits: claim_entry.observed_total_deposits,
+                total_claimed: ctx.accounts.pool.total_claimed,
+            });
+
+            save_user_claim(user_claim_account, &user_claim)?;
+            save_user_delegation_settings(claimant_settings_account, &claimant_settings)?;
+
+            total_claimed_amount = total_claimed_amount.checked_add(claimable).unwrap();
+            total_delegator_fee = total_delegator_fee.checked_add(delegator_fee).unwrap();
+        }
+
+        emit!(BatchRewardsClaimed {
+            pool: ctx.accounts.pool.key(),
+            token_mint: ctx.accounts.pool.token_mint,
+            delegator: ctx.accounts.delegator.key(),
+            claim_count: entries.len() as u32,
+            total_claimed_amount,
+            total_delegator_fee,
         });
 
         Ok(())
@@ -1374,6 +1722,39 @@ pub struct DelegatedClaimToTokens<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+pub struct DelegatedClaimMany<'info> {
+    #[account(mut)]
+    pub delegator: Signer<'info>,
+
+    #[account(
+        seeds = [b"rewards_config"],
+        bump = config.bump,
+    )]
+    pub config: Account<'info, GlobalConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"rewards_pool", pool.token_mint.as_ref()],
+        bump = pool.bump,
+    )]
+    pub pool: Account<'info, RewardPool>,
+
+    #[account(
+        mut,
+        seeds = [b"rewards_treasury", pool.token_mint.as_ref()],
+        bump = pool.treasury_bump,
+    )]
+    /// CHECK: zero-data system-owned SOL treasury PDA
+    pub treasury: UncheckedAccount<'info>,
+
+    #[account(address = INSTRUCTIONS_ID)]
+    /// CHECK: instructions sysvar is validated by address
+    pub instructions: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
 #[event]
 pub struct TreasuryDeposited {
     pub pool: Pubkey,
@@ -1392,6 +1773,16 @@ pub struct RewardsClaimed {
     pub cumulative_earned: u64,
     pub observed_total_deposits: u64,
     pub total_claimed: u64,
+}
+
+#[event]
+pub struct BatchRewardsClaimed {
+    pub pool: Pubkey,
+    pub token_mint: Pubkey,
+    pub delegator: Pubkey,
+    pub claim_count: u32,
+    pub total_claimed_amount: u64,
+    pub total_delegator_fee: u64,
 }
 
 #[cfg(test)]
@@ -1446,5 +1837,27 @@ mod tests {
             &message,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn batch_claim_message_is_deterministic() {
+        let pool = Pubkey::new_unique();
+        let entries = vec![
+            BatchClaimEntry {
+                claimant: Pubkey::new_unique(),
+                cumulative_earned: 1_500_000,
+                observed_total_deposits: 5_000_000,
+                expires_at: i64::MAX,
+            },
+            BatchClaimEntry {
+                claimant: Pubkey::new_unique(),
+                cumulative_earned: 2_000_000,
+                observed_total_deposits: 5_000_000,
+                expires_at: i64::MAX,
+            },
+        ];
+        let first = build_batch_claim_message(&pool, &entries);
+        let second = build_batch_claim_message(&pool, &entries);
+        assert_eq!(first, second);
     }
 }
