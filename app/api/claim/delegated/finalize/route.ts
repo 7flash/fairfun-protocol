@@ -16,7 +16,7 @@ export async function POST(req: Request) {
             delegatorAddress?: string;
             signature?: string;
             claimantAmountSol?: number;
-            delegatorFeeSol?: number;
+            projectFeeSol?: number;
         };
         const claimantAddress = body.claimantAddress?.trim();
         const delegatorAddress = body.delegatorAddress?.trim() ?? '';
@@ -41,15 +41,15 @@ export async function POST(req: Request) {
                 claimableSolRewards: claimable,
             });
             if (grossAmountSol > 0) {
-                const claimantAmountSol = clampSolAmount(Number(body.claimantAmountSol ?? Math.max(0, grossAmountSol - Number(body.delegatorFeeSol ?? 0))));
-                const delegatorFeeSol = clampSolAmount(Number(body.delegatorFeeSol ?? Math.max(0, grossAmountSol - claimantAmountSol)));
+                const claimantAmountSol = clampSolAmount(Number(body.claimantAmountSol ?? Math.max(0, grossAmountSol - Number(body.projectFeeSol ?? 0))));
+                const projectFeeSol = clampSolAmount(Number(body.projectFeeSol ?? Math.max(0, grossAmountSol - claimantAmountSol)));
                 recordClaimEvent({
                     signature,
                     claimantAddress,
                     delegatorAddress,
                     grossAmountSol,
                     claimantAmountSol,
-                    delegatorFeeSol,
+                    projectFeeSol,
                     mode: 'delegated',
                 });
             }

@@ -6,9 +6,8 @@ export interface ClaimStatsSummary {
     totalClaims: number;
     totalGrossSol: number;
     totalClaimantSol: number;
-    totalDelegatorFeeSol: number;
+    totalProjectFeeSol: number;
     totalClaimantTokens: number;
-    totalDelegatorTokens: number;
     totalDistributedTokens: number;
 }
 
@@ -28,7 +27,6 @@ function sumTokenDeltas(
     tx: Awaited<ReturnType<Connection['getParsedTransactions']>>[number],
     mint: string,
     claimant: string,
-    delegator: string,
 ) {
     const pre = tx?.meta?.preTokenBalances ?? [];
     const post = tx?.meta?.postTokenBalances ?? [];
@@ -53,23 +51,20 @@ function sumTokenDeltas(
     }
 
     let claimantDelta = 0;
-    let delegatorDelta = 0;
     for (const row of byKey.values()) {
         const delta = row.post - row.pre;
         if (delta <= 0) continue;
         if (row.owner === claimant) claimantDelta += delta;
-        if (row.owner === delegator) delegatorDelta += delta;
     }
 
     return {
         claimantDelta,
-        delegatorDelta,
     };
 }
 
 export async function getClaimStatsSummary() {
     const events = getAllClaimEvents().filter((event) =>
-        event.grossAmountSol > 0 || event.claimantAmountSol > 0 || event.delegatorFeeSol > 0
+        event.grossAmountSol > 0 || event.claimantAmountSol > 0 || event.projectFeeSol > 0
     );
     const cacheKey = `${events.length}:${events.at(-1)?.signature ?? ''}:${events.at(-1)?.timestamp ?? 0}`;
     const now = Date.now();
@@ -78,7 +73,6 @@ export async function getClaimStatsSummary() {
     }
 
     let totalClaimantTokens = 0;
-    let totalDelegatorTokens = 0;
     const conn = getConnection();
     const eventsBySignature = new Map<string, typeof events>();
     for (const event of events) {
@@ -100,17 +94,11 @@ export async function getClaimStatsSummary() {
             if (!tx) continue;
             const signatureEvents = eventsBySignature.get(signature) ?? [];
             const seenClaimants = new Set<string>();
-            let countedDelegator = false;
-
             for (const event of signatureEvents) {
                 if (!seenClaimants.has(event.claimantAddress)) {
-                    const deltas = sumTokenDeltas(tx, config.token.mint, event.claimantAddress, event.delegatorAddress);
+                    const deltas = sumTokenDeltas(tx, config.token.mint, event.claimantAddress);
                     totalClaimantTokens += deltas.claimantDelta;
                     seenClaimants.add(event.claimantAddress);
-                    if (!countedDelegator) {
-                        totalDelegatorTokens += deltas.delegatorDelta;
-                        countedDelegator = true;
-                    }
                 }
             }
         }
@@ -120,10 +108,9 @@ export async function getClaimStatsSummary() {
         totalClaims: events.length,
         totalGrossSol: events.reduce((sum, event) => sum + event.grossAmountSol, 0),
         totalClaimantSol: events.reduce((sum, event) => sum + event.claimantAmountSol, 0),
-        totalDelegatorFeeSol: events.reduce((sum, event) => sum + event.delegatorFeeSol, 0),
+        totalProjectFeeSol: events.reduce((sum, event) => sum + event.projectFeeSol, 0),
         totalClaimantTokens,
-        totalDelegatorTokens,
-        totalDistributedTokens: totalClaimantTokens + totalDelegatorTokens,
+        totalDistributedTokens: totalClaimantTokens,
     };
     cachedKey = cacheKey;
     cachedAt = now;

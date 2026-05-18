@@ -15,7 +15,8 @@ const USER_DELEGATION_SETTINGS_ACCOUNT_SIZE = 8 + 32 + 32 + 1 + 1;
 const REWARD_POOL_ACCOUNT_SIZE = 8 + 32 + 8 + 8 + 1 + 1 + 1;
 const TOKENIZED_CLAIM_MIN_OUTPUT_BPS = 9_500n;
 const TOKENIZED_CLAIM_BPS_DENOMINATOR = 10_000n;
-export const DELEGATED_CLAIM_FEE_BPS = 1_000;
+export const PROJECT_FEE_BPS = 1_000;
+export const DELEGATED_CLAIM_FEE_BPS = PROJECT_FEE_BPS;
 export const BASIS_POINTS_DENOMINATOR = 10_000;
 
 export interface RewardPoolState {
@@ -273,6 +274,14 @@ export function solToLamportsBigInt(amount: number) {
 
 export function lamportsToSolNumber(amount: bigint) {
     return Number(amount) / LAMPORTS_PER_SOL;
+}
+
+export function calculateProjectFeeLamports(amount: bigint) {
+    return amount * BigInt(PROJECT_FEE_BPS) / BigInt(BASIS_POINTS_DENOMINATOR);
+}
+
+export function calculateNetClaimLamports(amount: bigint) {
+    return amount - calculateProjectFeeLamports(amount);
 }
 
 export async function prepareClaimAmounts(
@@ -558,7 +567,7 @@ export async function buildDelegatedClaimToTokensTransaction(
     };
 
     const quote = quotePumpAmmBuyQuoteInput({
-        quote: new BN(estimatedClaimableLamports.toString()),
+        quote: new BN(calculateNetClaimLamports(estimatedClaimableLamports).toString()),
         slippage: 15,
         baseReserve: swapState.poolBaseAmount,
         quoteReserve: swapState.poolQuoteAmount,
@@ -714,7 +723,7 @@ export async function buildDelegatedClaimManyToTokensTransaction(
     };
 
     const quote = quotePumpAmmBuyQuoteInput({
-        quote: new BN(totalEstimatedClaimableLamports.toString()),
+        quote: new BN(calculateNetClaimLamports(totalEstimatedClaimableLamports).toString()),
         slippage: 15,
         baseReserve: swapState.poolBaseAmount,
         quoteReserve: swapState.poolQuoteAmount,

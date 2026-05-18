@@ -28,7 +28,7 @@ use errors::FairfunRewardsError;
 use introspection::verify_ed25519_ix_integrity;
 pub use state::{GlobalConfig, RewardPool, UserClaim, UserDelegationSettings};
 
-const DELEGATED_CLAIM_FEE_BPS: u64 = 1_000;
+const PROJECT_FEE_BPS: u64 = 1_000;
 const BASIS_POINTS_DENOMINATOR: u64 = 10_000;
 const MIN_BATCH_CLAIM_LAMPORTS: u64 = 1_000_000;
 const MAX_BATCH_CLAIMANTS: usize = 8;
@@ -73,13 +73,13 @@ fn calculate_claimable(
     Ok(claimable)
 }
 
-fn calculate_delegated_claim_split(claimable: u64) -> (u64, u64) {
-    let delegator_fee = claimable
-        .checked_mul(DELEGATED_CLAIM_FEE_BPS)
+fn calculate_project_claim_split(claimable: u64) -> (u64, u64) {
+    let project_fee = claimable
+        .checked_mul(PROJECT_FEE_BPS)
         .unwrap()
         / BASIS_POINTS_DENOMINATOR;
-    let claimant_amount = claimable.checked_sub(delegator_fee).unwrap();
-    (claimant_amount, delegator_fee)
+    let claimant_amount = claimable.checked_sub(project_fee).unwrap();
+    (claimant_amount, project_fee)
 }
 
 fn pump_amm_global_config_pda() -> Pubkey {
@@ -479,7 +479,7 @@ fn calculate_batch_claimant_token_amount(
     let numerator = (purchased_amount as u128)
         .checked_mul(claimable_amount as u128)
         .unwrap()
-        .checked_mul((BASIS_POINTS_DENOMINATOR - DELEGATED_CLAIM_FEE_BPS) as u128)
+        .checked_mul((BASIS_POINTS_DENOMINATOR - PROJECT_FEE_BPS) as u128)
         .unwrap();
     let denominator = (total_claimable_amount as u128)
         .checked_mul(BASIS_POINTS_DENOMINATOR as u128)
@@ -596,6 +596,7 @@ pub mod fairfun_rewards {
             ctx.accounts.pool.total_claimed,
         )?;
         let new_total_claimed = ctx.accounts.pool.total_claimed.checked_add(claimable).unwrap();
+        let (claimant_amount, project_fee) = calculate_project_claim_split(claimable);
         require!(
             ctx.accounts.treasury.lamports() >= claimable,
             FairfunRewardsError::InsufficientTreasury
@@ -607,7 +608,7 @@ pub mod fairfun_rewards {
         let transfer_instruction = anchor_lang::solana_program::system_instruction::transfer(
             &ctx.accounts.treasury.key(),
             &ctx.accounts.user.key(),
-            claimable,
+            claimant_amount,
         );
 
         anchor_lang::solana_program::program::invoke_signed(
@@ -634,7 +635,9 @@ pub mod fairfun_rewards {
             pool: ctx.accounts.pool.key(),
             token_mint: ctx.accounts.pool.token_mint,
             user: ctx.accounts.user.key(),
-            claimable,
+            gross_claimable_amount: claimable,
+            project_fee,
+            net_claim_amount: claimant_amount,
             cumulative_earned,
             observed_total_deposits,
             total_claimed: ctx.accounts.pool.total_claimed,
@@ -743,7 +746,7 @@ pub mod fairfun_rewards {
             ctx.accounts.pool.total_claimed,
         )?;
         let new_total_claimed = ctx.accounts.pool.total_claimed.checked_add(claimable).unwrap();
-        let (claimant_amount, delegator_fee) = calculate_delegated_claim_split(claimable);
+        let (claimant_amount, project_fee) = calculate_project_claim_split(claimable);
         require!(
             ctx.accounts.treasury.lamports() >= claimable,
             FairfunRewardsError::InsufficientTreasury
@@ -768,24 +771,6 @@ pub mod fairfun_rewards {
             &[signer_seeds],
         )?;
 
-        if delegator_fee > 0 {
-            let delegator_transfer_instruction = anchor_lang::solana_program::system_instruction::transfer(
-                &ctx.accounts.treasury.key(),
-                &ctx.accounts.delegator.key(),
-                delegator_fee,
-            );
-
-            anchor_lang::solana_program::program::invoke_signed(
-                &delegator_transfer_instruction,
-                &[
-                    ctx.accounts.treasury.to_account_info(),
-                    ctx.accounts.delegator.to_account_info(),
-                    ctx.accounts.system_program.to_account_info(),
-                ],
-                &[signer_seeds],
-            )?;
-        }
-
         user_claim.user = claimant;
         user_claim.pool = ctx.accounts.pool.key();
         user_claim.claimed_amount = cumulative_earned;
@@ -800,7 +785,9 @@ pub mod fairfun_rewards {
             pool: ctx.accounts.pool.key(),
             token_mint: ctx.accounts.pool.token_mint,
             user: claimant,
-            claimable,
+            gross_claimable_amount: claimable,
+            project_fee,
+            net_claim_amount: claimant_amount,
             cumulative_earned,
             observed_total_deposits,
             total_claimed: ctx.accounts.pool.total_claimed,
@@ -838,7 +825,7 @@ pub mod fairfun_rewards {
         );
 
         let mut total_claimed_amount = 0u64;
-        let mut total_delegator_fee = 0u64;
+        let mut total_project_fee = 0u64;
         let mut remaining_accounts_iter = ctx.remaining_accounts.iter();
         let clock = Clock::get()?;
         let pool_key = ctx.accounts.pool.key();
@@ -955,7 +942,7 @@ pub mod fairfun_rewards {
             );
 
             let new_total_claimed = ctx.accounts.pool.total_claimed.checked_add(claimable).unwrap();
-            let (claimant_amount, delegator_fee) = calculate_delegated_claim_split(claimable);
+            let (claimant_amount, project_fee) = calculate_project_claim_split(claimable);
             require!(
                 ctx.accounts.treasury.lamports() >= claimable,
                 FairfunRewardsError::InsufficientTreasury
@@ -982,24 +969,6 @@ pub mod fairfun_rewards {
                 &[signer_seeds],
             )?;
 
-            if delegator_fee > 0 {
-                let delegator_transfer_instruction =
-                    anchor_lang::solana_program::system_instruction::transfer(
-                        &ctx.accounts.treasury.key(),
-                        &ctx.accounts.delegator.key(),
-                        delegator_fee,
-                    );
-                anchor_lang::solana_program::program::invoke_signed(
-                    &delegator_transfer_instruction,
-                    &[
-                        ctx.accounts.treasury.to_account_info(),
-                        ctx.accounts.delegator.to_account_info(),
-                        ctx.accounts.system_program.to_account_info(),
-                    ],
-                    &[signer_seeds],
-                )?;
-            }
-
             user_claim.user = claim_entry.claimant;
             user_claim.pool = pool_key;
             user_claim.claimed_amount = claim_entry.cumulative_earned;
@@ -1014,7 +983,9 @@ pub mod fairfun_rewards {
                 pool: pool_key,
                 token_mint: ctx.accounts.pool.token_mint,
                 user: claim_entry.claimant,
-                claimable,
+                gross_claimable_amount: claimable,
+                project_fee,
+                net_claim_amount: claimant_amount,
                 cumulative_earned: claim_entry.cumulative_earned,
                 observed_total_deposits: claim_entry.observed_total_deposits,
                 total_claimed: ctx.accounts.pool.total_claimed,
@@ -1024,16 +995,16 @@ pub mod fairfun_rewards {
             save_user_delegation_settings(claimant_settings_account, &claimant_settings)?;
 
             total_claimed_amount = total_claimed_amount.checked_add(claimable).unwrap();
-            total_delegator_fee = total_delegator_fee.checked_add(delegator_fee).unwrap();
+            total_project_fee = total_project_fee.checked_add(project_fee).unwrap();
         }
 
         emit!(BatchRewardsClaimed {
             pool: ctx.accounts.pool.key(),
             token_mint: ctx.accounts.pool.token_mint,
-            delegator: ctx.accounts.delegator.key(),
+            executor: ctx.accounts.delegator.key(),
             claim_count: entries.len() as u32,
-            total_claimed_amount,
-            total_delegator_fee,
+            total_gross_claimed_amount: total_claimed_amount,
+            total_project_fee,
         });
 
         Ok(())
@@ -1203,6 +1174,7 @@ pub mod fairfun_rewards {
             ctx.accounts.pool.total_claimed,
         )?;
         let new_total_claimed = ctx.accounts.pool.total_claimed.checked_add(claimable).unwrap();
+        let (net_swapped_amount, project_fee) = calculate_project_claim_split(claimable);
         require!(
             ctx.accounts.treasury.lamports() >= claimable,
             FairfunRewardsError::InsufficientTreasury
@@ -1235,16 +1207,6 @@ pub mod fairfun_rewards {
             &ctx.accounts.associated_token_program.to_account_info(),
             &ctx.accounts.system_program.to_account_info(),
         )?;
-        create_ata_if_needed(
-            &ctx.accounts.delegator.to_account_info(),
-            &ctx.accounts.delegator_token_account.to_account_info(),
-            &ctx.accounts.delegator.to_account_info(),
-            &ctx.accounts.pump_base_mint.to_account_info(),
-            &ctx.accounts.pump_base_token_program.to_account_info(),
-            &ctx.accounts.associated_token_program.to_account_info(),
-            &ctx.accounts.system_program.to_account_info(),
-        )?;
-
         let treasury_bump = ctx.accounts.pool.treasury_bump;
         let token_mint = ctx.accounts.pool.token_mint;
         let signer_seeds: &[&[u8]] = &[b"rewards_treasury", token_mint.as_ref(), &[treasury_bump]];
@@ -1253,7 +1215,7 @@ pub mod fairfun_rewards {
         let wrap_transfer_instruction = anchor_lang::solana_program::system_instruction::transfer(
             &ctx.accounts.treasury.key(),
             &ctx.accounts.treasury_wsol_account.key(),
-            claimable,
+            net_swapped_amount,
         );
         invoke_signed(
             &wrap_transfer_instruction,
@@ -1300,7 +1262,7 @@ pub mod fairfun_rewards {
                 buyback_fee_recipient_token_account: ctx.accounts.pump_buyback_fee_recipient_token_account.to_account_info(),
             },
             min_base_amount_out,
-            claimable,
+            net_swapped_amount,
             &[signer_seeds],
         )?;
 
@@ -1309,7 +1271,6 @@ pub mod fairfun_rewards {
             .checked_sub(treasury_token_balance_before)
             .unwrap();
         require!(purchased_amount > 0, FairfunRewardsError::NothingToClaim);
-        let (claimant_token_amount, delegator_token_fee) = calculate_delegated_claim_split(purchased_amount);
         let token_decimals = read_token_2022_decimals(&ctx.accounts.pump_base_mint.to_account_info())?;
 
         invoke_transfer_checked(
@@ -1318,23 +1279,10 @@ pub mod fairfun_rewards {
             &ctx.accounts.pump_base_mint.to_account_info(),
             &ctx.accounts.claimant_token_account.to_account_info(),
             &ctx.accounts.treasury.to_account_info(),
-            claimant_token_amount,
+            purchased_amount,
             token_decimals,
             &[signer_seeds],
         )?;
-
-        if delegator_token_fee > 0 {
-            invoke_transfer_checked(
-                &ctx.accounts.pump_base_token_program.to_account_info(),
-                &ctx.accounts.treasury_token_account.to_account_info(),
-                &ctx.accounts.pump_base_mint.to_account_info(),
-                &ctx.accounts.delegator_token_account.to_account_info(),
-                &ctx.accounts.treasury.to_account_info(),
-                delegator_token_fee,
-                token_decimals,
-                &[signer_seeds],
-            )?;
-        }
 
         invoke_close_account(
             &ctx.accounts.pump_quote_token_program.to_account_info(),
@@ -1358,7 +1306,9 @@ pub mod fairfun_rewards {
             pool: ctx.accounts.pool.key(),
             token_mint: ctx.accounts.pool.token_mint,
             user: claimant,
-            claimable,
+            gross_claimable_amount: claimable,
+            project_fee,
+            net_claim_amount: net_swapped_amount,
             cumulative_earned,
             observed_total_deposits,
             total_claimed: ctx.accounts.pool.total_claimed,
@@ -1494,8 +1444,10 @@ pub mod fairfun_rewards {
         let pool_key = ctx.accounts.pool.key();
 
         let mut claimable_amounts = Vec::with_capacity(entries.len());
-        let mut claimant_token_accounts = Vec::with_capacity(entries.len());
+        let mut net_claimable_amounts = Vec::with_capacity(entries.len());
         let mut total_claimable_amount = 0u64;
+        let mut total_project_fee = 0u64;
+        let mut total_net_swapped_amount = 0u64;
 
         let mut remaining_accounts_iter = ctx.remaining_accounts.iter();
         for claim_entry in &entries {
@@ -1622,9 +1574,14 @@ pub mod fairfun_rewards {
                 FairfunRewardsError::BatchClaimBelowMinimum
             );
 
+            let (net_claimable_amount, project_fee) = calculate_project_claim_split(claimable);
             total_claimable_amount = total_claimable_amount.checked_add(claimable).unwrap();
+            total_project_fee = total_project_fee.checked_add(project_fee).unwrap();
+            total_net_swapped_amount = total_net_swapped_amount
+                .checked_add(net_claimable_amount)
+                .unwrap();
             claimable_amounts.push(claimable);
-            claimant_token_accounts.push(*claimant_token_account.key);
+            net_claimable_amounts.push(net_claimable_amount);
         }
 
         require!(
@@ -1650,16 +1607,6 @@ pub mod fairfun_rewards {
             &ctx.accounts.associated_token_program.to_account_info(),
             &ctx.accounts.system_program.to_account_info(),
         )?;
-        create_ata_if_needed(
-            &ctx.accounts.delegator.to_account_info(),
-            &ctx.accounts.delegator_token_account.to_account_info(),
-            &ctx.accounts.delegator.to_account_info(),
-            &ctx.accounts.pump_base_mint.to_account_info(),
-            &ctx.accounts.pump_base_token_program.to_account_info(),
-            &ctx.accounts.associated_token_program.to_account_info(),
-            &ctx.accounts.system_program.to_account_info(),
-        )?;
-
         let treasury_bump = ctx.accounts.pool.treasury_bump;
         let token_mint = ctx.accounts.pool.token_mint;
         let signer_seeds: &[&[u8]] = &[b"rewards_treasury", token_mint.as_ref(), &[treasury_bump]];
@@ -1716,7 +1663,7 @@ pub mod fairfun_rewards {
                 buyback_fee_recipient_token_account: ctx.accounts.pump_buyback_fee_recipient_token_account.to_account_info(),
             },
             min_base_amount_out,
-            total_claimable_amount,
+            total_net_swapped_amount,
             &[signer_seeds],
         )?;
 
@@ -1730,18 +1677,18 @@ pub mod fairfun_rewards {
 
         let mut claimant_token_amounts = Vec::with_capacity(entries.len());
         let mut total_claimant_token_amount = 0u64;
-        for claimable_amount in &claimable_amounts {
+        for claimable_amount in &net_claimable_amounts {
             let claimant_token_amount = calculate_batch_claimant_token_amount(
                 purchased_amount,
                 *claimable_amount,
-                total_claimable_amount,
+                total_net_swapped_amount,
             )?;
             total_claimant_token_amount = total_claimant_token_amount
                 .checked_add(claimant_token_amount)
                 .unwrap();
             claimant_token_amounts.push(claimant_token_amount);
         }
-        let delegator_token_fee = purchased_amount
+        let token_dust = purchased_amount
             .checked_sub(total_claimant_token_amount)
             .unwrap();
 
@@ -1757,6 +1704,7 @@ pub mod fairfun_rewards {
             let mut claimant_settings = load_user_delegation_settings(claimant_settings_account)?;
 
             let claimant_token_amount = claimant_token_amounts[index];
+            let (net_claim_amount, project_fee) = calculate_project_claim_split(claimable_amounts[index]);
             if claimant_token_amount > 0 {
                 invoke_transfer_checked(
                     &ctx.accounts.pump_base_token_program.to_account_info(),
@@ -1787,7 +1735,9 @@ pub mod fairfun_rewards {
                 pool: pool_key,
                 token_mint: ctx.accounts.pool.token_mint,
                 user: claim_entry.claimant,
-                claimable: claimable_amounts[index],
+                gross_claimable_amount: claimable_amounts[index],
+                project_fee,
+                net_claim_amount,
                 cumulative_earned: claim_entry.cumulative_earned,
                 observed_total_deposits: claim_entry.observed_total_deposits,
                 total_claimed: total_claimed_running,
@@ -1797,19 +1747,6 @@ pub mod fairfun_rewards {
             save_user_delegation_settings(claimant_settings_account, &claimant_settings)?;
 
             let _ = claimant_account;
-        }
-
-        if delegator_token_fee > 0 {
-            invoke_transfer_checked(
-                &ctx.accounts.pump_base_token_program.to_account_info(),
-                &ctx.accounts.treasury_token_account.to_account_info(),
-                &ctx.accounts.pump_base_mint.to_account_info(),
-                &ctx.accounts.delegator_token_account.to_account_info(),
-                &ctx.accounts.treasury.to_account_info(),
-                delegator_token_fee,
-                token_decimals,
-                &[signer_seeds],
-            )?;
         }
 
         invoke_close_account(
@@ -1828,12 +1765,14 @@ pub mod fairfun_rewards {
         emit!(BatchRewardsClaimedToTokens {
             pool: ctx.accounts.pool.key(),
             token_mint: ctx.accounts.pool.token_mint,
-            delegator: ctx.accounts.delegator.key(),
+            executor: ctx.accounts.delegator.key(),
             claim_count: entries.len() as u32,
-            total_claimed_amount: total_claimable_amount,
+            total_gross_claimed_amount: total_claimable_amount,
+            total_project_fee,
+            total_net_swapped_amount,
             total_purchased_tokens: purchased_amount,
             total_claimant_tokens: total_claimant_token_amount,
-            total_delegator_token_fee: delegator_token_fee,
+            token_dust,
         });
 
         Ok(())
@@ -2358,7 +2297,9 @@ pub struct RewardsClaimed {
     pub pool: Pubkey,
     pub token_mint: Pubkey,
     pub user: Pubkey,
-    pub claimable: u64,
+    pub gross_claimable_amount: u64,
+    pub project_fee: u64,
+    pub net_claim_amount: u64,
     pub cumulative_earned: u64,
     pub observed_total_deposits: u64,
     pub total_claimed: u64,
@@ -2368,22 +2309,24 @@ pub struct RewardsClaimed {
 pub struct BatchRewardsClaimed {
     pub pool: Pubkey,
     pub token_mint: Pubkey,
-    pub delegator: Pubkey,
+    pub executor: Pubkey,
     pub claim_count: u32,
-    pub total_claimed_amount: u64,
-    pub total_delegator_fee: u64,
+    pub total_gross_claimed_amount: u64,
+    pub total_project_fee: u64,
 }
 
 #[event]
 pub struct BatchRewardsClaimedToTokens {
     pub pool: Pubkey,
     pub token_mint: Pubkey,
-    pub delegator: Pubkey,
+    pub executor: Pubkey,
     pub claim_count: u32,
-    pub total_claimed_amount: u64,
+    pub total_gross_claimed_amount: u64,
+    pub total_project_fee: u64,
+    pub total_net_swapped_amount: u64,
     pub total_purchased_tokens: u64,
     pub total_claimant_tokens: u64,
-    pub total_delegator_token_fee: u64,
+    pub token_dust: u64,
 }
 
 #[cfg(test)]
@@ -2412,10 +2355,10 @@ mod tests {
     }
 
     #[test]
-    fn delegated_claim_split_keeps_ten_percent_fee() {
-        let (claimant_amount, delegator_fee) = calculate_delegated_claim_split(1_000);
+    fn project_claim_split_keeps_ten_percent_fee() {
+        let (claimant_amount, project_fee) = calculate_project_claim_split(1_000);
         assert_eq!(claimant_amount, 900);
-        assert_eq!(delegator_fee, 100);
+        assert_eq!(project_fee, 100);
     }
 
     #[test]

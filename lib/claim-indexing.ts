@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import { PublicKey, type VersionedTransactionResponse } from '@solana/web3.js';
 
 const EVENT_LOG_PREFIX = 'Program data: ';
-const DELEGATED_CLAIM_FEE_BPS = 1_000n;
+const PROJECT_FEE_BPS = 1_000n;
 const BASIS_POINTS_DENOMINATOR = 10_000n;
 const LAMPORTS_PER_SOL = 1_000_000_000;
 
@@ -10,7 +10,9 @@ type RewardsClaimedEvent = {
     pool: string;
     tokenMint: string;
     user: string;
-    claimable: bigint;
+    grossClaimableAmount: bigint;
+    projectFee: bigint;
+    netClaimAmount: bigint;
     cumulativeEarned: bigint;
     observedTotalDeposits: bigint;
     totalClaimed: bigint;
@@ -19,28 +21,30 @@ type RewardsClaimedEvent = {
 type BatchRewardsClaimedEvent = {
     pool: string;
     tokenMint: string;
-    delegator: string;
+    executor: string;
     claimCount: number;
-    totalClaimedAmount: bigint;
-    totalDelegatorFee: bigint;
+    totalGrossClaimedAmount: bigint;
+    totalProjectFee: bigint;
 };
 
 type BatchRewardsClaimedToTokensEvent = {
     pool: string;
     tokenMint: string;
-    delegator: string;
+    executor: string;
     claimCount: number;
-    totalClaimedAmount: bigint;
+    totalGrossClaimedAmount: bigint;
+    totalProjectFee: bigint;
+    totalNetSwappedAmount: bigint;
     totalPurchasedTokens: bigint;
     totalClaimantTokens: bigint;
-    totalDelegatorTokenFee: bigint;
+    tokenDust: bigint;
 };
 
 export type IndexedClaimRecipient = {
     claimantAddress: string;
     grossAmountSol: number;
     claimantAmountSol: number;
-    delegatorFeeSol: number;
+    projectFeeSol: number;
     totalClaimedSol: number;
 };
 
@@ -69,17 +73,33 @@ function lamportsToSolNumber(amount: bigint) {
 }
 
 function calculateDelegatedClaimSplit(claimable: bigint) {
-    const delegatorFee = claimable * DELEGATED_CLAIM_FEE_BPS / BASIS_POINTS_DENOMINATOR;
-    const claimantAmount = claimable - delegatorFee;
-    return { claimantAmount, delegatorFee };
+    const projectFee = claimable * PROJECT_FEE_BPS / BASIS_POINTS_DENOMINATOR;
+    const claimantAmount = claimable - projectFee;
+    return { claimantAmount, projectFee };
 }
 
 function decodeRewardsClaimed(buffer: Buffer): RewardsClaimedEvent {
+    if (buffer.length >= 152) {
+        return {
+            pool: readPubkey(buffer, 8),
+            tokenMint: readPubkey(buffer, 40),
+            user: readPubkey(buffer, 72),
+            grossClaimableAmount: buffer.readBigUInt64LE(104),
+            projectFee: buffer.readBigUInt64LE(112),
+            netClaimAmount: buffer.readBigUInt64LE(120),
+            cumulativeEarned: buffer.readBigUInt64LE(128),
+            observedTotalDeposits: buffer.readBigUInt64LE(136),
+            totalClaimed: buffer.readBigUInt64LE(144),
+        };
+    }
+    const grossClaimableAmount = buffer.readBigUInt64LE(104);
     return {
         pool: readPubkey(buffer, 8),
         tokenMint: readPubkey(buffer, 40),
         user: readPubkey(buffer, 72),
-        claimable: buffer.readBigUInt64LE(104),
+        grossClaimableAmount,
+        projectFee: 0n,
+        netClaimAmount: grossClaimableAmount,
         cumulativeEarned: buffer.readBigUInt64LE(112),
         observedTotalDeposits: buffer.readBigUInt64LE(120),
         totalClaimed: buffer.readBigUInt64LE(128),
@@ -87,26 +107,52 @@ function decodeRewardsClaimed(buffer: Buffer): RewardsClaimedEvent {
 }
 
 function decodeBatchRewardsClaimed(buffer: Buffer): BatchRewardsClaimedEvent {
+    if (buffer.length >= 124 && buffer.length < 132) {
+        return {
+            pool: readPubkey(buffer, 8),
+            tokenMint: readPubkey(buffer, 40),
+            executor: readPubkey(buffer, 72),
+            claimCount: buffer.readUInt32LE(104),
+            totalGrossClaimedAmount: buffer.readBigUInt64LE(108),
+            totalProjectFee: buffer.readBigUInt64LE(116),
+        };
+    }
     return {
         pool: readPubkey(buffer, 8),
         tokenMint: readPubkey(buffer, 40),
-        delegator: readPubkey(buffer, 72),
+        executor: readPubkey(buffer, 72),
         claimCount: buffer.readUInt32LE(104),
-        totalClaimedAmount: buffer.readBigUInt64LE(108),
-        totalDelegatorFee: buffer.readBigUInt64LE(116),
+        totalGrossClaimedAmount: buffer.readBigUInt64LE(108),
+        totalProjectFee: 0n,
     };
 }
 
 function decodeBatchRewardsClaimedToTokens(buffer: Buffer): BatchRewardsClaimedToTokensEvent {
+    if (buffer.length >= 156) {
+        return {
+            pool: readPubkey(buffer, 8),
+            tokenMint: readPubkey(buffer, 40),
+            executor: readPubkey(buffer, 72),
+            claimCount: buffer.readUInt32LE(104),
+            totalGrossClaimedAmount: buffer.readBigUInt64LE(108),
+            totalProjectFee: buffer.readBigUInt64LE(116),
+            totalNetSwappedAmount: buffer.readBigUInt64LE(124),
+            totalPurchasedTokens: buffer.readBigUInt64LE(132),
+            totalClaimantTokens: buffer.readBigUInt64LE(140),
+            tokenDust: buffer.readBigUInt64LE(148),
+        };
+    }
     return {
         pool: readPubkey(buffer, 8),
         tokenMint: readPubkey(buffer, 40),
-        delegator: readPubkey(buffer, 72),
+        executor: readPubkey(buffer, 72),
         claimCount: buffer.readUInt32LE(104),
-        totalClaimedAmount: buffer.readBigUInt64LE(108),
+        totalGrossClaimedAmount: buffer.readBigUInt64LE(108),
+        totalProjectFee: 0n,
+        totalNetSwappedAmount: buffer.readBigUInt64LE(108),
         totalPurchasedTokens: buffer.readBigUInt64LE(116),
         totalClaimantTokens: buffer.readBigUInt64LE(124),
-        totalDelegatorTokenFee: buffer.readBigUInt64LE(132),
+        tokenDust: buffer.readBigUInt64LE(132),
     };
 }
 
@@ -188,21 +234,22 @@ export function materializeClaimEventsFromTransaction(
         Boolean(batchRewardsClaimed),
     );
     const delegatorAddress =
-        batchRewardsClaimedToTokens?.delegator
-        ?? batchRewardsClaimed?.delegator
+        batchRewardsClaimedToTokens?.executor
+        ?? batchRewardsClaimed?.executor
         ?? (mode === 'direct' ? '' : getPayerAddress(tx));
     const timestamp = tx.blockTime ? tx.blockTime * 1000 : Date.now();
 
     const recipients: IndexedClaimRecipient[] = rewardsClaimed.map((event) => {
-        const split = mode === 'direct'
-            ? { claimantAmount: event.claimable, delegatorFee: 0n }
-            : calculateDelegatedClaimSplit(event.claimable);
-
+        const split = event.projectFee === 0n
+            && event.netClaimAmount === event.grossClaimableAmount
+            && mode !== 'direct'
+            ? calculateDelegatedClaimSplit(event.grossClaimableAmount)
+            : { claimantAmount: event.netClaimAmount, projectFee: event.projectFee };
         return {
             claimantAddress: event.user,
-            grossAmountSol: lamportsToSolNumber(event.claimable),
+            grossAmountSol: lamportsToSolNumber(event.grossClaimableAmount),
             claimantAmountSol: lamportsToSolNumber(split.claimantAmount),
-            delegatorFeeSol: lamportsToSolNumber(split.delegatorFee),
+            projectFeeSol: lamportsToSolNumber(split.projectFee),
             totalClaimedSol: lamportsToSolNumber(event.totalClaimed),
         };
     });

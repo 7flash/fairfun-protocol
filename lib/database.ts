@@ -23,6 +23,15 @@ function resetLegacyTables() {
             legacy.exec('UPDATE holders SET delegatedClaimsEnabled = 1 WHERE delegatedClaimsEnabled IS NULL');
         }
 
+        const claimEventColumns = legacy.query<{ name: string }, []>('PRAGMA table_info(claimEvents)').all();
+        const claimEventNames = new Set(claimEventColumns.map((column) => column.name));
+        if (claimEventColumns.length > 0 && !claimEventNames.has('projectFeeSol')) {
+            legacy.exec('ALTER TABLE claimEvents ADD COLUMN projectFeeSol REAL DEFAULT 0');
+            if (claimEventNames.has('delegatorFeeSol')) {
+                legacy.exec('UPDATE claimEvents SET projectFeeSol = COALESCE(delegatorFeeSol, 0) WHERE projectFeeSol = 0');
+            }
+        }
+
         const claimEventIndexes = legacy.query<{ name: string; sql: string | null }, []>(
             "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'claimEvents'"
         ).all();
@@ -78,7 +87,7 @@ export const db = new Database(dbPath, {
         delegatorAddress: z.string().default(''),
         grossAmountSol: z.number().default(0),
         claimantAmountSol: z.number().default(0),
-        delegatorFeeSol: z.number().default(0),
+        projectFeeSol: z.number().default(0),
         mode: z.string().default('direct'),
         timestamp: z.number().default(0),
         createdAt: z.number().default(0)
@@ -154,7 +163,7 @@ export interface ClaimEventRecord {
     delegatorAddress: string;
     grossAmountSol: number;
     claimantAmountSol: number;
-    delegatorFeeSol: number;
+    projectFeeSol: number;
     mode: string;
     timestamp: number;
     createdAt: number;
@@ -169,7 +178,7 @@ export interface IndexedClaimMaterializationInput {
         claimantAddress: string;
         grossAmountSol: number;
         claimantAmountSol: number;
-        delegatorFeeSol: number;
+        projectFeeSol: number;
         totalClaimedSol: number;
     }>;
 }
@@ -477,7 +486,7 @@ export function recordClaimEvent(event: {
     delegatorAddress?: string;
     grossAmountSol: number;
     claimantAmountSol: number;
-    delegatorFeeSol?: number;
+    projectFeeSol?: number;
     mode: 'direct' | 'delegated' | 'delegated-batch-tokenized';
     timestamp?: number;
 }) {
@@ -490,7 +499,7 @@ export function recordClaimEvent(event: {
             delegatorAddress: event.delegatorAddress ?? '',
             grossAmountSol: event.grossAmountSol,
             claimantAmountSol: event.claimantAmountSol,
-            delegatorFeeSol: event.delegatorFeeSol ?? 0,
+            projectFeeSol: event.projectFeeSol ?? 0,
             mode: event.mode,
             timestamp: event.timestamp ?? now,
             createdAt: now,
@@ -515,7 +524,7 @@ export function materializeIndexedClaimEvent(input: IndexedClaimMaterializationI
             delegatorAddress: input.delegatorAddress,
             grossAmountSol: recipient.grossAmountSol,
             claimantAmountSol: recipient.claimantAmountSol,
-            delegatorFeeSol: recipient.delegatorFeeSol,
+            projectFeeSol: recipient.projectFeeSol,
             mode: input.mode,
             timestamp: input.timestamp,
         });

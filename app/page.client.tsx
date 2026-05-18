@@ -39,12 +39,10 @@ interface ClaimEvent {
   grossAmountSolFormatted: string;
   claimantAmountSol: number;
   claimantAmountSolFormatted: string;
-  delegatorFeeSol: number;
-  delegatorFeeSolFormatted: string;
+  projectFeeSol: number;
+  projectFeeSolFormatted: string;
   claimantTokenAmount: number;
   claimantTokenAmountFormatted: string;
-  delegatorTokenAmount: number;
-  delegatorTokenAmountFormatted: string;
   mode: string;
   timestamp: number;
   recipients: ClaimRecipient[];
@@ -65,9 +63,8 @@ interface ClaimsSummary {
   totalClaims: number;
   totalGrossSol: number;
   totalClaimantSol: number;
-  totalDelegatorFeeSol: number;
+  totalProjectFeeSol: number;
   totalClaimantTokens: number;
-  totalDelegatorTokens: number;
   totalDistributedTokens: number;
 }
 
@@ -90,8 +87,8 @@ interface WalletTotals {
   totalSolRewardsClaimed: number;
   claimableSolRewards: number;
   delegatedClaimsEnabled: boolean;
-  delegatedClaimFeeBps: number;
-  delegatedClaimFeePercent: number;
+  projectFeeBps: number;
+  projectFeePercent: number;
   claimEnabled: boolean;
   claimDisabledReason: string;
 }
@@ -997,12 +994,12 @@ function ClaimsTable({
             </div>
           </div>
           <div className="activity-stat-card">
-            <div className="small-label">Claimer Fees</div>
+            <div className="small-label">Project Treasury</div>
             <div className="inline-value">
-              {formatNumber(summary.totalDelegatorTokens, "tokens")} FAIRFUN
+              {formatNumber(summary.totalProjectFeeSol, "sol")}
             </div>
             <div className="num-sub">
-              {formatNumber(summary.totalDelegatorFeeSol, "sol")}
+              retained before payout or swap
             </div>
           </div>
           <div className="activity-stat-card">
@@ -1021,9 +1018,9 @@ function ClaimsTable({
           <tr>
             <th>When</th>
             <th>Claim</th>
-            <th>Claimer</th>
+            <th>Executed By</th>
             <th className="th-num">Holder Gets</th>
-            <th className="th-num">Claimer Fee</th>
+            <th className="th-num">Project Fee</th>
             <th>Transaction</th>
           </tr>
         </thead>
@@ -1044,7 +1041,7 @@ function ClaimsTable({
             </tr>
           ) : (
             events.map((event) => {
-              const isDelegator =
+              const isExecutor =
                 connectedAddress?.toLowerCase() ===
                 event.delegatorAddress.toLowerCase();
               const isTokenized = event.mode !== "direct";
@@ -1126,7 +1123,7 @@ function ClaimsTable({
                         <span className="wallet-mono">
                           {event.delegatorAddressShort}
                         </span>
-                        {isDelegator ? (
+                        {isExecutor ? (
                           <span className="you-tag">YOU</span>
                         ) : null}
                       </>
@@ -1152,19 +1149,10 @@ function ClaimsTable({
                   <td className="td-num">
                     {event.mode !== "direct" ? (
                       <>
-                        {isTokenized ? (
-                          <>
-                            <div>{event.delegatorTokenAmountFormatted} FAIRFUN</div>
-                            <div className="num-sub">
-                              {event.delegatorFeeSolFormatted}
-                            </div>
-                          </>
-                        ) : (
-                          <>{event.delegatorFeeSolFormatted}</>
-                        )}
+                        <>{event.projectFeeSolFormatted}</>
                       </>
                     ) : (
-                      <div className="num-sub">—</div>
+                      <>{event.projectFeeSolFormatted}</>
                     )}
                   </td>
                   <td>
@@ -1843,7 +1831,7 @@ export default function mount() {
                 claimantAddress: claimantAddress,
                 delegatorAddress: connectedAddress,
                 claimantAmountSol: Number(data.claimantPayout ?? 0) / 1e9,
-                delegatorFeeSol: Number(data.delegatorFee ?? 0) / 1e9,
+                projectFeeSol: Number(data.projectFee ?? 0) / 1e9,
                 signature: signature,
               }),
             }),
@@ -1854,7 +1842,7 @@ export default function mount() {
           );
           showToast({
             kind: "success",
-            message: `Claimed ${formatNumber(Number(data.claimantPayout ?? 0) / 1e9, "sol")} for ${shortAddress(claimantAddress)} and earned ${formatNumber(Number(data.delegatorFee ?? 0) / 1e9, "sol")}.`,
+            message: `Claimed ${formatNumber(Number(data.claimantPayout ?? 0) / 1e9, "sol")} for ${shortAddress(claimantAddress)}. Project contribution: ${formatNumber(Number(data.projectFee ?? 0) / 1e9, "sol")}.`,
             txSignature: signature,
           });
           return { success: true, signature, claimant: claimantAddress };

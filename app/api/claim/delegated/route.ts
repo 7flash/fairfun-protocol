@@ -1,6 +1,6 @@
 import { PublicKey } from '@solana/web3.js';
 import { getHolder, getMetaNumber } from '../../../../lib/database';
-import { BASIS_POINTS_DENOMINATOR, DELEGATED_CLAIM_FEE_BPS, claimSigningEnabled, fetchUserDelegationSettingsState, loadBackendKeypair, prepareClaimAmounts, solToLamportsBigInt } from '../../../../lib/fairfun-program';
+import { BASIS_POINTS_DENOMINATOR, PROJECT_FEE_BPS, calculateNetClaimLamports, calculateProjectFeeLamports, claimSigningEnabled, fetchUserDelegationSettingsState, loadBackendKeypair, prepareClaimAmounts, solToLamportsBigInt } from '../../../../lib/fairfun-program';
 import { buildVersionedDelegatedTokenClaimTransaction } from '../../../../lib/tokenized-claims';
 
 export async function POST(req: Request) {
@@ -55,8 +55,8 @@ export async function POST(req: Request) {
             preparedClaim.estimatedClaimableLamports,
         );
         const grossClaimLamports = preparedClaim.estimatedClaimableLamports;
-        const delegatorFeeLamports = grossClaimLamports * BigInt(DELEGATED_CLAIM_FEE_BPS) / BigInt(BASIS_POINTS_DENOMINATOR);
-        const claimantPayoutLamports = grossClaimLamports - delegatorFeeLamports;
+        const projectFeeLamports = calculateProjectFeeLamports(grossClaimLamports);
+        const claimantPayoutLamports = calculateNetClaimLamports(grossClaimLamports);
 
         return Response.json({
             success: true,
@@ -68,8 +68,8 @@ export async function POST(req: Request) {
             cumulativeEarned: preparedClaim.cumulativeEarned.toString(),
             estimatedClaimable: grossClaimLamports.toString(),
             claimantPayout: claimantPayoutLamports.toString(),
-            delegatorFee: delegatorFeeLamports.toString(),
-            delegatedClaimFeeBps: DELEGATED_CLAIM_FEE_BPS,
+            projectFee: projectFeeLamports.toString(),
+            projectFeeBps: PROJECT_FEE_BPS,
             signer: backend.publicKey.toBase58(),
             claimant: claimantPublicKey.toBase58(),
             delegator: delegatorPublicKey.toBase58(),

@@ -170,7 +170,7 @@ export async function runAutomaticRewardClaimPass(now = Date.now()) {
                         delegatorAddress: backend.publicKey.toBase58(),
                         grossAmountSol,
                         claimantAmountSol: grossAmountSol * 0.9,
-                        delegatorFeeSol: grossAmountSol * 0.1,
+                        projectFeeSol: grossAmountSol * 0.1,
                         mode: 'delegated-batch-tokenized',
                         timestamp: now,
                     });

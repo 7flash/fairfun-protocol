@@ -1,6 +1,6 @@
 import { PublicKey } from '@solana/web3.js';
 import { getHolder, getMetaNumber, recordClaimEvent, updateHolderRewards } from '../../../lib/database';
-import { buildClaimTransaction, claimSigningEnabled, fetchUserClaimState, lamportsToSolNumber, prepareClaimAmounts, solToLamportsBigInt } from '../../../lib/fairfun-program';
+import { buildClaimTransaction, calculateNetClaimLamports, calculateProjectFeeLamports, claimSigningEnabled, fetchUserClaimState, lamportsToSolNumber, prepareClaimAmounts, solToLamportsBigInt } from '../../../lib/fairfun-program';
 
 const LAMPORT_IN_SOL = 1_000_000_000;
 const MIN_CLAIMABLE_SOL = 1 / LAMPORT_IN_SOL;
@@ -52,6 +52,8 @@ export async function POST(req: Request) {
             observedTotalDeposits: preparedClaim.observedTotalDeposits.toString(),
             cumulativeEarned: preparedClaim.cumulativeEarned.toString(),
             estimatedClaimable: preparedClaim.estimatedClaimableLamports.toString(),
+            claimantPayout: calculateNetClaimLamports(preparedClaim.estimatedClaimableLamports).toString(),
+            projectFee: calculateProjectFeeLamports(preparedClaim.estimatedClaimableLamports).toString(),
             signer: transactionResult.signerPubkey,
         });
     } catch (error) {
@@ -92,12 +94,13 @@ export async function PUT(req: Request) {
                 claimableSolRewards: claimable,
             });
             if (grossAmountSol > 0) {
+                const grossAmountLamports = BigInt(Math.round(grossAmountSol * LAMPORT_IN_SOL));
                 recordClaimEvent({
                     signature,
                     claimantAddress: address,
                     grossAmountSol,
-                    claimantAmountSol: grossAmountSol,
-                    delegatorFeeSol: 0,
+                    claimantAmountSol: Number(calculateNetClaimLamports(grossAmountLamports)) / LAMPORT_IN_SOL,
+                    projectFeeSol: Number(calculateProjectFeeLamports(grossAmountLamports)) / LAMPORT_IN_SOL,
                     mode: 'direct',
                 });
             }

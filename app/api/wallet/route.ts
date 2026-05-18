@@ -3,7 +3,7 @@ import { PublicKey } from '@solana/web3.js';
 import { getHolder, getHolderRank, getMetaNumber } from '../../../lib/database';
 import { formatAddress } from '../../../lib/solana';
 import { formatGravity, formatSOL, formatUSD } from '../../../lib/gravity';
-import { BASIS_POINTS_DENOMINATOR, DELEGATED_CLAIM_FEE_BPS, claimSigningEnabled, fetchUserDelegationSettingsState, lamportsToSolNumber, prepareClaimAmounts, solToLamportsBigInt } from '../../../lib/fairfun-program';
+import { BASIS_POINTS_DENOMINATOR, PROJECT_FEE_BPS, claimSigningEnabled, fetchUserDelegationSettingsState, lamportsToSolNumber, prepareClaimAmounts, solToLamportsBigInt } from '../../../lib/fairfun-program';
 
 const LAMPORT_IN_SOL = 1_000_000_000;
 const MIN_CLAIMABLE_SOL = 1 / LAMPORT_IN_SOL;
@@ -44,8 +44,8 @@ export async function GET(req: Request) {
                     claimableSolRewards: 0,
                     claimableSolRewardsFormatted: '0 SOL',
                     delegatedClaimsEnabled: true,
-                    delegatedClaimFeeBps: DELEGATED_CLAIM_FEE_BPS,
-                    delegatedClaimFeePercent: DELEGATED_CLAIM_FEE_BPS / BASIS_POINTS_DENOMINATOR * 100,
+                    projectFeeBps: PROJECT_FEE_BPS,
+                    projectFeePercent: PROJECT_FEE_BPS / BASIS_POINTS_DENOMINATOR * 100,
                     claimEnabled: false,
                     claimDisabledReason: claimSigningEnabled()
                         ? 'No claimable rewards yet.'
@@ -104,8 +104,8 @@ export async function GET(req: Request) {
                 claimableSolRewards: claimableSol,
                 claimableSolRewardsFormatted: formatSOL(claimableSol),
                 delegatedClaimsEnabled,
-                delegatedClaimFeeBps: DELEGATED_CLAIM_FEE_BPS,
-                delegatedClaimFeePercent: DELEGATED_CLAIM_FEE_BPS / BASIS_POINTS_DENOMINATOR * 100,
+                projectFeeBps: PROJECT_FEE_BPS,
+                projectFeePercent: PROJECT_FEE_BPS / BASIS_POINTS_DENOMINATOR * 100,
                 claimEnabled,
                 claimDisabledReason: claimEnabled
                     ? ''
