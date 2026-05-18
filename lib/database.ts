@@ -132,6 +132,12 @@ export interface TreasuryEventRecord {
     createdAt: number;
 }
 
+export interface TreasurySummaryStats {
+    totalDepositedSol: number;
+    creatorFeeTopupTotalSol: number;
+    externalRevenueSol: number;
+}
+
 export interface TreasuryPayoutRecord {
     id?: number;
     signature: string;
@@ -320,6 +326,10 @@ export function distributeTreasuryFees(params: {
     if (holders.length === 0) {
         return { distributed: 0, totalGravity };
     }
+    const eligibleTotalGravity = holders.reduce((sum, holder) => sum + holder.accumulatedGravity, 0);
+    if (eligibleTotalGravity <= 0) {
+        return { distributed: 0, totalGravity };
+    }
 
     const holderState = new Map<string, HolderRecord>(
         holders.map((holder) => [holder.address.toLowerCase(), { ...holder }])
@@ -347,7 +357,7 @@ export function distributeTreasuryFees(params: {
             const current = holderState.get(holder.address.toLowerCase());
             if (!current?.id) continue;
 
-            const earnedDelta = event.amountSol * (current.accumulatedGravity / totalGravity);
+            const earnedDelta = event.amountSol * (current.accumulatedGravity / eligibleTotalGravity);
             const totalEarned = current.totalSolRewardsEarned + earnedDelta;
             const claimable = Math.max(0, totalEarned - current.totalSolRewardsClaimed);
 
@@ -393,19 +403,39 @@ export function getRecentTreasuryEvents(limit = 25, walletAddress?: string) {
     const walletLower = walletAddress?.toLowerCase();
     return events.map((event) => {
         let payoutAmountSol = 0;
+        let eligibleHolderCount = 0;
+        const payouts = db.treasuryPayouts.select()
+            .where({ signature: event.signature })
+            .all() as TreasuryPayoutRecord[];
+        eligibleHolderCount = payouts.filter((payout) => payout.amountSol > 0).length;
         if (walletLower) {
-            const payout = db.treasuryPayouts.select().where({
-                signature: event.signature,
-                address: walletAddress as string
-            }).get() as TreasuryPayoutRecord | undefined;
+            const payout = payouts.find((entry) => entry.address.toLowerCase() === walletLower);
             payoutAmountSol = payout?.amountSol ?? 0;
         }
 
         return {
             ...event,
-            payoutAmountSol
+            payoutAmountSol,
+            eligibleHolderCount,
         };
     });
+}
+
+export function getTreasurySummaryStats(creatorFeeClaimerAddress?: string): TreasurySummaryStats {
+    const events = db.treasuryEvents.select().all() as TreasuryEventRecord[];
+    const totalDepositedSol = events.reduce((sum, event) => sum + event.amountSol, 0);
+    const creatorLower = creatorFeeClaimerAddress?.toLowerCase() ?? '';
+    const creatorFeeTopupTotalSol = creatorLower
+        ? events
+            .filter((event) => event.depositorAddress.toLowerCase() === creatorLower)
+            .reduce((sum, event) => sum + event.amountSol, 0)
+        : 0;
+
+    return {
+        totalDepositedSol,
+        creatorFeeTopupTotalSol,
+        externalRevenueSol: Math.max(0, totalDepositedSol - creatorFeeTopupTotalSol),
+    };
 }
 
 export function updateHolderRewards(

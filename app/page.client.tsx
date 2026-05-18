@@ -20,9 +20,9 @@ interface LeaderboardEntry {
 interface TreasuryEvent {
   signature: string;
   amountSol: number;
-  amountUsd: number;
   payoutAmountSol: number;
   payoutAmountUsd: number;
+  eligibleHolderCount: number;
   depositorAddress: string;
   depositorAddressShort: string;
   timestamp: number;
@@ -74,8 +74,8 @@ interface ClaimsSummary {
 interface TreasurySummary {
   totalDepositedSol: number;
   creatorFeeTopupTotalSol: number;
+  externalRevenueSol: number;
   currentUnclaimedCreatorFeeSol: number;
-  creatorFeeMinClaimSol: number;
 }
 
 interface WalletTotals {
@@ -264,6 +264,18 @@ function formatRelativeTime(timestamp: number) {
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
   return `${hours}h ago`;
+}
+
+function formatCompactTimestamp(timestamp: number) {
+  if (!timestamp) return "—";
+  const date = new Date(timestamp);
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
 function formatSignedGravityDelta(value: number) {
@@ -628,8 +640,11 @@ function PositionPanel({
           <div className="group-label">Position</div>
           <div className="position-grid">
             <div className="grid-cell">
-              <div className="cell-label">Gravity %</div>
+              <div className="cell-label">Gravity</div>
               <div className="cell-value">
+                {formatNumber(walletTotals?.accumulatedGravity ?? 0, "gravity")}
+              </div>
+              <div className="num-sub">
                 {walletTotals?.gravityShareFormatted ?? "0.000%"}
               </div>
             </div>
@@ -849,9 +864,9 @@ function TreasuryTable({
       {summary ? (
         <div className="activity-stats-grid">
           <div className="activity-stat-card">
-            <div className="small-label">Total Deposited</div>
+            <div className="small-label">External Revenue</div>
             <div className="inline-value">
-              {formatNumber(summary.totalDepositedSol, "sol")}
+              {formatNumber(summary.externalRevenueSol, "sol")}
             </div>
           </div>
           <div className="activity-stat-card">
@@ -865,9 +880,6 @@ function TreasuryTable({
             <div className="inline-value">
               {formatNumber(summary.currentUnclaimedCreatorFeeSol, "sol")}
             </div>
-            <div className="num-sub">
-              auto-claim at {formatNumber(summary.creatorFeeMinClaimSol, "sol")}
-            </div>
           </div>
         </div>
       ) : null}
@@ -876,6 +888,7 @@ function TreasuryTable({
           <tr>
             <th>When</th>
             <th className="th-num">Treasury Added</th>
+            <th className="th-num">Eligible Holders</th>
             <th>Deposited By</th>
             <th className="th-num">You Got</th>
             <th>Transaction</th>
@@ -884,7 +897,7 @@ function TreasuryTable({
         <tbody>
           {error ? (
             <tr>
-              <td className="state-row error-state" colSpan={5}>
+              <td className="state-row error-state" colSpan={6}>
                 {error}
               </td>
             </tr>
@@ -892,7 +905,7 @@ function TreasuryTable({
             <SkeletonRows />
           ) : events.length === 0 ? (
             <tr>
-              <td className="state-row" colSpan={5}>
+              <td className="state-row" colSpan={6}>
                 No treasury additions have been indexed yet.
               </td>
             </tr>
@@ -901,24 +914,19 @@ function TreasuryTable({
               <tr className="leaderboard-row" key={event.signature}>
                 <td>
                   <div>{formatRelativeTime(event.timestamp)}</div>
-                  <div className="wallet-sub">
-                    {new Date(event.timestamp).toLocaleString()}
-                  </div>
+                  <div className="wallet-sub">{formatCompactTimestamp(event.timestamp)}</div>
                 </td>
                 <td className="td-num">
                   <div>{formatNumber(event.amountSol, "sol")}</div>
-                  <div className="num-sub">
-                    {formatNumber(event.amountUsd, "usd")}
-                  </div>
+                </td>
+                <td className="td-num">
+                  {formatNumber(event.eligibleHolderCount, "int")}
                 </td>
                 <td>
                   {event.depositorAddress ? (
-                    <>
-                      <span className="wallet-mono">
-                        {event.depositorAddressShort}
-                      </span>
-                      <div className="wallet-sub">{event.depositorAddress}</div>
-                    </>
+                    <span className="wallet-mono">
+                      {event.depositorAddressShort}
+                    </span>
                   ) : (
                     "Unknown"
                   )}

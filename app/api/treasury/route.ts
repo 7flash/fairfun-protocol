@@ -1,11 +1,10 @@
 import { measure } from 'measure-fn';
-import { getRecentTreasuryEvents } from '../../../lib/database';
+import { getRecentTreasuryEvents, getTreasurySummaryStats } from '../../../lib/database';
 import { formatSOL, getCurrentSolPrice, formatUSD } from '../../../lib/gravity';
 import { formatAddress } from '../../../lib/solana';
 import { fetchTreasuryDepositorAddress } from '../../../lib/treasury';
 import { config } from '../../../lib/config';
 import { getCreatorFeeStatus } from '../../../lib/creator-fees';
-import { getMetaNumber } from '../../../lib/database';
 
 export async function GET(req: Request) {
     return await measure('GET /api/treasury', async () => {
@@ -22,27 +21,27 @@ export async function GET(req: Request) {
                 signature: event.signature,
                 amountSol: event.amountSol,
                 amountSolFormatted: formatSOL(event.amountSol),
-                amountUsd: event.amountSol * solPriceUsd,
-                amountUsdFormatted: formatUSD(event.amountSol * solPriceUsd),
                 payoutAmountSol: event.payoutAmountSol,
                 payoutAmountSolFormatted: formatSOL(event.payoutAmountSol),
                 payoutAmountUsd: event.payoutAmountSol * solPriceUsd,
                 payoutAmountUsdFormatted: formatUSD(event.payoutAmountSol * solPriceUsd),
+                eligibleHolderCount: event.eligibleHolderCount,
                 depositorAddress,
                 depositorAddressShort: depositorAddress ? formatAddress(depositorAddress) : 'Unknown',
                 timestamp: event.timestamp,
             };
         }));
+        const summaryStats = getTreasurySummaryStats(creatorFeeStatus.claimer);
 
         return Response.json({
             success: true,
             events,
             total: events.length,
             summary: {
-                totalDepositedSol: getMetaNumber('totalFeesAccumulatedSol', 0),
-                creatorFeeTopupTotalSol: creatorFeeStatus.trackedTreasuryTopupSol,
+                totalDepositedSol: summaryStats.totalDepositedSol,
+                creatorFeeTopupTotalSol: summaryStats.creatorFeeTopupTotalSol,
+                externalRevenueSol: summaryStats.externalRevenueSol,
                 currentUnclaimedCreatorFeeSol: creatorFeeStatus.currentUnclaimedSol,
-                creatorFeeMinClaimSol: creatorFeeStatus.minClaimSol,
             },
             solPriceUsd,
             timestamp: Date.now(),
