@@ -840,6 +840,69 @@ a {
     font-weight: 600;
 }
 
+.claim-details {
+    margin: 0;
+}
+
+.claim-details-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    list-style: none;
+}
+
+.claim-details-summary::-webkit-details-marker {
+    display: none;
+}
+
+.claim-mode-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--muted);
+    font-size: 0.64rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.claim-recipient-list {
+    margin-top: 10px;
+    display: grid;
+    gap: 8px;
+}
+
+.claim-recipient-row {
+    display: grid;
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.claim-recipient-rank {
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+
+.claim-recipient-wallet {
+    min-width: 0;
+}
+
+.claim-recipient-amounts {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+}
+
+.board-tab-compact {
+    padding-inline: 14px;
+}
+
 .td-num {
     text-align: right;
     font-variant-numeric: tabular-nums;

@@ -30,15 +30,35 @@ interface TreasuryEvent {
 
 interface ClaimEvent {
   signature: string;
+  claimantCount: number;
   claimantAddress: string;
   claimantAddressShort: string;
   delegatorAddress: string;
   delegatorAddressShort: string;
   grossAmountSol: number;
+  grossAmountSolFormatted: string;
   claimantAmountSol: number;
+  claimantAmountSolFormatted: string;
   delegatorFeeSol: number;
+  delegatorFeeSolFormatted: string;
+  claimantTokenAmount: number;
+  claimantTokenAmountFormatted: string;
+  delegatorTokenAmount: number;
+  delegatorTokenAmountFormatted: string;
   mode: string;
   timestamp: number;
+  recipients: ClaimRecipient[];
+}
+
+interface ClaimRecipient {
+  claimantAddress: string;
+  claimantAddressShort: string;
+  grossAmountSol: number;
+  grossAmountSolFormatted: string;
+  claimantAmountSol: number;
+  claimantAmountSolFormatted: string;
+  claimantTokenAmount: number;
+  claimantTokenAmountFormatted: string;
 }
 
 interface ClaimsSummary {
@@ -250,14 +270,6 @@ function formatSignedGravityDelta(value: number) {
   if (value > 0) return `(+${formatNumber(value, "gravity")})`;
   if (value < 0) return `(${formatNumber(value, "gravity")})`;
   return "(0)";
-}
-
-function hasIndexedClaimAmounts(event: ClaimEvent) {
-  return (
-    event.grossAmountSol > 0 ||
-    event.claimantAmountSol > 0 ||
-    event.delegatorFeeSol > 0
-  );
 }
 
 function AnimatedValue({
@@ -1000,9 +1012,9 @@ function ClaimsTable({
         <thead>
           <tr>
             <th>When</th>
-            <th>Wallet</th>
+            <th>Claim</th>
             <th>Claimer</th>
-            <th className="th-num">Wallet Gets</th>
+            <th className="th-num">Holder Gets</th>
             <th className="th-num">Claimer Fee</th>
             <th>Transaction</th>
           </tr>
@@ -1024,13 +1036,12 @@ function ClaimsTable({
             </tr>
           ) : (
             events.map((event) => {
-              const isClaimant =
-                connectedAddress?.toLowerCase() ===
-                event.claimantAddress.toLowerCase();
               const isDelegator =
                 connectedAddress?.toLowerCase() ===
                 event.delegatorAddress.toLowerCase();
-              const hasAmounts = hasIndexedClaimAmounts(event);
+              const isTokenized = event.mode !== "direct";
+              const isBatch = event.claimantCount > 1;
+              const primaryRecipient = event.recipients[0];
 
               return (
                 <tr className="leaderboard-row" key={event.signature}>
@@ -1041,13 +1052,68 @@ function ClaimsTable({
                     </div>
                   </td>
                   <td>
-                    <span className="wallet-mono">
-                      {event.claimantAddressShort}
-                    </span>
-                    {isClaimant ? <span className="you-tag">YOU</span> : null}
+                    {isBatch ? (
+                      <details className="claim-details">
+                        <summary className="claim-details-summary">
+                          <span className="wallet-mono">
+                            {event.claimantCount} holders
+                          </span>
+                          <span className="claim-mode-tag">
+                            {isTokenized ? "$FAIRFUN round" : "batch"}
+                          </span>
+                        </summary>
+                        <div className="claim-recipient-list">
+                          {event.recipients.map((recipient, index) => (
+                            <div className="claim-recipient-row" key={`${event.signature}:${recipient.claimantAddress}`}>
+                              <div className="claim-recipient-rank">
+                                {index + 1}.
+                              </div>
+                              <div className="claim-recipient-wallet">
+                                <span className="wallet-mono">
+                                  {recipient.claimantAddressShort}
+                                </span>
+                                {connectedAddress?.toLowerCase() ===
+                                recipient.claimantAddress.toLowerCase() ? (
+                                  <span className="you-tag">YOU</span>
+                                ) : null}
+                              </div>
+                              <div className="claim-recipient-amounts">
+                                {isTokenized ? (
+                                  <>
+                                    <div>
+                                      {recipient.claimantTokenAmountFormatted} FAIRFUN
+                                    </div>
+                                    <div className="num-sub">
+                                      {recipient.claimantAmountSolFormatted}
+                                    </div>
+                                  </>
+                                ) : (
+                                  <div>{recipient.claimantAmountSolFormatted}</div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    ) : (
+                      <>
+                        <span className="wallet-mono">
+                          {event.claimantAddressShort}
+                        </span>
+                        {connectedAddress?.toLowerCase() ===
+                        event.claimantAddress.toLowerCase() ? (
+                          <span className="you-tag">YOU</span>
+                        ) : null}
+                      </>
+                    )}
+                    {!isBatch && primaryRecipient?.claimantTokenAmount ? (
+                      <div className="wallet-sub">
+                        {primaryRecipient.claimantTokenAmountFormatted} FAIRFUN
+                      </div>
+                    ) : null}
                   </td>
                   <td>
-                    {event.mode === "delegated" ? (
+                    {event.mode !== "direct" ? (
                       <>
                         <span className="wallet-mono">
                           {event.delegatorAddressShort}
@@ -1059,21 +1125,34 @@ function ClaimsTable({
                     ) : (
                       "Self"
                     )}
+                    {isTokenized ? (
+                      <div className="wallet-sub">Auto-converted</div>
+                    ) : null}
                   </td>
                   <td className="td-num">
-                    {hasAmounts ? (
-                      <>{formatNumber(event.claimantAmountSol, "sol")}</>
+                    {isTokenized ? (
+                      <>
+                        <div>{event.claimantTokenAmountFormatted} FAIRFUN</div>
+                        <div className="num-sub">
+                          {event.claimantAmountSolFormatted}
+                        </div>
+                      </>
                     ) : (
-                      <div className="num-sub">—</div>
+                      <>{event.claimantAmountSolFormatted}</>
                     )}
                   </td>
                   <td className="td-num">
-                    {hasAmounts ? (
+                    {event.mode !== "direct" ? (
                       <>
-                        {event.mode === "delegated" ? (
-                          <>{formatNumber(event.delegatorFeeSol, "sol")}</>
+                        {isTokenized ? (
+                          <>
+                            <div>{event.delegatorTokenAmountFormatted} FAIRFUN</div>
+                            <div className="num-sub">
+                              {event.delegatorFeeSolFormatted}
+                            </div>
+                          </>
                         ) : (
-                          "—"
+                          <>{event.delegatorFeeSolFormatted}</>
                         )}
                       </>
                     ) : (
@@ -1104,6 +1183,8 @@ function ActivityPanel({
   runtimeConfig,
   activeTab,
   setActiveTab,
+  showOnlyMineActivity,
+  setShowOnlyMineActivity,
   entries,
   treasuryEvents,
   claimEvents,
@@ -1120,6 +1201,8 @@ function ActivityPanel({
   runtimeConfig: RuntimeConfig;
   activeTab: ActivityTab;
   setActiveTab: (tab: ActivityTab) => void;
+  showOnlyMineActivity: boolean;
+  setShowOnlyMineActivity: (value: boolean) => void;
   entries: LeaderboardEntry[];
   treasuryEvents: TreasuryEvent[];
   claimEvents: ClaimEvent[];
@@ -1166,6 +1249,15 @@ function ActivityPanel({
           </button>
         </div>
         <div className="ledger-live">
+          {connectedAddress ? (
+            <button
+              className={`board-tab board-tab-compact ${showOnlyMineActivity ? "is-active" : ""}`}
+              onClick={() => setShowOnlyMineActivity(!showOnlyMineActivity)}
+              type="button"
+            >
+              {showOnlyMineActivity ? "Only mine" : "All wallets"}
+            </button>
+          ) : null}
           <span className="live-dot">LIVE</span>
           <span className="ledger-meta-text">{liveText}</span>
         </div>
@@ -1268,6 +1360,7 @@ export default function mount() {
     let sortKey: LeaderboardSortKey = "earned";
     let sortDirection: SortDirection = "desc";
     let delegationPreferencePending = false;
+    let showOnlyMineActivity = false;
 
     const getLedgerMeta = () => {
       if (totalAccumulatedGravity <= 0 && treasuryBalanceSol <= 0)
@@ -1328,6 +1421,11 @@ export default function mount() {
             setActiveTab={(tab) => {
               activeTab = tab;
               update("tab-switch");
+            }}
+            showOnlyMineActivity={showOnlyMineActivity}
+            setShowOnlyMineActivity={(value) => {
+              showOnlyMineActivity = value;
+              void fetchAll("activity-filter-change");
             }}
             entries={entries}
             treasuryEvents={treasuryEvents}
@@ -1962,16 +2060,19 @@ export default function mount() {
               update(`fetch-start:${reason}`),
             );
 
-            const suffix = connectedAddress
-              ? `?wallet=${encodeURIComponent(connectedAddress)}`
-              : "";
+            const activitySuffix =
+              showOnlyMineActivity && connectedAddress
+                ? `?wallet=${encodeURIComponent(connectedAddress)}&mine=1`
+                : "";
             const [leaderboardResponse, treasuryResponse, claimsResponse] =
               await Promise.all([
-                m("fetch leaderboard api", () =>
-                  fetch(`/api/leaderboard${suffix}`),
+                m("fetch leaderboard api", () => fetch(`/api/leaderboard`)),
+                m("fetch treasury api", () =>
+                  fetch(`/api/treasury${activitySuffix}`),
                 ),
-                m("fetch treasury api", () => fetch(`/api/treasury${suffix}`)),
-                m("fetch claims api", () => fetch(`/api/claims${suffix}`)),
+                m("fetch claims api", () =>
+                  fetch(`/api/claims${activitySuffix}`),
+                ),
               ]);
             if (!leaderboardResponse || !treasuryResponse || !claimsResponse) {
               throw new Error("Activity API request failed.");
@@ -2128,12 +2229,14 @@ declare global {
       a: any;
       aside: any;
       button: any;
+      details: any;
       div: any;
       h2: any;
       main: any;
       p: any;
       section: any;
       span: any;
+      summary: any;
       table: any;
       tbody: any;
       td: any;

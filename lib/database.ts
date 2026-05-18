@@ -462,6 +462,14 @@ export function getRecentClaimEvents(limit = 50, walletAddress?: string) {
     );
 }
 
+export function getClaimEventsBySignatures(signatures: string[]) {
+    if (signatures.length === 0) return [] as ClaimEventRecord[];
+    return db.claimEvents.select()
+        .whereIn('signature', signatures)
+        .orderBy('timestamp', 'desc')
+        .all() as ClaimEventRecord[];
+}
+
 export function getAllClaimEvents() {
     return db.claimEvents.select()
         .orderBy('timestamp', 'asc')

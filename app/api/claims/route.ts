@@ -1,35 +1,169 @@
+import { Connection } from '@solana/web3.js';
 import { measure } from 'measure-fn';
-import { getRecentClaimEvents } from '../../../lib/database';
-import { formatAddress } from '../../../lib/solana';
+import { getClaimEventsBySignatures, getRecentClaimEvents } from '../../../lib/database';
 import { formatSOL, getCurrentSolPrice, formatUSD } from '../../../lib/gravity';
 import { getClaimStatsSummary } from '../../../lib/claim-stats';
+import { getPositiveTokenDeltasByOwner } from '../../../lib/claim-token-deltas';
+import { config } from '../../../lib/config';
+import { formatAddress } from '../../../lib/solana';
+
+const MAX_BATCH_CLAIMANTS = 8;
+
+type ClaimRecipient = {
+    claimantAddress: string;
+    claimantAddressShort: string;
+    grossAmountSol: number;
+    grossAmountSolFormatted: string;
+    grossAmountUsd: number;
+    grossAmountUsdFormatted: string;
+    claimantAmountSol: number;
+    claimantAmountSolFormatted: string;
+    claimantTokenAmount: number;
+    claimantTokenAmountFormatted: string;
+};
+
+type ClaimBatch = {
+    signature: string;
+    mode: string;
+    timestamp: number;
+    claimantCount: number;
+    claimantAddress: string;
+    claimantAddressShort: string;
+    delegatorAddress: string;
+    delegatorAddressShort: string;
+    grossAmountSol: number;
+    grossAmountSolFormatted: string;
+    grossAmountUsd: number;
+    grossAmountUsdFormatted: string;
+    claimantAmountSol: number;
+    claimantAmountSolFormatted: string;
+    delegatorFeeSol: number;
+    delegatorFeeSolFormatted: string;
+    claimantTokenAmount: number;
+    claimantTokenAmountFormatted: string;
+    delegatorTokenAmount: number;
+    delegatorTokenAmountFormatted: string;
+    recipients: ClaimRecipient[];
+};
+
+function formatTokenAmount(value: number) {
+    return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function groupClaimBatches(
+    rawEvents: ReturnType<typeof getRecentClaimEvents>,
+    tokenDeltasBySignature: Map<string, Map<string, number>>,
+    solPriceUsd: number,
+) {
+    const grouped = new Map<string, ReturnType<typeof getRecentClaimEvents>>();
+    for (const event of rawEvents) {
+        const existing = grouped.get(event.signature) ?? [];
+        existing.push(event);
+        grouped.set(event.signature, existing);
+    }
+
+    const batches = Array.from(grouped.values())
+        .map((events) => {
+            const sortedEvents = [...events].sort(
+                (left, right) =>
+                    right.claimantAmountSol - left.claimantAmountSol
+                    || right.grossAmountSol - left.grossAmountSol
+                    || right.timestamp - left.timestamp,
+            );
+            const first = sortedEvents[0];
+            const tokenDeltas = tokenDeltasBySignature.get(first.signature) ?? new Map<string, number>();
+            const recipients: ClaimRecipient[] = sortedEvents.map((event) => {
+                const claimantTokenAmount =
+                    event.mode === 'direct'
+                        ? 0
+                        : tokenDeltas.get(event.claimantAddress) ?? 0;
+                return {
+                    claimantAddress: event.claimantAddress,
+                    claimantAddressShort: formatAddress(event.claimantAddress),
+                    grossAmountSol: event.grossAmountSol,
+                    grossAmountSolFormatted: formatSOL(event.grossAmountSol),
+                    grossAmountUsd: event.grossAmountSol * solPriceUsd,
+                    grossAmountUsdFormatted: formatUSD(event.grossAmountSol * solPriceUsd),
+                    claimantAmountSol: event.claimantAmountSol,
+                    claimantAmountSolFormatted: formatSOL(event.claimantAmountSol),
+                    claimantTokenAmount,
+                    claimantTokenAmountFormatted: formatTokenAmount(claimantTokenAmount),
+                };
+            });
+
+            const grossAmountSol = recipients.reduce((sum, recipient) => sum + recipient.grossAmountSol, 0);
+            const claimantAmountSol = recipients.reduce((sum, recipient) => sum + recipient.claimantAmountSol, 0);
+            const claimantTokenAmount = recipients.reduce((sum, recipient) => sum + recipient.claimantTokenAmount, 0);
+            const delegatorFeeSol = sortedEvents.reduce((sum, event) => sum + event.delegatorFeeSol, 0);
+            const delegatorTokenAmount =
+                first.mode === 'direct' || !first.delegatorAddress
+                    ? 0
+                    : tokenDeltas.get(first.delegatorAddress) ?? 0;
+
+            return {
+                signature: first.signature,
+                mode: first.mode,
+                timestamp: Math.max(...sortedEvents.map((event) => event.timestamp)),
+                claimantCount: recipients.length,
+                claimantAddress: first.claimantAddress,
+                claimantAddressShort: formatAddress(first.claimantAddress),
+                delegatorAddress: first.delegatorAddress,
+                delegatorAddressShort: first.delegatorAddress ? formatAddress(first.delegatorAddress) : '',
+                grossAmountSol,
+                grossAmountSolFormatted: formatSOL(grossAmountSol),
+                grossAmountUsd: grossAmountSol * solPriceUsd,
+                grossAmountUsdFormatted: formatUSD(grossAmountSol * solPriceUsd),
+                claimantAmountSol,
+                claimantAmountSolFormatted: formatSOL(claimantAmountSol),
+                delegatorFeeSol,
+                delegatorFeeSolFormatted: formatSOL(delegatorFeeSol),
+                claimantTokenAmount,
+                claimantTokenAmountFormatted: formatTokenAmount(claimantTokenAmount),
+                delegatorTokenAmount,
+                delegatorTokenAmountFormatted: formatTokenAmount(delegatorTokenAmount),
+                recipients,
+            } satisfies ClaimBatch;
+        })
+        .sort((left, right) => right.timestamp - left.timestamp);
+
+    return batches;
+}
 
 export async function GET(req: Request) {
     return await measure('GET /api/claims', async () => {
         const url = new URL(req.url);
         const wallet = url.searchParams.get('wallet') ?? undefined;
-        const limit = Number(url.searchParams.get('limit') ?? 50);
+        const mineOnly = url.searchParams.get('mine') === '1';
+        const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 50)));
+        const rawLimit = Math.max(limit * MAX_BATCH_CLAIMANTS, limit);
         const solPriceUsd = await getCurrentSolPrice();
         const summary = await getClaimStatsSummary();
-        const events = getRecentClaimEvents(limit, wallet)
-            .filter((event) => event.grossAmountSol > 0 || event.claimantAmountSol > 0 || event.delegatorFeeSol > 0)
-            .map((event) => ({
-            signature: event.signature,
-            claimantAddress: event.claimantAddress,
-            claimantAddressShort: formatAddress(event.claimantAddress),
-            delegatorAddress: event.delegatorAddress,
-            delegatorAddressShort: event.delegatorAddress ? formatAddress(event.delegatorAddress) : '',
-            grossAmountSol: event.grossAmountSol,
-            grossAmountSolFormatted: formatSOL(event.grossAmountSol),
-            grossAmountUsd: event.grossAmountSol * solPriceUsd,
-            grossAmountUsdFormatted: formatUSD(event.grossAmountSol * solPriceUsd),
-            claimantAmountSol: event.claimantAmountSol,
-            claimantAmountSolFormatted: formatSOL(event.claimantAmountSol),
-            delegatorFeeSol: event.delegatorFeeSol,
-            delegatorFeeSolFormatted: formatSOL(event.delegatorFeeSol),
-            mode: event.mode,
-            timestamp: event.timestamp,
-        }));
+
+        const seedEvents = getRecentClaimEvents(rawLimit, mineOnly ? wallet : undefined)
+            .filter((event) => event.grossAmountSol > 0 || event.claimantAmountSol > 0 || event.delegatorFeeSol > 0);
+        const selectedSignatures = Array.from(new Set(seedEvents.map((event) => event.signature))).slice(0, limit);
+        const rawEvents = getClaimEventsBySignatures(selectedSignatures)
+            .filter((event) => event.grossAmountSol > 0 || event.claimantAmountSol > 0 || event.delegatorFeeSol > 0);
+
+        const connection = new Connection(config.chain.rpcUrl, 'confirmed');
+        const tokenDeltasBySignature = new Map<string, Map<string, number>>();
+
+        for (let start = 0; start < selectedSignatures.length; start += 20) {
+            const batchSignatures = selectedSignatures.slice(start, start + 20);
+            const txs = await connection.getParsedTransactions(batchSignatures, {
+                commitment: 'confirmed',
+                maxSupportedTransactionVersion: 0,
+            });
+            for (let index = 0; index < batchSignatures.length; index++) {
+                const tx = txs[index];
+                tokenDeltasBySignature.set(
+                    batchSignatures[index],
+                    getPositiveTokenDeltasByOwner(tx, config.token.mint),
+                );
+            }
+        }
+
+        const events = groupClaimBatches(rawEvents, tokenDeltasBySignature, solPriceUsd);
 
         return Response.json({
             success: true,
