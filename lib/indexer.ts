@@ -24,6 +24,7 @@ import { derivePrimaryDepositorAddress } from './treasury';
 let indexing = false;
 let interval: ReturnType<typeof setInterval> | null = null;
 let treasuryRentReserveSolPromise: Promise<number> | null = null;
+
 const MIN_TREASURY_DISTRIBUTION_SOL = 0.01;
 const MIN_TREASURY_DISTRIBUTION_LAMPORTS = Math.round(MIN_TREASURY_DISTRIBUTION_SOL * 1_000_000_000);
 const MAX_CLAIM_TRANSACTIONS_PER_RUN = 250;
@@ -40,7 +41,6 @@ async function getTreasuryRentReserveSol() {
 async function getTreasuryBalanceSol() {
     const treasuryAddress = config.rewards.treasuryAddress;
     if (!treasuryAddress) return 0;
-
     try {
         const [lamports, rentReserveSol] = await Promise.all([
             connection.getBalance(new PublicKey(treasuryAddress), 'confirmed'),
@@ -63,7 +63,6 @@ async function getTreasuryInflowStats(now: number) {
             events: [] as TreasuryEventInput[],
         };
     }
-
     const treasury = new PublicKey(treasuryAddress);
     const lastProcessedSignature = getMeta('lastTreasurySignatureSeen') ?? '';
     const rentReserveSol = await getTreasuryRentReserveSol();
@@ -115,6 +114,7 @@ async function getTreasuryInflowStats(now: number) {
                 const accountKeys = tx.transaction.message.getAccountKeys({
                     accountKeysFromLookups: tx.meta.loadedAddresses ?? undefined,
                 }).keySegments().flat();
+
                 const treasuryIndex = accountKeys.findIndex((key) => key.equals(treasury));
                 if (treasuryIndex < 0) continue;
 
@@ -123,13 +123,14 @@ async function getTreasuryInflowStats(now: number) {
                 const preDistributable = Math.max(0, pre / 1_000_000_000 - rentReserveSol);
                 const postDistributable = Math.max(0, post / 1_000_000_000 - rentReserveSol);
                 const deltaLamports = Math.round((postDistributable - preDistributable) * 1_000_000_000);
+
                 if (deltaLamports > 0) {
-                    if (deltaLamports < MIN_TREASURY_DISTRIBUTION_LAMPORTS) {
-                        continue;
-                    }
+                    if (deltaLamports < MIN_TREASURY_DISTRIBUTION_LAMPORTS) continue;
+
                     const amountSol = deltaLamports / 1_000_000_000;
                     feeDeltaSol += amountSol;
                     const depositorAddress = derivePrimaryDepositorAddress(tx, treasury);
+
                     events.push({
                         signature: signatureInfo.signature,
                         amountSol,
@@ -139,7 +140,6 @@ async function getTreasuryInflowStats(now: number) {
                     });
                 }
             }
-
             before = signatures[signatures.length - 1]?.signature;
             if (signatures.length < 100) break;
         }
@@ -149,7 +149,7 @@ async function getTreasuryInflowStats(now: number) {
             totalFeesAccumulatedSol: existingTotal,
             feeDeltaSol: 0,
             latestSignature: newestSeen || lastProcessedSignature,
-            events: [] as Array<TreasuryEventInput & { observedTotalDepositsSol: number }>,
+            events: [] as TreasuryEventInput[],
         };
     }
 
@@ -175,7 +175,6 @@ async function getClaimMaterializationStats(now: number) {
     const programId = getProgramId();
     const lastProcessedSignature = getMeta('lastClaimSignatureSeen') ?? '';
     const launchTs = getMetaNumber('launchTimestamp', now);
-
     let before: string | undefined;
     let stop = false;
     let newestSeen = '';
@@ -219,7 +218,6 @@ async function getClaimMaterializationStats(now: number) {
                     materializations.push(materialization);
                 }
             }
-
             before = signatures[signatures.length - 1]?.signature;
             if (signatures.length < 100) break;
         }
@@ -248,21 +246,10 @@ async function getClaimMaterializationStats(now: number) {
 }
 
 export async function indexLeaderboardSnapshot() {
-    if (indexing) {
-        return {
-            skipped: true,
-            holdersProcessed: 0,
-            priceUSD: 0,
-            timestamp: Date.now()
-        };
-    }
+    if (indexing) return { skipped: true, holdersProcessed: 0, priceUSD: 0, timestamp: Date.now() };
 
     indexing = true;
     const now = Date.now();
-    const timeoutMs = 30000;
-    const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Indexer timeout')), timeoutMs)
-    );
 
     const result = await measure('Index leaderboard snapshot', async (m: any) => {
         return await Promise.race([
@@ -280,7 +267,6 @@ export async function indexLeaderboardSnapshot() {
                 for (const holder of holders) {
                     const balance = toNumber(holder.balance, holder.decimals);
                     if (balance <= 0) continue;
-
                     const existing = byOwner.get(holder.address);
                     byOwner.set(holder.address, {
                         address: holder.address,
@@ -294,7 +280,6 @@ export async function indexLeaderboardSnapshot() {
                     for (const holder of largestHolders) {
                         const balance = toNumber(holder.balance, holder.decimals);
                         if (balance <= 0) continue;
-
                         const existing = byOwner.get(holder.address);
                         byOwner.set(holder.address, {
                             address: holder.address,
@@ -305,36 +290,56 @@ export async function indexLeaderboardSnapshot() {
 
                 const activeAddresses = new Set<string>();
                 const excludedAddresses = new Set<string>();
+                const newHolders: string[] = [];
+
                 for (const holder of byOwner.values()) {
                     if (!PublicKey.isOnCurve(holder.address)) {
                         excludedAddresses.add(holder.address.toLowerCase());
                         continue;
                     }
+
                     activeAddresses.add(holder.address.toLowerCase());
+
+                    const existing = getLeaderboard().find(h => h.address.toLowerCase() === holder.address.toLowerCase());
+                    const wasZero = !existing || existing.tokenBalance === 0;
+
                     upsertHolderSnapshot({
                         address: holder.address,
                         tokenBalance: holder.balance,
                         tokenValueUsd: holder.balance * priceUSD,
                         now
                     });
+
+                    if (wasZero && holder.balance > 0) {
+                        newHolders.push(holder.address);
+                    }
                 }
 
                 resetExcludedHolders(excludedAddresses, now);
                 zeroMissingHolderBalances(activeAddresses, now);
                 updateGravityForIndexedHolders(now);
 
+                // === NEW HOLDER DETECTION ===
+                if (newHolders.length > 0) {
+                    setMeta('newHolders', JSON.stringify(newHolders));
+                }
+
                 const feeDistribution = distributeTreasuryFees({ events: treasuryInflowStats.events, now });
                 const claimMaterializationStats = await m('Index claim events', () => getClaimMaterializationStats(now));
+
                 for (const materialization of claimMaterializationStats.materializations) {
                     materializeIndexedClaimEvent(materialization);
                 }
+
                 const totalFeesAccumulatedSol = treasuryInflowStats.totalFeesAccumulatedSol;
                 const previousTotalAccumulatedGravity = getMetaNumber('totalAccumulatedGravity');
                 const lastGravityDelta = Math.max(0, feeDistribution.totalGravity - previousTotalAccumulatedGravity);
+
                 const configuredLaunchTimestamp = config.indexer.launchTimestamp;
                 const launchTimestamp = configuredLaunchTimestamp > 0
                     ? configuredLaunchTimestamp
                     : getMetaNumber('launchTimestamp', now);
+
                 const epochIndex = Math.max(0, Math.floor((now - launchTimestamp) / 60000));
 
                 setMeta('tokenMint', TOKEN_MINT);
@@ -353,6 +358,7 @@ export async function indexLeaderboardSnapshot() {
                 setMeta('lastClaimScanAt', now);
                 setMeta('lastGravityDelta', lastGravityDelta);
                 setMeta('totalAccumulatedGravity', feeDistribution.totalGravity);
+
                 return {
                     skipped: false,
                     holdersProcessed: byOwner.size,
@@ -365,16 +371,9 @@ export async function indexLeaderboardSnapshot() {
                     epochIndex,
                     timestamp: now
                 };
-            })(),
-            timeoutPromise
+            })()
         ]);
-    }, (error) => ({
-        skipped: false,
-        holdersProcessed: 0,
-        priceUSD: 0,
-        error: String(error),
-        timestamp: now
-    }));
+    });
 
     indexing = false;
     return result;
@@ -387,11 +386,9 @@ export async function ensureIndexed() {
 
 export function startLeaderboardIndexer() {
     if (interval) return;
-
     void indexLeaderboardSnapshot().catch((error) => {
         console.error('[Indexer] Initial leaderboard snapshot failed:', error);
     });
-
     interval = setInterval(() => {
         void indexLeaderboardSnapshot().catch((error) => {
             console.error('[Indexer] Leaderboard snapshot failed:', error);
