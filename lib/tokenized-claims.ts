@@ -151,7 +151,10 @@ async function ensureTokenizedClaimLookupTable(
     (a) => !existingAddresses.has(a.toBase58()),
   );
 
-  if (missingAddresses.length > 0 && lut.state.addresses.length >= 256) {
+  if (
+    missingAddresses.length > 0 &&
+    lut.state.addresses.length + missingAddresses.length > 256
+  ) {
     lutAddress = await createLookupTable(kp);
     setMeta(metadataKey, lutAddress.toBase58());
     lut = await waitForLookupTableAddresses(lutAddress, 0);
