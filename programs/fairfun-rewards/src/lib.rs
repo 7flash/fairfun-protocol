@@ -467,6 +467,27 @@ fn save_user_delegation_settings(
     Ok(())
 }
 
+fn calculate_batch_claimant_token_amount(
+    purchased_amount: u64,
+    claimable_amount: u64,
+    total_claimable_amount: u64,
+) -> Result<u64> {
+    if purchased_amount == 0 || claimable_amount == 0 || total_claimable_amount == 0 {
+        return Ok(0);
+    }
+
+    let numerator = (purchased_amount as u128)
+        .checked_mul(claimable_amount as u128)
+        .unwrap()
+        .checked_mul((BASIS_POINTS_DENOMINATOR - DELEGATED_CLAIM_FEE_BPS) as u128)
+        .unwrap();
+    let denominator = (total_claimable_amount as u128)
+        .checked_mul(BASIS_POINTS_DENOMINATOR as u128)
+        .unwrap();
+
+    Ok((numerator / denominator) as u64)
+}
+
 #[program]
 pub mod fairfun_rewards {
     use super::*;
@@ -1345,6 +1366,478 @@ pub mod fairfun_rewards {
 
         Ok(())
     }
+
+    pub fn delegated_claim_many_to_tokens<'info>(
+        ctx: Context<'info, DelegatedClaimManyToTokens<'info>>,
+        entries: Vec<BatchClaimEntry>,
+        min_base_amount_out: u64,
+    ) -> Result<()> {
+        require!(
+            !entries.is_empty() && entries.len() <= MAX_BATCH_CLAIMANTS,
+            FairfunRewardsError::InvalidBatchSize
+        );
+        require!(ctx.accounts.pool.active, FairfunRewardsError::PoolInactive);
+
+        let instruction_index = load_current_index_checked(&ctx.accounts.instructions)?;
+        require!(
+            instruction_index > 0,
+            FairfunRewardsError::MissingSignatureInstruction
+        );
+        let signature_instruction =
+            load_instruction_at_checked((instruction_index - 1) as usize, &ctx.accounts.instructions)?;
+        let expected_message = build_batch_claim_message(&ctx.accounts.pool.key(), &entries);
+        verify_ed25519_ix_integrity(
+            &signature_instruction,
+            &ctx.accounts.config.backend_authority.to_bytes(),
+            &expected_message,
+        )?;
+
+        require_keys_eq!(
+            ctx.accounts.pump_amm_program.key(),
+            PUMP_AMM_PROGRAM_ID,
+            FairfunRewardsError::InvalidProgramId
+        );
+        require_keys_eq!(
+            ctx.accounts.pump_fee_program.key(),
+            PUMP_FEE_PROGRAM_ID,
+            FairfunRewardsError::InvalidProgramId
+        );
+        require_keys_eq!(
+            ctx.accounts.associated_token_program.key(),
+            ASSOCIATED_TOKEN_PROGRAM_ID,
+            FairfunRewardsError::InvalidProgramId
+        );
+        require_keys_eq!(
+            ctx.accounts.pump_quote_mint.key(),
+            NATIVE_MINT_ID,
+            FairfunRewardsError::InvalidMessageContent
+        );
+        require_keys_eq!(
+            ctx.accounts.pump_base_mint.key(),
+            ctx.accounts.pool.token_mint,
+            FairfunRewardsError::InvalidMessageContent
+        );
+        require_keys_eq!(
+            ctx.accounts.pump_amm_global_config.key(),
+            pump_amm_global_config_pda(),
+            FairfunRewardsError::InvalidMessageContent
+        );
+        require_keys_eq!(
+            ctx.accounts.pump_amm_event_authority.key(),
+            pump_amm_event_authority_pda(),
+            FairfunRewardsError::InvalidMessageContent
+        );
+        require_keys_eq!(
+            ctx.accounts.pump_global_volume_accumulator.key(),
+            pump_amm_global_volume_accumulator_pda(),
+            FairfunRewardsError::InvalidMessageContent
+        );
+        require_keys_eq!(
+            ctx.accounts.pump_user_volume_accumulator.key(),
+            pump_amm_user_volume_accumulator_pda(&ctx.accounts.treasury.key()),
+            FairfunRewardsError::InvalidMessageContent
+        );
+        require_keys_eq!(
+            ctx.accounts.pump_fee_config.key(),
+            pump_amm_fee_config_pda(),
+            FairfunRewardsError::InvalidMessageContent
+        );
+        require_keys_eq!(
+            ctx.accounts.pump_coin_creator_vault_authority.key(),
+            pump_amm_coin_creator_vault_authority_pda(ctx.accounts.pump_coin_creator.key),
+            FairfunRewardsError::InvalidMessageContent
+        );
+        require_keys_eq!(
+            ctx.accounts.pump_pool_v2.key(),
+            pump_amm_pool_v2_pda(&ctx.accounts.pool.token_mint),
+            FairfunRewardsError::InvalidMessageContent
+        );
+        require_keys_eq!(
+            ctx.accounts.treasury_wsol_account.key(),
+            get_associated_token_address_with_program_id(
+                &ctx.accounts.treasury.key(),
+                &NATIVE_MINT_ID,
+                &spl_token::id(),
+            ),
+            FairfunRewardsError::InvalidMessageContent
+        );
+        require_keys_eq!(
+            ctx.accounts.treasury_token_account.key(),
+            get_associated_token_address_with_program_id(
+                &ctx.accounts.treasury.key(),
+                &ctx.accounts.pool.token_mint,
+                &spl_token_2022::id(),
+            ),
+            FairfunRewardsError::InvalidMessageContent
+        );
+        require_keys_eq!(
+            ctx.accounts.delegator_token_account.key(),
+            get_associated_token_address_with_program_id(
+                &ctx.accounts.delegator.key(),
+                &ctx.accounts.pool.token_mint,
+                &spl_token_2022::id(),
+            ),
+            FairfunRewardsError::InvalidMessageContent
+        );
+        require!(
+            ctx.remaining_accounts.len() == entries.len() * 4,
+            FairfunRewardsError::InvalidBatchClaimAccounts
+        );
+
+        let onchain_total_received = ctx
+            .accounts
+            .treasury
+            .lamports()
+            .checked_add(ctx.accounts.pool.total_claimed)
+            .unwrap();
+        let clock = Clock::get()?;
+        let pool_key = ctx.accounts.pool.key();
+
+        let mut claimable_amounts = Vec::with_capacity(entries.len());
+        let mut claimant_token_accounts = Vec::with_capacity(entries.len());
+        let mut total_claimable_amount = 0u64;
+
+        let mut remaining_accounts_iter = ctx.remaining_accounts.iter();
+        for claim_entry in &entries {
+            require!(
+                clock.unix_timestamp <= claim_entry.expires_at,
+                FairfunRewardsError::SignatureExpired
+            );
+            require_keys_neq!(
+                ctx.accounts.delegator.key(),
+                claim_entry.claimant,
+                FairfunRewardsError::InvalidDelegatedClaimTarget
+            );
+
+            let user_claim_account = next_account_info(&mut remaining_accounts_iter)?;
+            let claimant_settings_account = next_account_info(&mut remaining_accounts_iter)?;
+            let claimant_account = next_account_info(&mut remaining_accounts_iter)?;
+            let claimant_token_account = next_account_info(&mut remaining_accounts_iter)?;
+
+            let (expected_user_claim, user_claim_bump) = Pubkey::find_program_address(
+                &[
+                    b"rewards_user_claim",
+                    pool_key.as_ref(),
+                    claim_entry.claimant.as_ref(),
+                ],
+                &crate::ID,
+            );
+            require_keys_eq!(
+                user_claim_account.key(),
+                expected_user_claim,
+                FairfunRewardsError::InvalidUserClaimAccount
+            );
+
+            let (expected_claimant_settings, claimant_settings_bump) = Pubkey::find_program_address(
+                &[
+                    b"rewards_user_delegation_settings",
+                    pool_key.as_ref(),
+                    claim_entry.claimant.as_ref(),
+                ],
+                &crate::ID,
+            );
+            require_keys_eq!(
+                claimant_settings_account.key(),
+                expected_claimant_settings,
+                FairfunRewardsError::InvalidDelegationSettingsAccount
+            );
+            require_keys_eq!(
+                claimant_account.key(),
+                claim_entry.claimant,
+                FairfunRewardsError::InvalidClaimantAccount
+            );
+            require_keys_eq!(
+                claimant_token_account.key(),
+                get_associated_token_address_with_program_id(
+                    &claim_entry.claimant,
+                    &ctx.accounts.pool.token_mint,
+                    &spl_token_2022::id(),
+                ),
+                FairfunRewardsError::InvalidMessageContent
+            );
+
+            let user_claim_seeds: &[&[u8]] = &[
+                b"rewards_user_claim",
+                pool_key.as_ref(),
+                claim_entry.claimant.as_ref(),
+                &[user_claim_bump],
+            ];
+            create_program_owned_pda_if_needed(
+                &ctx.accounts.delegator.to_account_info(),
+                user_claim_account,
+                &ctx.accounts.system_program.to_account_info(),
+                UserClaim::DISCRIMINATOR.len() + UserClaim::INIT_SPACE,
+                user_claim_seeds,
+            )?;
+
+            let claimant_settings_seeds: &[&[u8]] = &[
+                b"rewards_user_delegation_settings",
+                pool_key.as_ref(),
+                claim_entry.claimant.as_ref(),
+                &[claimant_settings_bump],
+            ];
+            create_program_owned_pda_if_needed(
+                &ctx.accounts.delegator.to_account_info(),
+                claimant_settings_account,
+                &ctx.accounts.system_program.to_account_info(),
+                UserDelegationSettings::DISCRIMINATOR.len() + UserDelegationSettings::INIT_SPACE,
+                claimant_settings_seeds,
+            )?;
+
+            let mut claimant_settings = load_user_delegation_settings(claimant_settings_account)?;
+            if claimant_settings.user == Pubkey::default()
+                && claimant_settings.pool == Pubkey::default()
+            {
+                claimant_settings.user = claim_entry.claimant;
+                claimant_settings.pool = pool_key;
+                claimant_settings.delegated_claims_enabled = true;
+                claimant_settings.bump = claimant_settings_bump;
+                save_user_delegation_settings(claimant_settings_account, &claimant_settings)?;
+            }
+            require!(
+                claimant_settings.delegated_claims_enabled,
+                FairfunRewardsError::DelegatedClaimsDisabled
+            );
+
+            create_ata_if_needed(
+                &ctx.accounts.delegator.to_account_info(),
+                claimant_token_account,
+                claimant_account,
+                &ctx.accounts.pump_base_mint.to_account_info(),
+                &ctx.accounts.pump_base_token_program.to_account_info(),
+                &ctx.accounts.associated_token_program.to_account_info(),
+                &ctx.accounts.system_program.to_account_info(),
+            )?;
+
+            let user_claim = load_user_claim(user_claim_account)?;
+            let claimable = calculate_claimable(
+                user_claim.claimed_amount,
+                claim_entry.cumulative_earned,
+                claim_entry.observed_total_deposits,
+                onchain_total_received,
+                ctx.accounts.pool.total_claimed,
+            )?;
+            require!(
+                claimable >= MIN_BATCH_CLAIM_LAMPORTS,
+                FairfunRewardsError::BatchClaimBelowMinimum
+            );
+
+            total_claimable_amount = total_claimable_amount.checked_add(claimable).unwrap();
+            claimable_amounts.push(claimable);
+            claimant_token_accounts.push(*claimant_token_account.key);
+        }
+
+        require!(
+            ctx.accounts.treasury.lamports() >= total_claimable_amount,
+            FairfunRewardsError::InsufficientTreasury
+        );
+
+        create_ata_if_needed(
+            &ctx.accounts.delegator.to_account_info(),
+            &ctx.accounts.treasury_wsol_account.to_account_info(),
+            &ctx.accounts.treasury.to_account_info(),
+            &ctx.accounts.pump_quote_mint.to_account_info(),
+            &ctx.accounts.pump_quote_token_program.to_account_info(),
+            &ctx.accounts.associated_token_program.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+        )?;
+        create_ata_if_needed(
+            &ctx.accounts.delegator.to_account_info(),
+            &ctx.accounts.treasury_token_account.to_account_info(),
+            &ctx.accounts.treasury.to_account_info(),
+            &ctx.accounts.pump_base_mint.to_account_info(),
+            &ctx.accounts.pump_base_token_program.to_account_info(),
+            &ctx.accounts.associated_token_program.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+        )?;
+        create_ata_if_needed(
+            &ctx.accounts.delegator.to_account_info(),
+            &ctx.accounts.delegator_token_account.to_account_info(),
+            &ctx.accounts.delegator.to_account_info(),
+            &ctx.accounts.pump_base_mint.to_account_info(),
+            &ctx.accounts.pump_base_token_program.to_account_info(),
+            &ctx.accounts.associated_token_program.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+        )?;
+
+        let treasury_bump = ctx.accounts.pool.treasury_bump;
+        let token_mint = ctx.accounts.pool.token_mint;
+        let signer_seeds: &[&[u8]] = &[b"rewards_treasury", token_mint.as_ref(), &[treasury_bump]];
+
+        let treasury_token_balance_before =
+            read_token_2022_amount(&ctx.accounts.treasury_token_account.to_account_info())?;
+        let wrap_transfer_instruction = anchor_lang::solana_program::system_instruction::transfer(
+            &ctx.accounts.treasury.key(),
+            &ctx.accounts.treasury_wsol_account.key(),
+            total_claimable_amount,
+        );
+        invoke_signed(
+            &wrap_transfer_instruction,
+            &[
+                ctx.accounts.treasury.to_account_info(),
+                ctx.accounts.treasury_wsol_account.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+            &[signer_seeds],
+        )?;
+
+        invoke_sync_native(
+            &ctx.accounts.pump_quote_token_program.to_account_info(),
+            &ctx.accounts.treasury_wsol_account.to_account_info(),
+        )?;
+
+        invoke_pump_amm_buy(
+            PumpAmmBuyAccounts {
+                pool: ctx.accounts.pump_pool.to_account_info(),
+                user: ctx.accounts.treasury.to_account_info(),
+                global_config: ctx.accounts.pump_amm_global_config.to_account_info(),
+                base_mint: ctx.accounts.pump_base_mint.to_account_info(),
+                quote_mint: ctx.accounts.pump_quote_mint.to_account_info(),
+                user_base_token_account: ctx.accounts.treasury_token_account.to_account_info(),
+                user_quote_token_account: ctx.accounts.treasury_wsol_account.to_account_info(),
+                pool_base_token_account: ctx.accounts.pump_pool_base_token_account.to_account_info(),
+                pool_quote_token_account: ctx.accounts.pump_pool_quote_token_account.to_account_info(),
+                protocol_fee_recipient: ctx.accounts.pump_protocol_fee_recipient.to_account_info(),
+                protocol_fee_recipient_token_account: ctx.accounts.pump_protocol_fee_recipient_token_account.to_account_info(),
+                base_token_program: ctx.accounts.pump_base_token_program.to_account_info(),
+                quote_token_program: ctx.accounts.pump_quote_token_program.to_account_info(),
+                system_program: ctx.accounts.system_program.to_account_info(),
+                associated_token_program: ctx.accounts.associated_token_program.to_account_info(),
+                event_authority: ctx.accounts.pump_amm_event_authority.to_account_info(),
+                amm_program: ctx.accounts.pump_amm_program.to_account_info(),
+                coin_creator_vault_ata: ctx.accounts.pump_coin_creator_vault_ata.to_account_info(),
+                coin_creator_vault_authority: ctx.accounts.pump_coin_creator_vault_authority.to_account_info(),
+                global_volume_accumulator: ctx.accounts.pump_global_volume_accumulator.to_account_info(),
+                user_volume_accumulator: ctx.accounts.pump_user_volume_accumulator.to_account_info(),
+                fee_config: ctx.accounts.pump_fee_config.to_account_info(),
+                fee_program: ctx.accounts.pump_fee_program.to_account_info(),
+                pool_v2: ctx.accounts.pump_pool_v2.to_account_info(),
+                buyback_fee_recipient: ctx.accounts.pump_buyback_fee_recipient.to_account_info(),
+                buyback_fee_recipient_token_account: ctx.accounts.pump_buyback_fee_recipient_token_account.to_account_info(),
+            },
+            min_base_amount_out,
+            total_claimable_amount,
+            &[signer_seeds],
+        )?;
+
+        let treasury_token_balance_after =
+            read_token_2022_amount(&ctx.accounts.treasury_token_account.to_account_info())?;
+        let purchased_amount = treasury_token_balance_after
+            .checked_sub(treasury_token_balance_before)
+            .unwrap();
+        require!(purchased_amount > 0, FairfunRewardsError::NothingToClaim);
+        let token_decimals = read_token_2022_decimals(&ctx.accounts.pump_base_mint.to_account_info())?;
+
+        let mut claimant_token_amounts = Vec::with_capacity(entries.len());
+        let mut total_claimant_token_amount = 0u64;
+        for claimable_amount in &claimable_amounts {
+            let claimant_token_amount = calculate_batch_claimant_token_amount(
+                purchased_amount,
+                *claimable_amount,
+                total_claimable_amount,
+            )?;
+            total_claimant_token_amount = total_claimant_token_amount
+                .checked_add(claimant_token_amount)
+                .unwrap();
+            claimant_token_amounts.push(claimant_token_amount);
+        }
+        let delegator_token_fee = purchased_amount
+            .checked_sub(total_claimant_token_amount)
+            .unwrap();
+
+        let mut total_claimed_running = ctx.accounts.pool.total_claimed;
+        let mut remaining_accounts_iter = ctx.remaining_accounts.iter();
+        for (index, claim_entry) in entries.iter().enumerate() {
+            let user_claim_account = next_account_info(&mut remaining_accounts_iter)?;
+            let claimant_settings_account = next_account_info(&mut remaining_accounts_iter)?;
+            let claimant_account = next_account_info(&mut remaining_accounts_iter)?;
+            let claimant_token_account = next_account_info(&mut remaining_accounts_iter)?;
+
+            let mut user_claim = load_user_claim(user_claim_account)?;
+            let mut claimant_settings = load_user_delegation_settings(claimant_settings_account)?;
+
+            let claimant_token_amount = claimant_token_amounts[index];
+            if claimant_token_amount > 0 {
+                invoke_transfer_checked(
+                    &ctx.accounts.pump_base_token_program.to_account_info(),
+                    &ctx.accounts.treasury_token_account.to_account_info(),
+                    &ctx.accounts.pump_base_mint.to_account_info(),
+                    claimant_token_account,
+                    &ctx.accounts.treasury.to_account_info(),
+                    claimant_token_amount,
+                    token_decimals,
+                    &[signer_seeds],
+                )?;
+            }
+
+            user_claim.user = claim_entry.claimant;
+            user_claim.pool = pool_key;
+            user_claim.claimed_amount = claim_entry.cumulative_earned;
+            user_claim.bump = user_claim.bump;
+
+            if claimant_settings.user == Pubkey::default() && claimant_settings.pool == Pubkey::default() {
+                claimant_settings.user = claim_entry.claimant;
+                claimant_settings.pool = pool_key;
+            }
+
+            total_claimed_running = total_claimed_running
+                .checked_add(claimable_amounts[index])
+                .unwrap();
+            emit!(RewardsClaimed {
+                pool: pool_key,
+                token_mint: ctx.accounts.pool.token_mint,
+                user: claim_entry.claimant,
+                claimable: claimable_amounts[index],
+                cumulative_earned: claim_entry.cumulative_earned,
+                observed_total_deposits: claim_entry.observed_total_deposits,
+                total_claimed: total_claimed_running,
+            });
+
+            save_user_claim(user_claim_account, &user_claim)?;
+            save_user_delegation_settings(claimant_settings_account, &claimant_settings)?;
+
+            let _ = claimant_account;
+        }
+
+        if delegator_token_fee > 0 {
+            invoke_transfer_checked(
+                &ctx.accounts.pump_base_token_program.to_account_info(),
+                &ctx.accounts.treasury_token_account.to_account_info(),
+                &ctx.accounts.pump_base_mint.to_account_info(),
+                &ctx.accounts.delegator_token_account.to_account_info(),
+                &ctx.accounts.treasury.to_account_info(),
+                delegator_token_fee,
+                token_decimals,
+                &[signer_seeds],
+            )?;
+        }
+
+        invoke_close_account(
+            &ctx.accounts.pump_quote_token_program.to_account_info(),
+            &ctx.accounts.treasury_wsol_account.to_account_info(),
+            &ctx.accounts.treasury.to_account_info(),
+            &ctx.accounts.treasury.to_account_info(),
+            &[signer_seeds],
+        )?;
+
+        ctx.accounts.pool.total_claimed = total_claimed_running;
+        if ctx.accounts.pool.total_deposited < onchain_total_received {
+            ctx.accounts.pool.total_deposited = onchain_total_received;
+        }
+
+        emit!(BatchRewardsClaimedToTokens {
+            pool: ctx.accounts.pool.key(),
+            token_mint: ctx.accounts.pool.token_mint,
+            delegator: ctx.accounts.delegator.key(),
+            claim_count: entries.len() as u32,
+            total_claimed_amount: total_claimable_amount,
+            total_purchased_tokens: purchased_amount,
+            total_claimant_tokens: total_claimant_token_amount,
+            total_delegator_token_fee: delegator_token_fee,
+        });
+
+        Ok(())
+    }
 }
 
 fn build_claim_message(
@@ -1755,6 +2248,102 @@ pub struct DelegatedClaimMany<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+pub struct DelegatedClaimManyToTokens<'info> {
+    #[account(mut)]
+    pub delegator: Signer<'info>,
+
+    #[account(
+        seeds = [b"rewards_config"],
+        bump = config.bump,
+    )]
+    pub config: Account<'info, GlobalConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"rewards_pool", pool.token_mint.as_ref()],
+        bump = pool.bump,
+    )]
+    pub pool: Account<'info, RewardPool>,
+
+    #[account(
+        mut,
+        seeds = [b"rewards_treasury", pool.token_mint.as_ref()],
+        bump = pool.treasury_bump,
+    )]
+    /// CHECK: zero-data system-owned SOL treasury PDA
+    pub treasury: UncheckedAccount<'info>,
+
+    #[account(address = INSTRUCTIONS_ID)]
+    /// CHECK: instructions sysvar is validated by address
+    pub instructions: UncheckedAccount<'info>,
+
+    /// CHECK: Pump AMM program
+    pub pump_amm_program: UncheckedAccount<'info>,
+    /// CHECK: Pump AMM global config PDA
+    pub pump_amm_global_config: UncheckedAccount<'info>,
+    /// CHECK: FAIRFUN token mint
+    pub pump_base_mint: UncheckedAccount<'info>,
+    /// CHECK: WSOL mint
+    pub pump_quote_mint: UncheckedAccount<'info>,
+    /// CHECK: Pump AMM pool
+    #[account(mut)]
+    pub pump_pool: UncheckedAccount<'info>,
+    /// CHECK: treasury-owned FAIRFUN ATA
+    #[account(mut)]
+    pub treasury_token_account: UncheckedAccount<'info>,
+    /// CHECK: treasury-owned WSOL ATA
+    #[account(mut)]
+    pub treasury_wsol_account: UncheckedAccount<'info>,
+    /// CHECK: Pump pool FAIRFUN vault
+    #[account(mut)]
+    pub pump_pool_base_token_account: UncheckedAccount<'info>,
+    /// CHECK: Pump pool WSOL vault
+    #[account(mut)]
+    pub pump_pool_quote_token_account: UncheckedAccount<'info>,
+    /// CHECK: protocol fee recipient
+    pub pump_protocol_fee_recipient: UncheckedAccount<'info>,
+    /// CHECK: protocol fee recipient token account
+    #[account(mut)]
+    pub pump_protocol_fee_recipient_token_account: UncheckedAccount<'info>,
+    /// CHECK: Token-2022 program
+    pub pump_base_token_program: UncheckedAccount<'info>,
+    /// CHECK: SPL Token program
+    pub pump_quote_token_program: UncheckedAccount<'info>,
+    /// CHECK: associated token program
+    pub associated_token_program: UncheckedAccount<'info>,
+    /// CHECK: Pump AMM event authority PDA
+    pub pump_amm_event_authority: UncheckedAccount<'info>,
+    /// CHECK: coin creator vault ATA
+    #[account(mut)]
+    pub pump_coin_creator_vault_ata: UncheckedAccount<'info>,
+    /// CHECK: coin creator vault authority PDA
+    pub pump_coin_creator_vault_authority: UncheckedAccount<'info>,
+    /// CHECK: coin creator account for PDA derivation
+    pub pump_coin_creator: UncheckedAccount<'info>,
+    /// CHECK: Pump AMM global volume accumulator PDA
+    pub pump_global_volume_accumulator: UncheckedAccount<'info>,
+    /// CHECK: Pump AMM treasury user volume accumulator PDA
+    #[account(mut)]
+    pub pump_user_volume_accumulator: UncheckedAccount<'info>,
+    /// CHECK: Pump fee config PDA
+    pub pump_fee_config: UncheckedAccount<'info>,
+    /// CHECK: Pump fee program
+    pub pump_fee_program: UncheckedAccount<'info>,
+    /// CHECK: Pump pool-v2 PDA for creator coins
+    pub pump_pool_v2: UncheckedAccount<'info>,
+    /// CHECK: buyback fee recipient
+    pub pump_buyback_fee_recipient: UncheckedAccount<'info>,
+    /// CHECK: buyback fee recipient token account
+    #[account(mut)]
+    pub pump_buyback_fee_recipient_token_account: UncheckedAccount<'info>,
+    /// CHECK: delegator FAIRFUN ATA
+    #[account(mut)]
+    pub delegator_token_account: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
 #[event]
 pub struct TreasuryDeposited {
     pub pool: Pubkey,
@@ -1783,6 +2372,18 @@ pub struct BatchRewardsClaimed {
     pub claim_count: u32,
     pub total_claimed_amount: u64,
     pub total_delegator_fee: u64,
+}
+
+#[event]
+pub struct BatchRewardsClaimedToTokens {
+    pub pool: Pubkey,
+    pub token_mint: Pubkey,
+    pub delegator: Pubkey,
+    pub claim_count: u32,
+    pub total_claimed_amount: u64,
+    pub total_purchased_tokens: u64,
+    pub total_claimant_tokens: u64,
+    pub total_delegator_token_fee: u64,
 }
 
 #[cfg(test)]
@@ -1859,5 +2460,22 @@ mod tests {
         let first = build_batch_claim_message(&pool, &entries);
         let second = build_batch_claim_message(&pool, &entries);
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn batch_token_distribution_pro_rata_keeps_fee_slice() {
+        let purchased_amount = 1_000_000u64;
+        let total_claimable_amount = 500_000u64;
+        let first_claimant_tokens =
+            calculate_batch_claimant_token_amount(purchased_amount, 200_000, total_claimable_amount)
+                .unwrap();
+        let second_claimant_tokens =
+            calculate_batch_claimant_token_amount(purchased_amount, 300_000, total_claimable_amount)
+                .unwrap();
+        let delegator_tokens = purchased_amount - first_claimant_tokens - second_claimant_tokens;
+
+        assert_eq!(first_claimant_tokens, 360_000);
+        assert_eq!(second_claimant_tokens, 540_000);
+        assert_eq!(delegator_tokens, 100_000);
     }
 }

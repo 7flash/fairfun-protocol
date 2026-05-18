@@ -58,6 +58,10 @@ export interface BatchClaimEntry {
     expiresAt: bigint;
 }
 
+export interface TokenizedBatchClaimEntry extends BatchClaimEntry {
+    estimatedClaimableLamports: bigint;
+}
+
 export function getProgramId() {
     return new PublicKey(config.rewards.programId);
 }
@@ -657,6 +661,182 @@ export async function buildDelegatedClaimToTokensTransaction(
         claimantPubkey: claimant.toBase58(),
         delegatorPubkey: delegator.toBase58(),
         minimumTokenAmountOut: minimumTokenAmountOut.toString(),
+    };
+}
+
+export async function buildDelegatedClaimManyToTokensTransaction(
+    delegator: PublicKey,
+    entries: Array<TokenizedBatchClaimEntry>,
+) {
+    const expiresAt = BigInt(Math.floor(Date.now() / 1000) + config.rewards.claimExpiresInSeconds);
+    const batchEntries: Array<BatchClaimEntry> = entries.map((entry) => ({
+        claimant: entry.claimant,
+        cumulativeEarned: entry.cumulativeEarned,
+        observedTotalDeposits: entry.observedTotalDeposits,
+        expiresAt,
+    }));
+    const message = buildBatchClaimMessage(derivePoolPda(), batchEntries);
+    const signer = loadBackendKeypair();
+    const ed25519Instruction = Ed25519Program.createInstructionWithPrivateKey({
+        privateKey: signer.secretKey,
+        message,
+    });
+
+    const totalEstimatedClaimableLamports = entries.reduce(
+        (sum, entry) => sum + entry.estimatedClaimableLamports,
+        0n,
+    );
+    const treasury = deriveTreasuryPda();
+    const pumpAmmSdk = new OnlinePumpAmmSdk(connection);
+    const pumpPool = canonicalPumpPoolPda(new PublicKey(config.token.mint));
+    const swapState = await pumpAmmSdk.swapSolanaState(pumpPool, treasury);
+    const swapAccounts = (PUMP_AMM_SDK as any).swapAccounts(swapState) as {
+        protocolFeeRecipient: PublicKey;
+        protocolFeeRecipientTokenAccount: PublicKey;
+        buybackFeeRecipient: PublicKey;
+        buybackFeeRecipientTokenAccount: PublicKey;
+        coinCreatorVaultAta: PublicKey;
+        coinCreatorVaultAuthority: PublicKey;
+        globalVolumeAccumulator: PublicKey;
+        userVolumeAccumulator: PublicKey;
+        feeConfig: PublicKey;
+        feeProgram: PublicKey;
+        baseMint: PublicKey;
+        quoteMint: PublicKey;
+        pool: PublicKey;
+        poolBaseTokenAccount: PublicKey;
+        poolQuoteTokenAccount: PublicKey;
+        baseTokenProgram: PublicKey;
+        quoteTokenProgram: PublicKey;
+    };
+
+    const quote = quotePumpAmmBuyQuoteInput({
+        quote: new BN(totalEstimatedClaimableLamports.toString()),
+        slippage: 15,
+        baseReserve: swapState.poolBaseAmount,
+        quoteReserve: swapState.poolQuoteAmount,
+        globalConfig: swapState.globalConfig,
+        baseMintAccount: swapState.baseMintAccount,
+        baseMint: swapState.baseMint,
+        coinCreator: swapState.pool.coinCreator,
+        creator: swapState.pool.creator,
+        feeConfig: swapState.feeConfig,
+    });
+    const quotedBaseAmountOut = BigInt(quote.base.toString());
+    const minimumTokenAmountOut = quotedBaseAmountOut * TOKENIZED_CLAIM_MIN_OUTPUT_BPS / TOKENIZED_CLAIM_BPS_DENOMINATOR;
+
+    const treasuryTokenAccount = getAssociatedTokenAddressSync(
+        new PublicKey(config.token.mint),
+        treasury,
+        true,
+        TOKEN_2022_PROGRAM_ID,
+    );
+    const treasuryWsolAccount = getAssociatedTokenAddressSync(
+        NATIVE_MINT,
+        treasury,
+        true,
+        TOKEN_PROGRAM_ID,
+    );
+    const delegatorTokenAccount = getAssociatedTokenAddressSync(
+        new PublicKey(config.token.mint),
+        delegator,
+        false,
+        TOKEN_2022_PROGRAM_ID,
+    );
+
+    const data = Buffer.alloc(8 + 4 + batchEntries.length * 56 + 8);
+    instructionDiscriminator('delegated_claim_many_to_tokens').copy(data, 0);
+    data.writeUInt32LE(batchEntries.length, 8);
+
+    let offset = 12;
+    for (const entry of batchEntries) {
+        entry.claimant.toBuffer().copy(data, offset);
+        offset += 32;
+        data.writeBigUInt64LE(entry.cumulativeEarned, offset);
+        offset += 8;
+        data.writeBigUInt64LE(entry.observedTotalDeposits, offset);
+        offset += 8;
+        data.writeBigInt64LE(entry.expiresAt, offset);
+        offset += 8;
+    }
+    data.writeBigUInt64LE(minimumTokenAmountOut, offset);
+
+    const instructionKeys = [
+        { pubkey: delegator, isSigner: true, isWritable: true },
+        { pubkey: deriveConfigPda(), isSigner: false, isWritable: false },
+        { pubkey: derivePoolPda(), isSigner: false, isWritable: true },
+        { pubkey: treasury, isSigner: false, isWritable: true },
+        { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
+        { pubkey: new PublicKey(PUMP_AMM_PROGRAM_ID.toString()), isSigner: false, isWritable: false },
+        { pubkey: new PublicKey(PUMP_AMM_GLOBAL_CONFIG_PDA.toString()), isSigner: false, isWritable: false },
+        { pubkey: swapAccounts.baseMint, isSigner: false, isWritable: false },
+        { pubkey: swapAccounts.quoteMint, isSigner: false, isWritable: false },
+        { pubkey: swapAccounts.pool, isSigner: false, isWritable: true },
+        { pubkey: treasuryTokenAccount, isSigner: false, isWritable: true },
+        { pubkey: treasuryWsolAccount, isSigner: false, isWritable: true },
+        { pubkey: swapAccounts.poolBaseTokenAccount, isSigner: false, isWritable: true },
+        { pubkey: swapAccounts.poolQuoteTokenAccount, isSigner: false, isWritable: true },
+        { pubkey: swapAccounts.protocolFeeRecipient, isSigner: false, isWritable: false },
+        { pubkey: swapAccounts.protocolFeeRecipientTokenAccount, isSigner: false, isWritable: true },
+        { pubkey: swapAccounts.baseTokenProgram, isSigner: false, isWritable: false },
+        { pubkey: swapAccounts.quoteTokenProgram, isSigner: false, isWritable: false },
+        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: new PublicKey(PUMP_AMM_EVENT_AUTHORITY_PDA.toString()), isSigner: false, isWritable: false },
+        { pubkey: swapAccounts.coinCreatorVaultAta, isSigner: false, isWritable: true },
+        { pubkey: coinCreatorVaultAuthorityPda(swapState.pool.coinCreator), isSigner: false, isWritable: false },
+        { pubkey: swapState.pool.coinCreator, isSigner: false, isWritable: false },
+        { pubkey: new PublicKey(PUMP_AMM_GLOBAL_VOLUME_ACCUMULATOR_PDA.toString()), isSigner: false, isWritable: false },
+        { pubkey: userVolumeAccumulatorPda(treasury), isSigner: false, isWritable: true },
+        { pubkey: new PublicKey(PUMP_AMM_FEE_CONFIG_PDA.toString()), isSigner: false, isWritable: false },
+        { pubkey: new PublicKey(PUMP_FEE_PROGRAM_ID.toString()), isSigner: false, isWritable: false },
+        { pubkey: poolV2Pda(new PublicKey(config.token.mint)), isSigner: false, isWritable: false },
+        { pubkey: swapAccounts.buybackFeeRecipient, isSigner: false, isWritable: false },
+        { pubkey: swapAccounts.buybackFeeRecipientTokenAccount, isSigner: false, isWritable: true },
+        { pubkey: delegatorTokenAccount, isSigner: false, isWritable: true },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ];
+
+    for (const entry of batchEntries) {
+        instructionKeys.push(
+            { pubkey: deriveUserClaimPda(entry.claimant), isSigner: false, isWritable: true },
+            { pubkey: deriveUserDelegationSettingsPda(entry.claimant), isSigner: false, isWritable: true },
+            { pubkey: entry.claimant, isSigner: false, isWritable: true },
+            {
+                pubkey: getAssociatedTokenAddressSync(
+                    new PublicKey(config.token.mint),
+                    entry.claimant,
+                    false,
+                    TOKEN_2022_PROGRAM_ID,
+                ),
+                isSigner: false,
+                isWritable: true,
+            },
+        );
+    }
+
+    const instruction = new TransactionInstruction({
+        programId: getProgramId(),
+        keys: instructionKeys,
+        data,
+    });
+
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+    const transaction = new Transaction({
+        feePayer: delegator,
+        blockhash,
+        lastValidBlockHeight,
+    }).add(ed25519Instruction, instruction);
+
+    return {
+        transaction,
+        blockhash,
+        lastValidBlockHeight,
+        expiresAt: Number(expiresAt),
+        signerPubkey: signer.publicKey.toBase58(),
+        delegatorPubkey: delegator.toBase58(),
+        claimants: batchEntries.map((entry) => entry.claimant.toBase58()),
+        minimumTokenAmountOut: minimumTokenAmountOut.toString(),
+        totalEstimatedClaimableLamports: totalEstimatedClaimableLamports.toString(),
     };
 }
 
