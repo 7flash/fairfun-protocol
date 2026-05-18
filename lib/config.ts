@@ -33,6 +33,7 @@ export interface RuntimeConfig {
     claimer: {
         intervalMs: number;
         minClaimSol: number;
+        minBatchClaimants: number;
     };
     creatorFees: {
         enabled: boolean;
@@ -122,6 +123,8 @@ function parseConfig(): RuntimeConfig {
         claimer: {
             intervalMs: Math.max(1000, getNumber(env('CLAIMER_INTERVAL_MS'), 300000)),
             minClaimSol: Math.max(0.000001, getNumber(env('CLAIMER_MIN_CLAIM_SOL'), 0.01)),
+            maxBatchClaimants: Math.max(1, Math.min(8, getNumber(env('CLAIMER_MAX_BATCH_CLAIMANTS'), 4))),
+            minBatchClaimants: Math.max(1, getNumber(env('CLAIMER_MIN_BATCH_CLAIMANTS'), 1)),
         },
         creatorFees: {
             enabled: getBoolean(env('CREATOR_FEES_ENABLED'), false),

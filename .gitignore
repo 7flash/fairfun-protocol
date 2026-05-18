@@ -9,6 +9,7 @@ test-ledger
 *.log
 data/
 .config.toml
+.keys/
 
 # Local machine and secret-bearing config
 local-config.json
@@ -16,3 +17,5 @@ mainnet-config.json
 mainnet-authority.json
 test-users.json
 docs
+
+*.json

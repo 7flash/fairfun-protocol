@@ -13,8 +13,15 @@ import {
 import { sendSignedDelegatedTokenBatchClaimTransaction } from './tokenized-claims';
 
 let running = false;
-const MAX_BATCH_CLAIMANTS = 8;
+function getMaxBatchClaimants() {
+  const value = Math.floor(Number(config.claimer.maxBatchClaimants ?? 3));
+  return Math.max(1, Math.min(8, value));
+}
 
+function getMinBatchClaimants() {
+  const value = Math.floor(Number(config.claimer.minBatchClaimants ?? 1));
+  return Math.max(1, Math.min(getMaxBatchClaimants(), value));
+}
 function getEligibleHolders() {
     const threshold = config.claimer.minClaimSol;
     return getLeaderboard()
@@ -78,10 +85,11 @@ export async function runAutomaticRewardClaimPass(now = Date.now()) {
     running = true;
     try {
         return await measure('Run automatic reward claim pass', async () => {
-            const holders = getEligibleHolders();
+            let holders = getEligibleHolders();
             if (holders.length === 0) {
                 return { attempted: false, completed: false, reason: 'no-eligible-holder' };
             }
+            holders = holders.slice(0, getMaxBatchClaimants());
 
             const backend = loadBackendKeypair();
             const observedTotalDepositsLamports = solToLamportsBigInt(getMetaNumber('totalFeesAccumulatedSol'));
@@ -130,7 +138,7 @@ export async function runAutomaticRewardClaimPass(now = Date.now()) {
                     estimatedClaimableLamports: preparedClaim.estimatedClaimableLamports,
                     previousClaimedSol,
                 });
-                if (batchEntries.length >= MAX_BATCH_CLAIMANTS) {
+                if (batchEntries.length >= getMaxBatchClaimants()) {
                     break;
                 }
             }
