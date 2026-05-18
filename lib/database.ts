@@ -3,6 +3,7 @@ import path from 'path';
 import { Database as BunDatabase } from 'bun:sqlite';
 import { Database, z } from 'sqlite-zod-orm';
 import { config } from './config';
+const MIN_DISTRIBUTION_GRAVITY_SHARE = 0.0001;
 
 const dbPath = config.indexer.dbPath;
 const dataDir = path.dirname(dbPath);
@@ -298,9 +299,15 @@ export function distributeTreasuryFees(params: {
         };
     }
 
-    const holders = getAllHolders().filter((holder) => holder.accumulatedGravity > 0);
-    const totalGravity = holders.reduce((sum, holder) => sum + holder.accumulatedGravity, 0);
+    const gravityHolders = getAllHolders().filter((holder) => holder.accumulatedGravity > 0);
+    const totalGravity = gravityHolders.reduce((sum, holder) => sum + holder.accumulatedGravity, 0);
     if (totalGravity <= 0) {
+        return { distributed: 0, totalGravity };
+    }
+
+    const minimumEligibleGravity = totalGravity * MIN_DISTRIBUTION_GRAVITY_SHARE;
+    const holders = gravityHolders.filter((holder) => holder.accumulatedGravity >= minimumEligibleGravity);
+    if (holders.length === 0) {
         return { distributed: 0, totalGravity };
     }
 

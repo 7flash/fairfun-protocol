@@ -42,7 +42,10 @@ export interface RuntimeConfig {
         minClaimLamports: bigint;
         priorityFeeMicroLamports: number;
         computeUnitLimit: number;
+        treasuryTopupTriggerSol: number;
         treasuryTopupReserveSol: number;
+        treasuryTopupMinSendSol: number;
+        treasuryTopupCooldownMs: number;
     };
 }
 
@@ -128,7 +131,10 @@ function parseConfig(): RuntimeConfig {
             minClaimLamports: BigInt(Math.max(1, Math.floor(getNumber(env('CREATOR_FEES_MIN_CLAIM_LAMPORTS'), 10_000_000)))),
             priorityFeeMicroLamports: Math.max(0, getNumber(env('CREATOR_FEES_PRIORITY_FEE_MICROLAMPORTS'), 10_000)),
             computeUnitLimit: Math.max(1, getNumber(env('CREATOR_FEES_COMPUTE_UNIT_LIMIT'), 250000)),
+            treasuryTopupTriggerSol: Math.max(0, getNumber(env('CREATOR_FEES_TREASURY_TOPUP_TRIGGER_SOL'), 0.2)),
             treasuryTopupReserveSol: Math.max(0, getNumber(env('CREATOR_FEES_TREASURY_TOPUP_RESERVE_SOL'), 0.02)),
+            treasuryTopupMinSendSol: Math.max(0, getNumber(env('CREATOR_FEES_TREASURY_TOPUP_MIN_SEND_SOL'), 0.1)),
+            treasuryTopupCooldownMs: Math.max(0, getNumber(env('CREATOR_FEES_TREASURY_TOPUP_COOLDOWN_MS'), 600000)),
         },
     };
 }
