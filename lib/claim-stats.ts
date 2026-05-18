@@ -80,19 +80,39 @@ export async function getClaimStatsSummary() {
     let totalClaimantTokens = 0;
     let totalDelegatorTokens = 0;
     const conn = getConnection();
-    for (let start = 0; start < events.length; start += 20) {
-        const batch = events.slice(start, start + 20);
+    const eventsBySignature = new Map<string, typeof events>();
+    for (const event of events) {
+        const existing = eventsBySignature.get(event.signature) ?? [];
+        existing.push(event);
+        eventsBySignature.set(event.signature, existing);
+    }
+
+    const signatures = Array.from(eventsBySignature.keys());
+    for (let start = 0; start < signatures.length; start += 20) {
+        const batchSignatures = signatures.slice(start, start + 20);
         const txs = await conn.getParsedTransactions(
-            batch.map((event) => event.signature),
+            batchSignatures,
             { commitment: 'confirmed', maxSupportedTransactionVersion: 0 }
         );
-        for (let index = 0; index < batch.length; index++) {
-            const event = batch[index];
+        for (let index = 0; index < batchSignatures.length; index++) {
+            const signature = batchSignatures[index];
             const tx = txs[index];
             if (!tx) continue;
-            const deltas = sumTokenDeltas(tx, config.token.mint, event.claimantAddress, event.delegatorAddress);
-            totalClaimantTokens += deltas.claimantDelta;
-            totalDelegatorTokens += deltas.delegatorDelta;
+            const signatureEvents = eventsBySignature.get(signature) ?? [];
+            const seenClaimants = new Set<string>();
+            let countedDelegator = false;
+
+            for (const event of signatureEvents) {
+                if (!seenClaimants.has(event.claimantAddress)) {
+                    const deltas = sumTokenDeltas(tx, config.token.mint, event.claimantAddress, event.delegatorAddress);
+                    totalClaimantTokens += deltas.claimantDelta;
+                    seenClaimants.add(event.claimantAddress);
+                    if (!countedDelegator) {
+                        totalDelegatorTokens += deltas.delegatorDelta;
+                        countedDelegator = true;
+                    }
+                }
+            }
         }
     }
 

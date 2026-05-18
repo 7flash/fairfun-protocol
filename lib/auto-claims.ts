@@ -10,9 +10,10 @@ import {
     prepareClaimAmounts,
     solToLamportsBigInt,
 } from './fairfun-program';
-import { sendSignedDelegatedTokenClaimTransaction } from './tokenized-claims';
+import { sendSignedDelegatedTokenBatchClaimTransaction } from './tokenized-claims';
 
 let running = false;
+const MAX_BATCH_CLAIMANTS = 8;
 
 function getEligibleHolders() {
     const threshold = config.claimer.minClaimSol;
@@ -84,6 +85,14 @@ export async function runAutomaticRewardClaimPass(now = Date.now()) {
 
             const backend = loadBackendKeypair();
             const observedTotalDepositsLamports = solToLamportsBigInt(getMetaNumber('totalFeesAccumulatedSol'));
+            const batchEntries: Array<{
+                holder: ReturnType<typeof getEligibleHolders>[number];
+                claimant: PublicKey;
+                cumulativeEarned: bigint;
+                observedTotalDeposits: bigint;
+                estimatedClaimableLamports: bigint;
+                previousClaimedSol: number;
+            }> = [];
 
             for (const holder of holders) {
                 const claimant = new PublicKey(holder.address);
@@ -113,52 +122,74 @@ export async function runAutomaticRewardClaimPass(now = Date.now()) {
                     continue;
                 }
 
-                const transactionResult = await sendSignedDelegatedTokenClaimTransaction(
-                    backend,
+                batchEntries.push({
+                    holder,
                     claimant,
-                    preparedClaim.cumulativeEarned,
-                    preparedClaim.observedTotalDeposits,
-                    preparedClaim.estimatedClaimableLamports,
-                );
+                    cumulativeEarned: preparedClaim.cumulativeEarned,
+                    observedTotalDeposits: preparedClaim.observedTotalDeposits,
+                    estimatedClaimableLamports: preparedClaim.estimatedClaimableLamports,
+                    previousClaimedSol,
+                });
+                if (batchEntries.length >= MAX_BATCH_CLAIMANTS) {
+                    break;
+                }
+            }
 
-                const refreshedClaimState = await fetchClaimStateWithRetry(claimant);
+            if (batchEntries.length === 0) {
+                return { attempted: false, completed: false, reason: 'claim-no-longer-eligible' };
+            }
+
+            const transactionResult = await sendSignedDelegatedTokenBatchClaimTransaction(
+                backend,
+                batchEntries.map((entry) => ({
+                    claimant: entry.claimant,
+                    cumulativeEarned: entry.cumulativeEarned,
+                    observedTotalDeposits: entry.observedTotalDeposits,
+                    estimatedClaimableLamports: entry.estimatedClaimableLamports,
+                })),
+            );
+
+            let totalGrossAmountSol = 0;
+            for (const entry of batchEntries) {
+                const refreshedClaimState = await fetchClaimStateWithRetry(entry.claimant);
                 if (!refreshedClaimState) {
-                    throw new Error(`Claim state missing after successful claim for ${holder.address}`);
+                    throw new Error(`Claim state missing after successful batch claim for ${entry.holder.address}`);
                 }
 
                 const totalClaimedSol = lamportsToSolNumber(refreshedClaimState.claimedAmount);
-                const grossAmountSol = Math.max(0, totalClaimedSol - previousClaimedSol);
-                const nextClaimable = Math.max(0, holder.totalSolRewardsEarned - totalClaimedSol);
-                updateHolderRewards(holder.address, {
+                const grossAmountSol = Math.max(0, totalClaimedSol - entry.previousClaimedSol);
+                const nextClaimable = Math.max(0, entry.holder.totalSolRewardsEarned - totalClaimedSol);
+                updateHolderRewards(entry.holder.address, {
                     totalSolRewardsClaimed: totalClaimedSol,
                     claimableSolRewards: nextClaimable,
                 });
                 if (grossAmountSol > 0) {
                     recordClaimEvent({
                         signature: transactionResult.signature,
-                        claimantAddress: holder.address,
+                        claimantAddress: entry.holder.address,
                         delegatorAddress: backend.publicKey.toBase58(),
                         grossAmountSol,
                         claimantAmountSol: grossAmountSol * 0.9,
                         delegatorFeeSol: grossAmountSol * 0.1,
-                        mode: 'delegated',
+                        mode: 'delegated-batch-tokenized',
                         timestamp: now,
                     });
                 }
-
-                return {
-                    attempted: true,
-                    completed: true,
-                    claimantAddress: holder.address,
-                    signature: transactionResult.signature,
-                    grossAmountSol,
-                    lookupTableAddress: transactionResult.lookupTableAddress,
-                    minimumTokenAmountOut: transactionResult.minimumTokenAmountOut,
-                    recentClaimsSeen: getRecentClaimEvents(1).length,
-                };
+                totalGrossAmountSol += grossAmountSol;
             }
 
-            return { attempted: false, completed: false, reason: 'claim-no-longer-eligible' };
+            return {
+                attempted: true,
+                completed: true,
+                claimantCount: batchEntries.length,
+                claimantAddresses: batchEntries.map((entry) => entry.holder.address),
+                signature: transactionResult.signature,
+                grossAmountSol: totalGrossAmountSol,
+                lookupTableAddress: transactionResult.lookupTableAddress,
+                minimumTokenAmountOut: transactionResult.minimumTokenAmountOut,
+                totalEstimatedClaimableLamports: transactionResult.totalEstimatedClaimableLamports,
+                recentClaimsSeen: getRecentClaimEvents(5).length,
+            };
         });
     } finally {
         running = false;

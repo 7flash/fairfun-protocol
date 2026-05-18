@@ -58,7 +58,10 @@ export interface BatchClaimEntry {
     expiresAt: bigint;
 }
 
-export interface TokenizedBatchClaimEntry extends BatchClaimEntry {
+export interface TokenizedBatchClaimEntry {
+    claimant: PublicKey;
+    cumulativeEarned: bigint;
+    observedTotalDeposits: bigint;
     estimatedClaimableLamports: bigint;
 }
 

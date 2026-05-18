@@ -8,7 +8,7 @@ import {
   VersionedTransaction,
 } from "@solana/web3.js";
 import { getMeta, setMeta } from "./database";
-import { buildDelegatedClaimToTokensTransaction } from "./fairfun-program";
+import { TokenizedBatchClaimEntry, buildDelegatedClaimManyToTokensTransaction, buildDelegatedClaimToTokensTransaction } from "./fairfun-program";
 import { connection } from "./solana";
 import { readFileSync } from "fs";
 import { resolve } from "path";
@@ -271,5 +271,81 @@ export async function sendSignedDelegatedTokenClaimTransaction(
     signature,
     lookupTableAddress: result.lookupTableAddress,
     minimumTokenAmountOut: result.minimumTokenAmountOut,
+  };
+}
+
+export async function buildVersionedDelegatedTokenBatchClaimTransaction(
+  _lookupTableAuthority: Keypair,
+  delegator: PublicKey,
+  entries: Array<TokenizedBatchClaimEntry>,
+): Promise<VersionedDelegatedTokenClaimResult & { totalEstimatedClaimableLamports: string }> {
+  const transactionResult = await buildDelegatedClaimManyToTokensTransaction(
+    delegator,
+    entries,
+  );
+
+  const { lookupTableAddress, lookupTable } =
+    await ensureTokenizedClaimLookupTable(
+      transactionResult.transaction.instructions,
+    );
+
+  const latestBlockhash = await connection.getLatestBlockhash("confirmed");
+  const message = new TransactionMessage({
+    payerKey: delegator,
+    recentBlockhash: latestBlockhash.blockhash,
+    instructions: [
+      ComputeBudgetProgram.setComputeUnitLimit({
+        units: TOKENIZED_CLAIM_COMPUTE_UNITS,
+      }),
+      ComputeBudgetProgram.setComputeUnitPrice({
+        microLamports: TOKENIZED_CLAIM_COMPUTE_PRICE_MICROLAMPORTS,
+      }),
+      ...transactionResult.transaction.instructions,
+    ],
+  }).compileToV0Message([lookupTable]);
+  const transaction = new VersionedTransaction(message);
+
+  return {
+    blockhash: latestBlockhash.blockhash,
+    claimantPubkey: entries[0]?.claimant.toBase58() ?? "",
+    delegatorPubkey: delegator.toBase58(),
+    lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+    lookupTableAddress: lookupTableAddress.toBase58(),
+    minimumTokenAmountOut: transactionResult.minimumTokenAmountOut,
+    totalEstimatedClaimableLamports: transactionResult.totalEstimatedClaimableLamports,
+    transaction,
+  };
+}
+
+export async function sendSignedDelegatedTokenBatchClaimTransaction(
+  signer: Keypair,
+  entries: Array<TokenizedBatchClaimEntry>,
+) {
+  const result = await buildVersionedDelegatedTokenBatchClaimTransaction(
+    signer,
+    signer.publicKey,
+    entries,
+  );
+  result.transaction.sign([signer]);
+  const signature = await connection.sendTransaction(result.transaction, {
+    skipPreflight: false,
+    maxRetries: 5,
+  });
+  const confirmation = await connection.confirmTransaction(
+    {
+      signature,
+      blockhash: result.blockhash,
+      lastValidBlockHeight: result.lastValidBlockHeight,
+    },
+    "confirmed",
+  );
+  if (confirmation.value.err)
+    throw new Error(JSON.stringify(confirmation.value.err));
+
+  return {
+    signature,
+    lookupTableAddress: result.lookupTableAddress,
+    minimumTokenAmountOut: result.minimumTokenAmountOut,
+    totalEstimatedClaimableLamports: result.totalEstimatedClaimableLamports,
   };
 }

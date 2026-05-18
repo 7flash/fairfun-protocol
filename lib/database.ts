@@ -21,6 +21,16 @@ function resetLegacyTables() {
             legacy.exec('ALTER TABLE holders ADD COLUMN delegatedClaimsEnabled INTEGER DEFAULT 1');
             legacy.exec('UPDATE holders SET delegatedClaimsEnabled = 1 WHERE delegatedClaimsEnabled IS NULL');
         }
+
+        const claimEventIndexes = legacy.query<{ name: string; sql: string | null }, []>(
+            "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'claimEvents'"
+        ).all();
+        const hasLegacyClaimSignatureUnique = claimEventIndexes.some((index) => index.name === 'uq_claimEvents_signature');
+        const hasBatchClaimUnique = claimEventIndexes.some((index) => index.name === 'uq_claimEvents_signature_claimantAddress');
+        if (hasLegacyClaimSignatureUnique && !hasBatchClaimUnique) {
+            legacy.exec('DROP INDEX IF EXISTS uq_claimEvents_signature');
+            legacy.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_claimEvents_signature_claimantAddress ON "claimEvents" ("signature", "claimantAddress")');
+        }
     } finally {
         legacy.close();
     }
@@ -85,7 +95,7 @@ export const db = new Database(dbPath, {
         metadata: [['key']],
         treasuryEvents: [['signature']],
         treasuryPayouts: [['signature', 'address']],
-        claimEvents: [['signature']]
+        claimEvents: [['signature', 'claimantAddress']]
     }
 });
 
@@ -420,12 +430,12 @@ export function recordClaimEvent(event: {
     grossAmountSol: number;
     claimantAmountSol: number;
     delegatorFeeSol?: number;
-    mode: 'direct' | 'delegated';
+    mode: 'direct' | 'delegated' | 'delegated-batch-tokenized';
     timestamp?: number;
 }) {
     const now = Date.now();
     db.claimEvents.upsert(
-        { signature: event.signature },
+        { signature: event.signature, claimantAddress: event.claimantAddress },
         {
             signature: event.signature,
             claimantAddress: event.claimantAddress,
