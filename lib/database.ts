@@ -4,6 +4,7 @@ import { Database as BunDatabase } from 'bun:sqlite';
 import { Database, z } from 'sqlite-zod-orm';
 import { config } from './config';
 const MIN_DISTRIBUTION_GRAVITY_SHARE = 0.0001;
+const MIN_TREASURY_EVENT_SOL = 0.01;
 
 const dbPath = config.indexer.dbPath;
 const dataDir = path.dirname(dbPath);
@@ -396,6 +397,7 @@ export function distributeTreasuryFees(params: {
 
 export function getRecentTreasuryEvents(limit = 25, walletAddress?: string) {
     const events = db.treasuryEvents.select()
+        .where({ amountSol: { $gte: MIN_TREASURY_EVENT_SOL } })
         .orderBy('timestamp', 'desc')
         .limit(limit)
         .all() as TreasuryEventRecord[];
@@ -422,7 +424,9 @@ export function getRecentTreasuryEvents(limit = 25, walletAddress?: string) {
 }
 
 export function getTreasurySummaryStats(creatorFeeClaimerAddress?: string): TreasurySummaryStats {
-    const events = db.treasuryEvents.select().all() as TreasuryEventRecord[];
+    const events = db.treasuryEvents.select()
+        .where({ amountSol: { $gte: MIN_TREASURY_EVENT_SOL } })
+        .all() as TreasuryEventRecord[];
     const totalDepositedSol = events.reduce((sum, event) => sum + event.amountSol, 0);
     const creatorLower = creatorFeeClaimerAddress?.toLowerCase() ?? '';
     const creatorFeeTopupTotalSol = creatorLower

@@ -22,6 +22,7 @@ let indexing = false;
 let interval: ReturnType<typeof setInterval> | null = null;
 let treasuryRentReserveSolPromise: Promise<number> | null = null;
 const MIN_TREASURY_DISTRIBUTION_SOL = 0.01;
+const MIN_TREASURY_DISTRIBUTION_LAMPORTS = Math.round(MIN_TREASURY_DISTRIBUTION_SOL * 1_000_000_000);
 
 async function getTreasuryRentReserveSol() {
     if (!treasuryRentReserveSolPromise) {
@@ -119,10 +120,10 @@ async function getTreasuryInflowStats(now: number) {
                 const postDistributable = Math.max(0, post / 1_000_000_000 - rentReserveSol);
                 const deltaLamports = Math.round((postDistributable - preDistributable) * 1_000_000_000);
                 if (deltaLamports > 0) {
-                    const amountSol = deltaLamports / 1_000_000_000;
-                    if (amountSol < MIN_TREASURY_DISTRIBUTION_SOL) {
+                    if (deltaLamports < MIN_TREASURY_DISTRIBUTION_LAMPORTS) {
                         continue;
                     }
+                    const amountSol = deltaLamports / 1_000_000_000;
                     feeDeltaSol += amountSol;
                     const depositorAddress = derivePrimaryDepositorAddress(tx, treasury);
                     events.push({
