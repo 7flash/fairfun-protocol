@@ -7,6 +7,7 @@ import {
     getMeta,
     getLeaderboard,
     getMetaNumber,
+    materializeIndexedClaimEvent,
     resetAllHolderRewards,
     resetExcludedHolders,
     setMeta,
@@ -16,6 +17,8 @@ import {
     zeroMissingHolderBalances
 } from './database';
 import { config } from './config';
+import { getProgramId } from './fairfun-program';
+import { materializeClaimEventsFromTransaction } from './claim-indexing';
 import { derivePrimaryDepositorAddress } from './treasury';
 
 let indexing = false;
@@ -23,6 +26,7 @@ let interval: ReturnType<typeof setInterval> | null = null;
 let treasuryRentReserveSolPromise: Promise<number> | null = null;
 const MIN_TREASURY_DISTRIBUTION_SOL = 0.01;
 const MIN_TREASURY_DISTRIBUTION_LAMPORTS = Math.round(MIN_TREASURY_DISTRIBUTION_SOL * 1_000_000_000);
+const MAX_CLAIM_TRANSACTIONS_PER_RUN = 250;
 
 async function getTreasuryRentReserveSol() {
     if (!treasuryRentReserveSolPromise) {
@@ -167,6 +171,82 @@ async function getTreasuryInflowStats(now: number) {
     };
 }
 
+async function getClaimMaterializationStats(now: number) {
+    const programId = getProgramId();
+    const lastProcessedSignature = getMeta('lastClaimSignatureSeen') ?? '';
+    const launchTs = getMetaNumber('launchTimestamp', now);
+
+    let before: string | undefined;
+    let stop = false;
+    let newestSeen = '';
+    let processed = 0;
+    const materializations: Array<ReturnType<typeof materializeClaimEventsFromTransaction>> = [];
+
+    if (!lastProcessedSignature) {
+        const latest = await connection.getSignaturesForAddress(programId, { limit: 1 }, 'confirmed');
+        return {
+            latestSignature: latest[0]?.signature ?? '',
+            indexedTransactions: 0,
+            indexedRecipients: 0,
+            materializations: [] as NonNullable<ReturnType<typeof materializeClaimEventsFromTransaction>>[],
+            bootstrapped: true,
+        };
+    }
+
+    try {
+        while (!stop && processed < MAX_CLAIM_TRANSACTIONS_PER_RUN) {
+            const signatures = await connection.getSignaturesForAddress(programId, { before, limit: 100 }, 'confirmed');
+            if (signatures.length === 0) break;
+
+            for (const signatureInfo of signatures) {
+                if (!newestSeen) newestSeen = signatureInfo.signature;
+                if (signatureInfo.signature === lastProcessedSignature) {
+                    stop = true;
+                    break;
+                }
+                if (signatureInfo.blockTime && signatureInfo.blockTime * 1000 < launchTs) {
+                    stop = true;
+                    break;
+                }
+
+                processed++;
+                const tx = await connection.getTransaction(signatureInfo.signature, {
+                    commitment: 'confirmed',
+                    maxSupportedTransactionVersion: 0,
+                });
+                const materialization = materializeClaimEventsFromTransaction(signatureInfo.signature, tx);
+                if (materialization) {
+                    materializations.push(materialization);
+                }
+            }
+
+            before = signatures[signatures.length - 1]?.signature;
+            if (signatures.length < 100) break;
+        }
+    } catch (error) {
+        console.error('[Indexer] Claim materialization scan failed:', error);
+        return {
+            latestSignature: newestSeen || lastProcessedSignature,
+            indexedTransactions: 0,
+            indexedRecipients: 0,
+            materializations: [] as NonNullable<ReturnType<typeof materializeClaimEventsFromTransaction>>[],
+            bootstrapped: false,
+        };
+    }
+
+    const orderedMaterializations = materializations
+        .filter((item): item is NonNullable<typeof item> => Boolean(item))
+        .reverse();
+
+    return {
+        latestSignature: newestSeen || lastProcessedSignature,
+        indexedTransactions: orderedMaterializations.length,
+        indexedRecipients: orderedMaterializations.reduce((sum, item) => sum + item.recipients.length, 0),
+        materializations: orderedMaterializations,
+        bootstrapped: false,
+    };
+}
+
 export async function indexLeaderboardSnapshot() {
     if (indexing) {
         return {
@@ -244,6 +324,10 @@ export async function indexLeaderboardSnapshot() {
                 updateGravityForIndexedHolders(now);
 
                 const feeDistribution = distributeTreasuryFees({ events: treasuryInflowStats.events, now });
+                const claimMaterializationStats = await m('Index claim events', () => getClaimMaterializationStats(now));
+                for (const materialization of claimMaterializationStats.materializations) {
+                    materializeIndexedClaimEvent(materialization);
+                }
                 const totalFeesAccumulatedSol = treasuryInflowStats.totalFeesAccumulatedSol;
                 const previousTotalAccumulatedGravity = getMetaNumber('totalAccumulatedGravity');
                 const lastGravityDelta = Math.max(0, feeDistribution.totalGravity - previousTotalAccumulatedGravity);
@@ -265,6 +349,8 @@ export async function indexLeaderboardSnapshot() {
                 setMeta('lastFeeDeltaSol', treasuryInflowStats.feeDeltaSol);
                 setMeta('lastTreasurySignatureSeen', treasuryInflowStats.latestSignature);
                 setMeta('lastTreasuryScanAt', now);
+                setMeta('lastClaimSignatureSeen', claimMaterializationStats.latestSignature);
+                setMeta('lastClaimScanAt', now);
                 setMeta('lastGravityDelta', lastGravityDelta);
                 setMeta('totalAccumulatedGravity', feeDistribution.totalGravity);
                 return {
@@ -274,6 +360,8 @@ export async function indexLeaderboardSnapshot() {
                     totalSupply: supply.amount,
                     treasuryBalanceSol,
                     totalFeesAccumulatedSol,
+                    indexedClaimTransactions: claimMaterializationStats.indexedTransactions,
+                    indexedClaimRecipients: claimMaterializationStats.indexedRecipients,
                     epochIndex,
                     timestamp: now
                 };

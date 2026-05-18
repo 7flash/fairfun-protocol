@@ -160,6 +160,20 @@ export interface ClaimEventRecord {
     createdAt: number;
 }
 
+export interface IndexedClaimMaterializationInput {
+    signature: string;
+    timestamp: number;
+    mode: 'direct' | 'delegated' | 'delegated-batch-tokenized';
+    delegatorAddress: string;
+    recipients: Array<{
+        claimantAddress: string;
+        grossAmountSol: number;
+        claimantAmountSol: number;
+        delegatorFeeSol: number;
+        totalClaimedSol: number;
+    }>;
+}
+
 export interface TreasuryEventInput {
     signature: string;
     amountSol: number;
@@ -482,6 +496,33 @@ export function recordClaimEvent(event: {
             createdAt: now,
         }
     );
+}
+
+export function materializeIndexedClaimEvent(input: IndexedClaimMaterializationInput) {
+    let recorded = 0;
+    for (const recipient of input.recipients) {
+        const holder = getHolder(recipient.claimantAddress);
+        if (holder) {
+            updateHolderRewards(recipient.claimantAddress, {
+                totalSolRewardsClaimed: recipient.totalClaimedSol,
+                claimableSolRewards: Math.max(0, holder.totalSolRewardsEarned - recipient.totalClaimedSol),
+            });
+        }
+
+        recordClaimEvent({
+            signature: input.signature,
+            claimantAddress: recipient.claimantAddress,
+            delegatorAddress: input.delegatorAddress,
+            grossAmountSol: recipient.grossAmountSol,
+            claimantAmountSol: recipient.claimantAmountSol,
+            delegatorFeeSol: recipient.delegatorFeeSol,
+            mode: input.mode,
+            timestamp: input.timestamp,
+        });
+        recorded++;
+    }
+
+    return recorded;
 }
 
 export function getRecentClaimEvents(limit = 50, walletAddress?: string) {
