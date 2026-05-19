@@ -33,6 +33,7 @@ export interface RuntimeConfig {
     claimer: {
         intervalMs: number;
         minClaimSol: number;
+        maxBatchClaimants: number;
         minBatchClaimants: number;
     };
     creatorFees: {

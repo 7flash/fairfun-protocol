@@ -13,9 +13,10 @@ import {
 import { sendSignedDelegatedTokenBatchClaimTransaction } from './tokenized-claims';
 
 let running = false;
+const SAFE_MAX_TOKENIZED_BATCH_CLAIMANTS = 4;
 function getMaxBatchClaimants() {
   const value = Math.floor(Number(config.claimer.maxBatchClaimants ?? 3));
-  return Math.max(1, Math.min(8, value));
+  return Math.max(1, Math.min(SAFE_MAX_TOKENIZED_BATCH_CLAIMANTS, value));
 }
 
 function getMinBatchClaimants() {
