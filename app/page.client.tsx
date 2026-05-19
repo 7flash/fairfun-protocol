@@ -120,6 +120,8 @@ interface ClaimsResponse {
   events: ClaimEvent[];
   total: number;
   summary: ClaimsSummary;
+  nextAutoClaimAt: number | null;
+  claimerIntervalMs: number;
 }
 
 interface WalletResponse {
@@ -273,6 +275,18 @@ function formatCompactTimestamp(timestamp: number) {
     minute: "2-digit",
     hour12: false,
   });
+}
+
+function formatCountdown(targetTimestamp: number | null) {
+  if (!targetTimestamp) return "Waiting";
+  const diffMs = targetTimestamp - Date.now();
+  if (diffMs <= 0) return "Ready now";
+  const totalSeconds = Math.ceil(diffMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${totalSeconds}s`;
 }
 
 function formatSignedGravityDelta(value: number) {
@@ -735,7 +749,42 @@ function LeaderboardTable({
   onSort: (key: LeaderboardSortKey) => void;
 }) {
   const connectedAddressLower = connectedAddress?.toLowerCase() ?? null;
-  const displayEntries = entries.slice(0, 150);
+  const compareValues = (left: number, right: number) =>
+    sortDirection === "desc" ? right - left : left - right;
+  const displayEntries = [...entries]
+    .sort((a, b) => {
+      if (sortKey === "earned") {
+        const byEarned = compareValues(
+          a.totalSolRewardsEarned,
+          b.totalSolRewardsEarned,
+        );
+        if (byEarned !== 0) return byEarned;
+      }
+      if (sortKey === "gravity") {
+        const byGravity = compareValues(
+          a.accumulatedGravity,
+          b.accumulatedGravity,
+        );
+        if (byGravity !== 0) return byGravity;
+      }
+      if (sortKey === "balance") {
+        const byBalance = compareValues(a.tokenBalance, b.tokenBalance);
+        if (byBalance !== 0) return byBalance;
+      }
+      if (sortKey === "ownership") {
+        const byOwnership = compareValues(a.gravityShare, b.gravityShare);
+        if (byOwnership !== 0) return byOwnership;
+      }
+      if (b.totalSolRewardsEarned !== a.totalSolRewardsEarned)
+        return b.totalSolRewardsEarned - a.totalSolRewardsEarned;
+      if (b.gravityShare !== a.gravityShare)
+        return b.gravityShare - a.gravityShare;
+      if (b.accumulatedGravity !== a.accumulatedGravity)
+        return b.accumulatedGravity - a.accumulatedGravity;
+      return b.tokenBalance - a.tokenBalance;
+    })
+    .slice(0, 150)
+    .map((entry, index) => ({ ...entry, rank: index + 1 }));
   const sortArrow = (key: LeaderboardSortKey) =>
     sortKey === key ? (sortDirection === "desc" ? " ↓" : " ↑") : "";
 
@@ -826,8 +875,7 @@ function LeaderboardTable({
                   </td>
                   <td className="td-num">
                     {formatNumber(
-                      entry.totalSolRewardsEarned -
-                        entry.totalSolRewardsClaimed,
+                      Math.max(0, entry.claimableSolRewards ?? 0),
                       "sol",
                     )}
                   </td>
@@ -963,6 +1011,7 @@ function ClaimsTable({
   runtimeConfig,
   events,
   summary,
+  nextAutoClaimAt,
   loading,
   error,
   connectedAddress,
@@ -970,6 +1019,7 @@ function ClaimsTable({
   runtimeConfig: RuntimeConfig;
   events: ClaimEvent[];
   summary: ClaimsSummary | null;
+  nextAutoClaimAt: number | null;
   loading: boolean;
   error: string | null;
   connectedAddress: string | null;
@@ -985,21 +1035,14 @@ function ClaimsTable({
             </div>
           </div>
           <div className="activity-stat-card">
-            <div className="small-label">Holder Payouts</div>
+            <div className="small-label">Next Auto-Claim</div>
             <div className="inline-value">
-              {formatNumber(summary.totalClaimantTokens, "tokens")} FAIRFUN
+              {formatCountdown(nextAutoClaimAt)}
             </div>
             <div className="num-sub">
-              {formatNumber(summary.totalClaimantSol, "sol")}
-            </div>
-          </div>
-          <div className="activity-stat-card">
-            <div className="small-label">Project Treasury</div>
-            <div className="inline-value">
-              {formatNumber(summary.totalProjectFeeSol, "sol")}
-            </div>
-            <div className="num-sub">
-              retained before payout or swap
+              {nextAutoClaimAt
+                ? formatCompactTimestamp(nextAutoClaimAt)
+                : "waiting for round"}
             </div>
           </div>
           <div className="activity-stat-card">
@@ -1186,6 +1229,7 @@ function ActivityPanel({
   claimEvents,
   treasurySummary,
   claimsSummary,
+  nextAutoClaimAt,
   loading,
   error,
   connectedAddress,
@@ -1204,6 +1248,7 @@ function ActivityPanel({
   claimEvents: ClaimEvent[];
   treasurySummary: TreasurySummary | null;
   claimsSummary: ClaimsSummary | null;
+  nextAutoClaimAt: number | null;
   loading: boolean;
   error: string | null;
   connectedAddress: string | null;
@@ -1234,14 +1279,14 @@ function ActivityPanel({
             onClick={() => setActiveTab("treasury")}
             type="button"
           >
-            Treasury Additions
+            Treasury
           </button>
           <button
             className={`board-tab ${activeTab === "claims" ? "is-active" : ""}`}
             onClick={() => setActiveTab("claims")}
             type="button"
           >
-            Claimed Rewards
+            Rewards
           </button>
         </div>
         <div className="ledger-live">
@@ -1285,6 +1330,7 @@ function ActivityPanel({
             runtimeConfig={runtimeConfig}
             events={claimEvents}
             summary={claimsSummary}
+            nextAutoClaimAt={nextAutoClaimAt}
             loading={loading}
             error={error}
             connectedAddress={connectedAddress}
@@ -1335,6 +1381,7 @@ export default function mount() {
     let claimEvents: ClaimEvent[] = [];
     let treasurySummary: TreasurySummary | null = null;
     let claimsSummary: ClaimsSummary | null = null;
+    let nextAutoClaimAt: number | null = null;
     let total = 0;
     let totalSupply = 0;
     let tokenPriceUsd = 0;
@@ -1428,6 +1475,7 @@ export default function mount() {
             claimEvents={claimEvents}
             treasurySummary={treasurySummary}
             claimsSummary={claimsSummary}
+            nextAutoClaimAt={nextAutoClaimAt}
             loading={loading}
             error={error}
             connectedAddress={connectedAddress}
@@ -2140,7 +2188,14 @@ export default function mount() {
                         return b.accumulatedGravity - a.accumulatedGravity;
                       return b.tokenBalance - a.tokenBalance;
                     })
-                    .map((entry, index) => ({ ...entry, rank: index + 1 })),
+                    .map((entry, index) => ({
+                      ...entry,
+                      rank: index + 1,
+                      claimableSolRewards: Math.max(
+                        0,
+                        entry.claimableSolRewards ?? 0,
+                      ),
+                    })),
                 ) ?? [];
               total = entries.length;
               totalSupply = leaderboardData.totalSupply;
@@ -2166,6 +2221,7 @@ export default function mount() {
             if (claimsData.success) {
               claimEvents = claimsData.events;
               claimsSummary = claimsData.summary ?? null;
+              nextAutoClaimAt = claimsData.nextAutoClaimAt ?? null;
             } else if (!error) {
               error = "Failed to load claim history.";
             }

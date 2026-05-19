@@ -156,12 +156,18 @@ export async function GET(req: Request) {
         }
 
         const events = groupClaimBatches(rawEvents, tokenDeltasBySignature, solPriceUsd);
+        const latestAutoClaim = events.find((event) => event.mode === 'delegated-batch-tokenized');
+        const nextAutoClaimAt = latestAutoClaim
+            ? latestAutoClaim.timestamp + config.claimer.intervalMs
+            : null;
 
         return Response.json({
             success: true,
             events,
             total: events.length,
             summary,
+            nextAutoClaimAt,
+            claimerIntervalMs: config.claimer.intervalMs,
             solPriceUsd,
             timestamp: Date.now(),
         });
