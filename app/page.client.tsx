@@ -146,7 +146,12 @@ interface DelegationPreferenceResponse {
 
 type NumberFormatKind = "tokens" | "usd" | "gravity" | "sol" | "int";
 type ActivityTab = "leaderboard" | "treasury" | "claims";
-type LeaderboardSortKey = "earned" | "gravity" | "balance" | "ownership";
+type LeaderboardSortKey =
+  | "earned"
+  | "gravity"
+  | "balance"
+  | "ownership"
+  | "unclaimed";
 type SortDirection = "asc" | "desc";
 
 interface RuntimeConfig {
@@ -775,6 +780,13 @@ function LeaderboardTable({
         const byOwnership = compareValues(a.gravityShare, b.gravityShare);
         if (byOwnership !== 0) return byOwnership;
       }
+      if (sortKey === "unclaimed") {
+        const byUnclaimed = compareValues(
+          Math.max(0, a.claimableSolRewards ?? 0),
+          Math.max(0, b.claimableSolRewards ?? 0),
+        );
+        if (byUnclaimed !== 0) return byUnclaimed;
+      }
       if (b.totalSolRewardsEarned !== a.totalSolRewardsEarned)
         return b.totalSolRewardsEarned - a.totalSolRewardsEarned;
       if (b.gravityShare !== a.gravityShare)
@@ -804,10 +816,7 @@ function LeaderboardTable({
               {sortArrow("balance")}
             </button>
           </th>
-          <th
-            className="th-num header-tooltip"
-            data-tooltip="Your share of total gravity, not your spot balance at a single snapshot."
-          >
+          <th className="th-num">
             <button
               className="table-sort-button"
               onClick={() => onSort("ownership")}
@@ -825,7 +834,15 @@ function LeaderboardTable({
               Earned{sortArrow("earned")}
             </button>
           </th>
-          <th className="th-num">Unclaimed</th>
+          <th className="th-num">
+            <button
+              className="table-sort-button"
+              onClick={() => onSort("unclaimed")}
+              type="button"
+            >
+              Unclaimed{sortArrow("unclaimed")}
+            </button>
+          </th>
         </tr>
       </thead>
       <tbody>
@@ -1060,9 +1077,9 @@ function ClaimsTable({
         <thead>
           <tr>
             <th>When</th>
-            <th>Claim</th>
-            <th>Executed By</th>
-            <th className="th-num">Holder Gets</th>
+            <th>Holders</th>
+            <th className="th-num">Net SOL</th>
+            <th className="th-num">$FAIRFUN</th>
             <th className="th-num">Project Fee</th>
             <th>Transaction</th>
           </tr>
@@ -1084,12 +1101,7 @@ function ClaimsTable({
             </tr>
           ) : (
             events.map((event) => {
-              const isExecutor =
-                connectedAddress?.toLowerCase() ===
-                event.delegatorAddress.toLowerCase();
               const isTokenized = event.mode !== "direct";
-              const isBatch = event.claimantCount > 1;
-              const primaryRecipient = event.recipients[0];
 
               return (
                 <tr className="leaderboard-row" key={event.signature}>
@@ -1100,103 +1112,41 @@ function ClaimsTable({
                     </div>
                   </td>
                   <td>
-                    {isBatch ? (
-                      <details className="claim-details">
-                        <summary className="claim-details-summary">
+                    <div className="claim-holder-list">
+                      {event.recipients.map((recipient) => (
+                        <div
+                          className="claim-holder-row"
+                          key={`${event.signature}:${recipient.claimantAddress}`}
+                        >
                           <span className="wallet-mono">
-                            {event.claimantCount} holders
+                            {recipient.claimantAddressShort}
                           </span>
-                          <span className="claim-mode-tag">
-                            {isTokenized ? "$FAIRFUN round" : "batch"}
-                          </span>
-                        </summary>
-                        <div className="claim-recipient-list">
-                          {event.recipients.map((recipient, index) => (
-                            <div className="claim-recipient-row" key={`${event.signature}:${recipient.claimantAddress}`}>
-                              <div className="claim-recipient-rank">
-                                {index + 1}.
-                              </div>
-                              <div className="claim-recipient-wallet">
-                                <span className="wallet-mono">
-                                  {recipient.claimantAddressShort}
-                                </span>
-                                {connectedAddress?.toLowerCase() ===
-                                recipient.claimantAddress.toLowerCase() ? (
-                                  <span className="you-tag">YOU</span>
-                                ) : null}
-                              </div>
-                              <div className="claim-recipient-amounts">
-                                {isTokenized ? (
-                                  <>
-                                    <div>
-                                      {recipient.claimantTokenAmountFormatted} FAIRFUN
-                                    </div>
-                                    <div className="num-sub">
-                                      {recipient.claimantAmountSolFormatted}
-                                    </div>
-                                  </>
-                                ) : (
-                                  <div>{recipient.claimantAmountSolFormatted}</div>
-                                )}
-                              </div>
-                            </div>
-                          ))}
+                          {connectedAddress?.toLowerCase() ===
+                          recipient.claimantAddress.toLowerCase() ? (
+                            <span className="you-tag">YOU</span>
+                          ) : null}
                         </div>
-                      </details>
-                    ) : (
-                      <>
-                        <span className="wallet-mono">
-                          {event.claimantAddressShort}
-                        </span>
-                        {connectedAddress?.toLowerCase() ===
-                        event.claimantAddress.toLowerCase() ? (
-                          <span className="you-tag">YOU</span>
-                        ) : null}
-                      </>
-                    )}
-                    {!isBatch && primaryRecipient?.claimantTokenAmount ? (
-                      <div className="wallet-sub">
-                        {primaryRecipient.claimantTokenAmountFormatted} FAIRFUN
-                      </div>
-                    ) : null}
+                      ))}
+                    </div>
+                    <div className="wallet-sub">
+                      {isTokenized
+                        ? `${event.claimantCount} holder${event.claimantCount === 1 ? "" : "s"} auto-claimed`
+                        : "Manual claim"}
+                    </div>
                   </td>
-                  <td>
-                    {event.mode !== "direct" ? (
-                      <>
-                        <span className="wallet-mono">
-                          {event.delegatorAddressShort}
-                        </span>
-                        {isExecutor ? (
-                          <span className="you-tag">YOU</span>
-                        ) : null}
-                      </>
-                    ) : (
-                      "Self"
-                    )}
-                    {isTokenized ? (
-                      <div className="wallet-sub">Auto-converted</div>
-                    ) : null}
+                  <td className="td-num">
+                    <div>{event.claimantAmountSolFormatted}</div>
+                    <div className="num-sub">{event.grossAmountSolFormatted} gross</div>
                   </td>
                   <td className="td-num">
                     {isTokenized ? (
-                      <>
-                        <div>{event.claimantTokenAmountFormatted} FAIRFUN</div>
-                        <div className="num-sub">
-                          {event.claimantAmountSolFormatted}
-                        </div>
-                      </>
+                      <div>{event.claimantTokenAmountFormatted} FAIRFUN</div>
                     ) : (
-                      <>{event.claimantAmountSolFormatted}</>
+                      "—"
                     )}
                   </td>
                   <td className="td-num">
-                    {event.mode !== "direct" ? (
-                      <>
-                        <>{event.projectFeeSolFormatted}</>
-                      </>
-                    ) : (
-                      <>{event.projectFeeSolFormatted}</>
-                    )}
+                    {event.projectFeeSolFormatted}
                   </td>
                   <td>
                     <a

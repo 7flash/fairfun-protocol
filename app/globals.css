@@ -840,22 +840,6 @@ a {
     font-weight: 600;
 }
 
-.claim-details {
-    margin: 0;
-}
-
-.claim-details-summary {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    cursor: pointer;
-    list-style: none;
-}
-
-.claim-details-summary::-webkit-details-marker {
-    display: none;
-}
-
 .claim-mode-tag {
     display: inline-block;
     padding: 2px 8px;
@@ -866,6 +850,17 @@ a {
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+}
+
+.claim-holder-list {
+    display: grid;
+    gap: 6px;
+}
+
+.claim-holder-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .claim-recipient-list {
