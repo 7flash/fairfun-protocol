@@ -12,7 +12,6 @@ let creatorFeeStatusCache: {
     expiresAt: number;
     value: CreatorFeeStatus;
 } | null = null;
-let lastTreasuryTopupAttemptAt = 0;
 
 export interface CreatorFeeStatus {
     enabled: boolean;
@@ -32,6 +31,17 @@ function getCreatorFeeWallet() {
         throw new Error('Creator fee wallet keypair is not configured');
     }
     return loadKeypairFromConfiguredValue(configured);
+}
+
+function getTreasuryTopupReserveLamports() {
+    return BigInt(Math.round(config.creatorFees.treasuryTopupReserveSol * 1_000_000_000));
+}
+
+function getSpendableLamports(walletBalanceLamports: bigint) {
+    const reserveLamports = getTreasuryTopupReserveLamports();
+    return walletBalanceLamports > reserveLamports
+        ? walletBalanceLamports - reserveLamports
+        : 0n;
 }
 
 async function sendVersionedInstructions(
@@ -85,45 +95,30 @@ async function sendTreasuryTopup(
     ]);
 }
 
-async function maybeSendTreasuryTopup(
+function buildTreasuryTopupInstruction(
+    payer: ReturnType<typeof getCreatorFeeWallet>,
+    lamports: bigint,
+) {
+    if (lamports <= 0n) {
+        return null;
+    }
+    return SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: new PublicKey(config.rewards.treasuryAddress),
+        lamports: Number(lamports),
+    });
+}
+
+async function maybeSweepWalletSurplusToTreasury(
     connection: Connection,
     payer: ReturnType<typeof getCreatorFeeWallet>,
-    now: number,
 ) {
-    const cooldownMs = config.creatorFees.treasuryTopupCooldownMs;
-    if (cooldownMs > 0 && now - lastTreasuryTopupAttemptAt < cooldownMs) {
-        return {
-            attempted: false,
-            reason: 'cooldown',
-            walletBalanceLamports: '0',
-            topupLamports: '0',
-            treasurySignature: null as string | null,
-        };
-    }
-
-    lastTreasuryTopupAttemptAt = now;
     const walletBalanceLamports = BigInt(await connection.getBalance(payer.publicKey, 'confirmed'));
-    const triggerLamports = BigInt(Math.round(config.creatorFees.treasuryTopupTriggerSol * 1_000_000_000));
-    const reserveLamports = BigInt(Math.round(config.creatorFees.treasuryTopupReserveSol * 1_000_000_000));
-    const minSendLamports = BigInt(Math.round(config.creatorFees.treasuryTopupMinSendSol * 1_000_000_000));
-
-    if (walletBalanceLamports <= triggerLamports) {
+    const spendableLamports = getSpendableLamports(walletBalanceLamports);
+    if (spendableLamports <= 0n) {
         return {
             attempted: false,
-            reason: 'wallet-below-trigger',
-            walletBalanceLamports: walletBalanceLamports.toString(),
-            topupLamports: '0',
-            treasurySignature: null as string | null,
-        };
-    }
-
-    const spendableLamports = walletBalanceLamports > reserveLamports
-        ? walletBalanceLamports - reserveLamports
-        : 0n;
-    if (spendableLamports < minSendLamports) {
-        return {
-            attempted: false,
-            reason: 'spendable-below-min-send',
+            reason: 'wallet-at-or-below-reserve',
             walletBalanceLamports: walletBalanceLamports.toString(),
             topupLamports: spendableLamports.toString(),
             treasurySignature: null as string | null,
@@ -142,9 +137,9 @@ async function maybeSendTreasuryTopup(
         attempted: true,
         reason: 'sent',
         walletBalanceLamports: walletBalanceLamports.toString(),
-        topupLamports: spendableLamports.toString(),
-        treasurySignature,
-    };
+            topupLamports: spendableLamports.toString(),
+            treasurySignature,
+        };
 }
 
 export async function getCreatorFeeStatus(forceRefresh = false): Promise<CreatorFeeStatus> {
@@ -221,15 +216,16 @@ export async function runCreatorFeeClaimPass() {
             }
 
             const beforeBalance = BigInt(await connection.getBalance(wallet.publicKey, 'confirmed'));
-            const now = Date.now();
             let claimableLamports = 0n;
             let claimSignature: string | null = null;
+            let treasurySignature: string | null = null;
+            let treasuryTopupLamports = 0n;
 
             if (sharing) {
                 const distributable = await sdk.getMinimumDistributableFee(mint);
                 claimableLamports = BigInt(distributable.distributableFees.toString());
                 if (!distributable.canDistribute || claimableLamports < config.creatorFees.minClaimLamports) {
-                    const topup = await maybeSendTreasuryTopup(connection, wallet, now);
+                    const topup = await maybeSweepWalletSurplusToTreasury(connection, wallet);
                     return {
                         attempted: false,
                         completed: topup.attempted && !!topup.treasurySignature,
@@ -241,11 +237,18 @@ export async function runCreatorFeeClaimPass() {
                 }
 
                 const built = await sdk.buildDistributeCreatorFeesInstructions(mint);
-                claimSignature = await sendVersionedInstructions(connection, wallet, built.instructions);
+                treasuryTopupLamports = getSpendableLamports(beforeBalance + claimableLamports);
+                const topupInstruction = buildTreasuryTopupInstruction(wallet, treasuryTopupLamports);
+                claimSignature = await sendVersionedInstructions(
+                    connection,
+                    wallet,
+                    topupInstruction ? [...built.instructions, topupInstruction] : built.instructions,
+                );
+                treasurySignature = topupInstruction ? claimSignature : null;
             } else {
                 claimableLamports = BigInt((await sdk.getCreatorVaultBalanceBothPrograms(creator)).toString());
                 if (claimableLamports < config.creatorFees.minClaimLamports) {
-                    const topup = await maybeSendTreasuryTopup(connection, wallet, now);
+                    const topup = await maybeSweepWalletSurplusToTreasury(connection, wallet);
                     return {
                         attempted: false,
                         completed: topup.attempted && !!topup.treasurySignature,
@@ -257,13 +260,25 @@ export async function runCreatorFeeClaimPass() {
                 }
 
                 const instructions = await sdk.collectCoinCreatorFeeInstructions(creator, creator);
-                claimSignature = await sendVersionedInstructions(connection, wallet, instructions);
+                treasuryTopupLamports = getSpendableLamports(beforeBalance + claimableLamports);
+                const topupInstruction = buildTreasuryTopupInstruction(wallet, treasuryTopupLamports);
+                claimSignature = await sendVersionedInstructions(
+                    connection,
+                    wallet,
+                    topupInstruction ? [...instructions, topupInstruction] : instructions,
+                );
+                treasurySignature = topupInstruction ? claimSignature : null;
             }
 
             const afterClaimBalance = BigInt(await connection.getBalance(wallet.publicKey, 'confirmed'));
-            const topup = await maybeSendTreasuryTopup(connection, wallet, now);
             if (claimSignature) {
                 setMeta('creatorFeeLastClaimSignature', claimSignature);
+            }
+            if (treasurySignature && treasuryTopupLamports > 0n) {
+                const topupSol = Number(treasuryTopupLamports) / 1_000_000_000;
+                setMeta('creatorFeeTopupTotalSol', getMetaNumber('creatorFeeTopupTotalSol', 0) + topupSol);
+                setMeta('creatorFeeLastTreasuryTopupSignature', treasurySignature);
+                setMeta('creatorFeeLastTreasuryTopupLamports', treasuryTopupLamports.toString());
             }
             creatorFeeStatusCache = null;
 
@@ -275,11 +290,17 @@ export async function runCreatorFeeClaimPass() {
                 claimer: wallet.publicKey.toBase58(),
                 claimableLamports: claimableLamports.toString(),
                 claimSignature,
-                treasurySignature: topup.treasurySignature,
-                treasuryTopupLamports: topup.topupLamports,
+                treasurySignature,
+                treasuryTopupLamports: treasuryTopupLamports.toString(),
                 walletBalanceBeforeLamports: beforeBalance.toString(),
                 walletBalanceAfterClaimLamports: afterClaimBalance.toString(),
-                treasuryTopup: topup,
+                treasuryTopup: {
+                    attempted: treasuryTopupLamports > 0n,
+                    reason: treasuryTopupLamports > 0n ? 'sent-inline-with-claim' : 'claim-left-wallet-at-or-below-reserve',
+                    walletBalanceLamports: beforeBalance.toString(),
+                    topupLamports: treasuryTopupLamports.toString(),
+                    treasurySignature,
+                },
             };
         });
     } finally {
