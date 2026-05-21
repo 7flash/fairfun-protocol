@@ -1,6 +1,6 @@
 import { Connection } from '@solana/web3.js';
 import { measure } from 'measure-fn';
-import { getClaimEventsBySignatures, getRecentClaimEvents } from '../../../lib/database';
+import { getClaimEventsBySignatures, getMeta, getMetaNumber, getRecentClaimEvents } from '../../../lib/database';
 import { formatSOL, getCurrentSolPrice, formatUSD } from '../../../lib/gravity';
 import { getClaimStatsSummary } from '../../../lib/claim-stats';
 import { getPositiveTokenDeltasByOwner } from '../../../lib/claim-token-deltas';
@@ -44,8 +44,33 @@ type ClaimBatch = {
     recipients: ClaimRecipient[];
 };
 
+type ClaimerStatus = {
+    status: 'running' | 'succeeded' | 'skipped' | 'failed' | 'unknown';
+    reason: string;
+    lastAttemptAt: number | null;
+    lastSuccessAt: number | null;
+    lastFailureAt: number | null;
+    currentRunStartedAt: number | null;
+    claimantCount: number;
+    signature: string | null;
+};
+
 function formatTokenAmount(value: number) {
     return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function getClaimerStatus(): ClaimerStatus {
+    const status = (getMeta('claimerLastAttemptStatus') as ClaimerStatus['status'] | null) ?? 'unknown';
+    return {
+        status,
+        reason: getMeta('claimerLastAttemptReason') ?? '',
+        lastAttemptAt: getMetaNumber('claimerLastAttemptAt', 0) || null,
+        lastSuccessAt: getMetaNumber('claimerLastSuccessAt', 0) || null,
+        lastFailureAt: getMetaNumber('claimerLastFailureAt', 0) || null,
+        currentRunStartedAt: getMetaNumber('claimerCurrentRunStartedAt', 0) || null,
+        claimantCount: getMetaNumber('claimerLastAttemptClaimantCount', 0),
+        signature: getMeta('claimerLastAttemptSignature') || null,
+    };
 }
 
 function groupClaimBatches(
@@ -160,6 +185,7 @@ export async function GET(req: Request) {
         const nextAutoClaimAt = latestAutoClaim
             ? latestAutoClaim.timestamp + config.claimer.intervalMs
             : null;
+        const claimerStatus = getClaimerStatus();
 
         return Response.json({
             success: true,
@@ -168,6 +194,7 @@ export async function GET(req: Request) {
             summary,
             nextAutoClaimAt,
             claimerIntervalMs: config.claimer.intervalMs,
+            claimerStatus,
             solPriceUsd,
             timestamp: Date.now(),
         });

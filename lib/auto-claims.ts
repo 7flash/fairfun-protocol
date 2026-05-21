@@ -1,7 +1,7 @@
 import { measure } from 'measure-fn';
 import { PublicKey } from '@solana/web3.js';
 import { config } from './config';
-import { getMetaNumber, getRecentClaimEvents, getLeaderboard, recordClaimEvent, updateHolderRewards } from './database';
+import { getMetaNumber, getRecentClaimEvents, getLeaderboard, recordClaimEvent, setMeta, updateHolderRewards } from './database';
 import {
     claimSigningEnabled,
     fetchUserClaimState,
@@ -23,6 +23,34 @@ function getMinBatchClaimants() {
   const value = Math.floor(Number(config.claimer.minBatchClaimants ?? 1));
   return Math.max(1, Math.min(getMaxBatchClaimants(), value));
 }
+
+function persistClaimerAttemptStatus(input: {
+    now: number;
+    status: 'running' | 'succeeded' | 'skipped' | 'failed';
+    reason: string;
+    claimantCount?: number;
+    signature?: string | null;
+}) {
+    setMeta('claimerLastAttemptAt', input.now);
+    setMeta('claimerLastAttemptStatus', input.status);
+    setMeta('claimerLastAttemptReason', input.reason);
+    setMeta('claimerLastAttemptClaimantCount', input.claimantCount ?? 0);
+    setMeta('claimerLastAttemptSignature', input.signature ?? '');
+
+    if (input.status === 'running') {
+        setMeta('claimerCurrentRunStartedAt', input.now);
+        return;
+    }
+
+    setMeta('claimerCurrentRunStartedAt', 0);
+    if (input.status === 'succeeded') {
+        setMeta('claimerLastSuccessAt', input.now);
+    }
+    if (input.status === 'failed') {
+        setMeta('claimerLastFailureAt', input.now);
+    }
+}
+
 function getEligibleHolders() {
     const threshold = config.claimer.minClaimSol;
     return getLeaderboard()
@@ -85,10 +113,26 @@ export async function runAutomaticRewardClaimPass(now = Date.now()) {
 
     running = true;
     try {
+        persistClaimerAttemptStatus({
+            now,
+            status: 'running',
+            reason: 'started',
+        });
         return await measure('Run automatic reward claim pass', async () => {
+            const finalize = <T extends { attempted: boolean; completed: boolean; reason?: string; claimantCount?: number; signature?: string | null }>(result: T) => {
+                persistClaimerAttemptStatus({
+                    now,
+                    status: result.attempted && result.completed ? 'succeeded' : 'skipped',
+                    reason: result.reason ?? (result.attempted && result.completed ? 'completed' : 'skipped'),
+                    claimantCount: result.claimantCount,
+                    signature: result.signature ?? null,
+                });
+                return result;
+            };
+
             let holders = getEligibleHolders();
             if (holders.length === 0) {
-                return { attempted: false, completed: false, reason: 'no-eligible-holder' };
+                return finalize({ attempted: false, completed: false, reason: 'no-eligible-holder' });
             }
             holders = holders.slice(0, getMaxBatchClaimants());
 
@@ -145,7 +189,7 @@ export async function runAutomaticRewardClaimPass(now = Date.now()) {
             }
 
             if (batchEntries.length === 0) {
-                return { attempted: false, completed: false, reason: 'claim-no-longer-eligible' };
+                return finalize({ attempted: false, completed: false, reason: 'claim-no-longer-eligible' });
             }
 
             const transactionResult = await sendSignedDelegatedTokenBatchClaimTransaction(
@@ -187,7 +231,7 @@ export async function runAutomaticRewardClaimPass(now = Date.now()) {
                 totalGrossAmountSol += grossAmountSol;
             }
 
-            return {
+            return finalize({
                 attempted: true,
                 completed: true,
                 claimantCount: batchEntries.length,
@@ -198,8 +242,15 @@ export async function runAutomaticRewardClaimPass(now = Date.now()) {
                 minimumTokenAmountOut: transactionResult.minimumTokenAmountOut,
                 totalEstimatedClaimableLamports: transactionResult.totalEstimatedClaimableLamports,
                 recentClaimsSeen: getRecentClaimEvents(5).length,
-            };
+            });
         });
+    } catch (error) {
+        persistClaimerAttemptStatus({
+            now,
+            status: 'failed',
+            reason: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
     } finally {
         running = false;
     }

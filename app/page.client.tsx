@@ -68,6 +68,17 @@ interface ClaimsSummary {
   totalDistributedTokens: number;
 }
 
+interface ClaimerStatus {
+  status: "running" | "succeeded" | "skipped" | "failed" | "unknown";
+  reason: string;
+  lastAttemptAt: number | null;
+  lastSuccessAt: number | null;
+  lastFailureAt: number | null;
+  currentRunStartedAt: number | null;
+  claimantCount: number;
+  signature: string | null;
+}
+
 interface TreasurySummary {
   totalDepositedSol: number;
   creatorFeeTopupTotalSol: number;
@@ -122,6 +133,7 @@ interface ClaimsResponse {
   summary: ClaimsSummary;
   nextAutoClaimAt: number | null;
   claimerIntervalMs: number;
+  claimerStatus?: ClaimerStatus | null;
 }
 
 interface WalletResponse {
@@ -292,6 +304,49 @@ function formatCountdown(targetTimestamp: number | null) {
   if (hours > 0) return `${hours}h ${minutes}m`;
   if (minutes > 0) return `${minutes}m`;
   return `${totalSeconds}s`;
+}
+
+function formatClaimerStatus(
+  targetTimestamp: number | null,
+  claimerStatus: ClaimerStatus | null,
+) {
+  if (claimerStatus?.status === "running") {
+    return "Running now";
+  }
+  if (claimerStatus?.status === "failed") {
+    return "Failed last run";
+  }
+  if (claimerStatus?.status === "skipped") {
+    return "No eligible batch";
+  }
+  if (!targetTimestamp) return "Waiting";
+  const diffMs = targetTimestamp - Date.now();
+  if (diffMs <= 0) {
+    if (claimerStatus?.lastAttemptAt && Date.now() - claimerStatus.lastAttemptAt > 5 * 60_000) {
+      return "Overdue";
+    }
+    return "Ready now";
+  }
+  return formatCountdown(targetTimestamp);
+}
+
+function formatClaimerStatusDetail(claimerStatus: ClaimerStatus | null) {
+  if (!claimerStatus) return null;
+  if (claimerStatus.status === "failed") {
+    return claimerStatus.reason || "last attempt failed";
+  }
+  if (claimerStatus.status === "skipped") {
+    return claimerStatus.reason || "no eligible holders";
+  }
+  if (claimerStatus.status === "running") {
+    return claimerStatus.currentRunStartedAt
+      ? `started ${formatCompactTimestamp(claimerStatus.currentRunStartedAt)}`
+      : "in progress";
+  }
+  if (claimerStatus.lastSuccessAt) {
+    return `last success ${formatCompactTimestamp(claimerStatus.lastSuccessAt)}`;
+  }
+  return null;
 }
 
 function formatSignedGravityDelta(value: number) {
@@ -1029,6 +1084,7 @@ function ClaimsTable({
   events,
   summary,
   nextAutoClaimAt,
+  claimerStatus,
   loading,
   error,
   connectedAddress,
@@ -1037,6 +1093,7 @@ function ClaimsTable({
   events: ClaimEvent[];
   summary: ClaimsSummary | null;
   nextAutoClaimAt: number | null;
+  claimerStatus: ClaimerStatus | null;
   loading: boolean;
   error: string | null;
   connectedAddress: string | null;
@@ -1054,12 +1111,13 @@ function ClaimsTable({
           <div className="activity-stat-card">
             <div className="small-label">Next Auto-Claim</div>
             <div className="inline-value">
-              {formatCountdown(nextAutoClaimAt)}
+              {formatClaimerStatus(nextAutoClaimAt, claimerStatus)}
             </div>
             <div className="num-sub">
-              {nextAutoClaimAt
-                ? formatCompactTimestamp(nextAutoClaimAt)
-                : "waiting for round"}
+              {formatClaimerStatusDetail(claimerStatus) ??
+                (nextAutoClaimAt
+                  ? formatCompactTimestamp(nextAutoClaimAt)
+                  : "waiting for round")}
             </div>
           </div>
           <div className="activity-stat-card">
@@ -1180,6 +1238,7 @@ function ActivityPanel({
   treasurySummary,
   claimsSummary,
   nextAutoClaimAt,
+  claimerStatus,
   loading,
   error,
   connectedAddress,
@@ -1199,6 +1258,7 @@ function ActivityPanel({
   treasurySummary: TreasurySummary | null;
   claimsSummary: ClaimsSummary | null;
   nextAutoClaimAt: number | null;
+  claimerStatus: ClaimerStatus | null;
   loading: boolean;
   error: string | null;
   connectedAddress: string | null;
@@ -1281,6 +1341,7 @@ function ActivityPanel({
             events={claimEvents}
             summary={claimsSummary}
             nextAutoClaimAt={nextAutoClaimAt}
+            claimerStatus={claimerStatus}
             loading={loading}
             error={error}
             connectedAddress={connectedAddress}
@@ -1332,6 +1393,7 @@ export default function mount() {
     let treasurySummary: TreasurySummary | null = null;
     let claimsSummary: ClaimsSummary | null = null;
     let nextAutoClaimAt: number | null = null;
+    let claimerStatus: ClaimerStatus | null = null;
     let total = 0;
     let totalSupply = 0;
     let tokenPriceUsd = 0;
@@ -1426,6 +1488,7 @@ export default function mount() {
             treasurySummary={treasurySummary}
             claimsSummary={claimsSummary}
             nextAutoClaimAt={nextAutoClaimAt}
+            claimerStatus={claimerStatus}
             loading={loading}
             error={error}
             connectedAddress={connectedAddress}
@@ -2172,6 +2235,7 @@ export default function mount() {
               claimEvents = claimsData.events;
               claimsSummary = claimsData.summary ?? null;
               nextAutoClaimAt = claimsData.nextAutoClaimAt ?? null;
+              claimerStatus = claimsData.claimerStatus ?? null;
             } else if (!error) {
               error = "Failed to load claim history.";
             }
