@@ -44,6 +44,24 @@ function getSpendableLamports(walletBalanceLamports: bigint) {
         : 0n;
 }
 
+function getClaimProceedsTopupLamports(
+    walletBalanceBeforeLamports: bigint,
+    claimedLamports: bigint,
+) {
+    if (claimedLamports <= 0n) {
+        return 0n;
+    }
+    const spendableAfterClaimLamports = getSpendableLamports(
+        walletBalanceBeforeLamports + claimedLamports,
+    );
+    if (spendableAfterClaimLamports <= 0n) {
+        return 0n;
+    }
+    return spendableAfterClaimLamports < claimedLamports
+        ? spendableAfterClaimLamports
+        : claimedLamports;
+}
+
 async function sendVersionedInstructions(
     connection: Connection,
     payer: ReturnType<typeof getCreatorFeeWallet>,
@@ -225,19 +243,24 @@ export async function runCreatorFeeClaimPass() {
                 const distributable = await sdk.getMinimumDistributableFee(mint);
                 claimableLamports = BigInt(distributable.distributableFees.toString());
                 if (!distributable.canDistribute || claimableLamports < config.creatorFees.minClaimLamports) {
-                    const topup = await maybeSweepWalletSurplusToTreasury(connection, wallet);
                     return {
                         attempted: false,
-                        completed: topup.attempted && !!topup.treasurySignature,
+                        completed: false,
                         reason: 'below-threshold',
                         sharing,
                         claimableLamports: claimableLamports.toString(),
-                        treasuryTopup: topup,
+                        treasuryTopup: {
+                            attempted: false,
+                            reason: 'below-threshold',
+                            walletBalanceLamports: beforeBalance.toString(),
+                            topupLamports: '0',
+                            treasurySignature: null as string | null,
+                        },
                     };
                 }
 
                 const built = await sdk.buildDistributeCreatorFeesInstructions(mint);
-                treasuryTopupLamports = getSpendableLamports(beforeBalance + claimableLamports);
+                treasuryTopupLamports = getClaimProceedsTopupLamports(beforeBalance, claimableLamports);
                 const topupInstruction = buildTreasuryTopupInstruction(wallet, treasuryTopupLamports);
                 claimSignature = await sendVersionedInstructions(
                     connection,
@@ -248,19 +271,24 @@ export async function runCreatorFeeClaimPass() {
             } else {
                 claimableLamports = BigInt((await sdk.getCreatorVaultBalanceBothPrograms(creator)).toString());
                 if (claimableLamports < config.creatorFees.minClaimLamports) {
-                    const topup = await maybeSweepWalletSurplusToTreasury(connection, wallet);
                     return {
                         attempted: false,
-                        completed: topup.attempted && !!topup.treasurySignature,
+                        completed: false,
                         reason: 'below-threshold',
                         sharing,
                         claimableLamports: claimableLamports.toString(),
-                        treasuryTopup: topup,
+                        treasuryTopup: {
+                            attempted: false,
+                            reason: 'below-threshold',
+                            walletBalanceLamports: beforeBalance.toString(),
+                            topupLamports: '0',
+                            treasurySignature: null as string | null,
+                        },
                     };
                 }
 
                 const instructions = await sdk.collectCoinCreatorFeeInstructions(creator, creator);
-                treasuryTopupLamports = getSpendableLamports(beforeBalance + claimableLamports);
+                treasuryTopupLamports = getClaimProceedsTopupLamports(beforeBalance, claimableLamports);
                 const topupInstruction = buildTreasuryTopupInstruction(wallet, treasuryTopupLamports);
                 claimSignature = await sendVersionedInstructions(
                     connection,

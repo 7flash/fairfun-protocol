@@ -38,4 +38,4 @@ interval_ms = 60000
 min_claim_lamports = 100000000
 priority_fee_microlamports = 10000
 compute_unit_limit = 250000
-treasury_topup_reserve_sol = 0.01
+treasury_topup_reserve_sol = 0.1
