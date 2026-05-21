@@ -322,7 +322,11 @@ function formatClaimerStatus(
   if (!targetTimestamp) return "Waiting";
   const diffMs = targetTimestamp - Date.now();
   if (diffMs <= 0) {
-    if (claimerStatus?.lastAttemptAt && Date.now() - claimerStatus.lastAttemptAt > 5 * 60_000) {
+    if (
+      !claimerStatus?.lastAttemptAt ||
+      claimerStatus.lastAttemptAt < targetTimestamp ||
+      Date.now() - claimerStatus.lastAttemptAt > 5 * 60_000
+    ) {
       return "Overdue";
     }
     return "Ready now";
