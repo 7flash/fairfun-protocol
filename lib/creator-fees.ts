@@ -33,6 +33,17 @@ function getCreatorFeeWallet() {
     return loadKeypairFromConfiguredValue(configured);
 }
 
+function creatorFeeWalletSharesBackendAuthority() {
+    const configuredCreatorWallet = config.creatorFees.walletKeypairPath || config.rewards.backendKeypairPath;
+    const configuredBackendWallet = config.rewards.backendKeypairPath;
+    if (!configuredCreatorWallet || !configuredBackendWallet) {
+        return false;
+    }
+    const creatorWallet = loadKeypairFromConfiguredValue(configuredCreatorWallet);
+    const backendWallet = loadKeypairFromConfiguredValue(configuredBackendWallet);
+    return creatorWallet.publicKey.equals(backendWallet.publicKey);
+}
+
 function getTreasuryTopupReserveLamports() {
     return BigInt(Math.round(config.creatorFees.treasuryTopupReserveSol * 1_000_000_000));
 }
@@ -234,6 +245,10 @@ export async function runCreatorFeeClaimPass() {
             }
 
             const beforeBalance = BigInt(await connection.getBalance(wallet.publicKey, 'confirmed'));
+            const reserveLamports = getTreasuryTopupReserveLamports();
+            const allowReserveRecoveryClaim =
+                creatorFeeWalletSharesBackendAuthority()
+                && beforeBalance < reserveLamports;
             let claimableLamports = 0n;
             let claimSignature: string | null = null;
             let treasurySignature: string | null = null;
@@ -242,7 +257,13 @@ export async function runCreatorFeeClaimPass() {
             if (sharing) {
                 const distributable = await sdk.getMinimumDistributableFee(mint);
                 claimableLamports = BigInt(distributable.distributableFees.toString());
-                if (!distributable.canDistribute || claimableLamports < config.creatorFees.minClaimLamports) {
+                if (
+                    !distributable.canDistribute
+                    || (
+                        claimableLamports < config.creatorFees.minClaimLamports
+                        && !(allowReserveRecoveryClaim && claimableLamports > 0n)
+                    )
+                ) {
                     return {
                         attempted: false,
                         completed: false,
@@ -270,7 +291,10 @@ export async function runCreatorFeeClaimPass() {
                 treasurySignature = topupInstruction ? claimSignature : null;
             } else {
                 claimableLamports = BigInt((await sdk.getCreatorVaultBalanceBothPrograms(creator)).toString());
-                if (claimableLamports < config.creatorFees.minClaimLamports) {
+                if (
+                    claimableLamports < config.creatorFees.minClaimLamports
+                    && !(allowReserveRecoveryClaim && claimableLamports > 0n)
+                ) {
                     return {
                         attempted: false,
                         completed: false,
@@ -313,6 +337,7 @@ export async function runCreatorFeeClaimPass() {
             return {
                 attempted: true,
                 completed: true,
+                reserveRecoveryMode: allowReserveRecoveryClaim && claimableLamports < config.creatorFees.minClaimLamports,
                 sharing,
                 creator: creator.toBase58(),
                 claimer: wallet.publicKey.toBase58(),
